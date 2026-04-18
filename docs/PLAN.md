@@ -78,3 +78,91 @@
 
 **验收**：`picmanager serve` 启动后，`curl http://localhost:8080/api/photos` 返回 JSON 列表；
 浏览器能看到缩略图。
+
+---
+
+## Step 6 — 感知哈希（pHash）与重复候选发现
+
+**目标**：能识别视觉相似的图片（缩放、轻微裁剪后的副本）。
+
+- 添加 `image-hasher` 依赖，在 `dedup/hash.rs` 中实现：
+  - `compute_phash(path) -> Result<String>`：计算 64 位感知哈希，存为 hex 字符串
+  - `hamming_distance(a: &str, b: &str) -> u32`：计算两个哈希的汉明距离
+- 在导入流程（`importer/mod.rs`）中写入 `photos.phash` 字段
+- `dedup/candidate.rs`：扫描所有照片，找出 hamming distance ≤ 10 的组合，
+  写入 `dedup_groups` / `dedup_members` 表，状态为 `pending`
+- 暴露 `dedup::scan(pool) -> Result<usize>`，返回发现的重复组数量
+- 单元测试：同一图片的缩略版 pHash 距离应 ≤ 10；不同图片距离应 > 10
+
+**验收**：将同一张照片缩放后的副本放入测试目录，`dedup::scan()` 能将其归入同一组。
+
+---
+
+## Step 7 — 去重确认工作流
+
+**目标**：用户可以查看重复候选，选择保留哪张，确认后删除副本。
+
+- `dedup/mod.rs`：
+  - `list_groups(pool) -> Result<Vec<DedupGroup>>`：查询待确认的重复组（含组内各照片元数据）
+  - `resolve(pool, group_id, keep_ids: &[i64]) -> Result<()>`：
+    标记保留项，将其余项从 `photos` 表软删除（`import_status = 'deleted'`），**不操作文件系统**
+- Web API：
+  - `GET /api/dedup`：返回待确认重复组列表（含组内照片信息）
+  - `POST /api/dedup/:group_id/resolve`：body `{ "keep": [photo_id, ...] }`，执行确认
+- CLI 子命令 `picmanager dedup`：打印重复组，交互式逐组确认（y/n/skip）
+- 单元测试：resolve 后保留项状态不变，其余项状态变为 `deleted`
+
+**验收**：`curl POST /api/dedup/1/resolve` 后重新查询，该组状态变为 `resolved`，被删除项不再出现在照片列表中。
+
+---
+
+## Step 8 — 相册自动分组
+
+**目标**：导入后按时间和相机自动建相册，并可通过 API 查询。
+
+- `album/organize.rs`：
+  - `group_by_month(pool) -> Result<()>`：按 `taken_at` 年月建相册（形如 `2024-06`），
+    将照片写入 `photo_albums`，已存在的相册追加而非重建
+  - `group_by_camera(pool) -> Result<()>`：按 `camera` 字段建相册，无相机信息的照片跳过
+- 在 `importer::import_dir()` 完成后自动调用两个分组函数
+- Web API：
+  - `GET /api/albums`：返回相册列表（id, name, kind, photo_count）
+  - `GET /api/albums/:id/photos`：返回相册内照片列表（支持分页）
+- 单元测试：导入 2 张不同月份的照片后，应生成 2 个时间相册；
+  导入同相机照片后，相机相册中含正确数量
+
+**验收**：`picmanager import <dir>` 后，`GET /api/albums` 返回按月份和相机划分的相册列表。
+
+---
+
+## Step 9 — Web 前端基础界面
+
+**目标**：在浏览器中能看到照片网格、相册列表、触发导入。
+
+- `frontend/` 目录下纯静态文件（HTML + CSS + 原生 JS，无构建步骤）：
+  - `index.html`：主页面骨架（左侧相册导航 + 右侧照片网格）
+  - `app.js`：调用已有 REST API，渲染缩略图网格（懒加载）、相册列表、分页
+  - `style.css`：最小化样式（网格布局、响应式）
+- Axum 添加静态文件服务，将 `frontend/` 挂载到 `/`（使用 `tower-http::ServeDir`）
+- 导入面板：输入框填写目录路径，提交后轮询 `/api/import/status` 显示进度
+- 单元测试不适用前端逻辑；验证静态文件路由能正确返回 `index.html`
+
+**验收**：浏览器打开 `http://localhost:8080`，能看到照片网格，点击相册能过滤显示，能从界面触发导入并看到进度。
+
+---
+
+## Step 10 — 配置文件支持 + 相册手动合并
+
+**目标**：支持持久化配置，用户可以合并自动生成的相册。
+
+- 配置文件：`~/.config/picmanager/config.toml`，支持覆盖库路径、端口、缩略图尺寸；
+  启动时自动加载，命令行参数优先级高于配置文件；
+  添加 `toml` 和 `serde` 依赖完成解析
+- `album/merge.rs`：`merge(pool, source_id, target_id) -> Result<()>`——
+  将 source 相册的所有照片并入 target，删除 source 相册记录
+- Web API：`POST /api/albums/merge`，body `{ "source": id, "target": id }`
+- CLI 子命令 `picmanager config show` 打印当前生效配置（含来源：默认值 / 配置文件 / 命令行）
+- 单元测试：merge 后 source 相册不存在，target 相册包含两者全部照片，无重复关联
+
+**验收**：编辑 `~/.config/picmanager/config.toml` 修改端口后重启生效；
+`POST /api/albums/merge` 合并后相册数量减一，照片全部保留。
