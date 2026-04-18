@@ -12,7 +12,9 @@
       "Bash(cargo init *)",
       "Bash(cargo build *)",
       "Bash(cargo nextest *)",
-      "Bash(cargo clippy *)"
+      "Bash(cargo clippy *)",
+      "Bash(exiftool *)",
+      "Bash(sips -s format jpeg '/System/Library/Desktop Pictures/Sonoma.heic' --out /Volumes/PLATEA/Documents/Workspace/PicManager/tests/fixtures/no_exif.jpg)"
     ]
   }
 }
