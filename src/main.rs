@@ -40,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         Command::Serve => {
-            println!("Web 服务将在 Step 5 实现");
+            picmanager::web::serve(pool, config).await?;
         }
     }
     Ok(())

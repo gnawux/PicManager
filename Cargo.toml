@@ -32,6 +32,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 
 [dev-dependencies]
 tempfile = "3"
+tower = "0.5"
 
 [dependencies.anyhow]
 version = "1"
