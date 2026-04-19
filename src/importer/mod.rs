@@ -33,6 +33,7 @@ pub async fn import_dir(pool: &SqlitePool, source_dir: &Path) -> Result<ImportSu
     }
     album::group_by_month(pool).await?;
     album::group_by_camera(pool).await?;
+    album::group_by_location(pool).await?;
 
     Ok(summary)
 }
