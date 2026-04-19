@@ -3,18 +3,26 @@ use axum::{
     http::{Request, StatusCode},
 };
 use picmanager::{config::Config, web};
-use sqlx::sqlite::SqlitePoolOptions;
+use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
 use tower::ServiceExt;
 
 async fn test_app() -> axum::Router {
+    let (app, _, _tmp) = test_app_with_pool().await;
+    app
+}
+
+async fn test_app_with_pool() -> (axum::Router, SqlitePool, tempfile::TempDir) {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect("sqlite::memory:")
         .await
         .unwrap();
     sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-    let config = Config::default();
-    web::router(pool, config)
+    let tmp = tempfile::tempdir().unwrap();
+    let mut config = Config::default();
+    config.thumb_cache_dir = tmp.path().to_path_buf();
+    let app = web::router(pool.clone(), config);
+    (app, pool, tmp)
 }
 
 #[tokio::test]
@@ -187,4 +195,69 @@ async fn frontend_index_is_served() {
         .unwrap();
     // ServeDir serves index.html; 200 means the file exists and routing works
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn get_thumb_generates_and_caches() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/with_exif.jpg");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES (?, 'sha1', 'jpeg', 'imported') RETURNING id",
+    )
+    .bind(fixture.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}/thumb"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    // JPEG magic bytes
+    assert_eq!(&body[..2], &[0xFF, 0xD8]);
+    // Cache file written
+    assert!(tmp.path().join(format!("{id}.jpg")).exists());
+}
+
+#[tokio::test]
+async fn get_thumb_serves_from_cache() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+
+    // Write a sentinel JPEG to the cache dir before any real request
+    let fake_jpeg = b"\xFF\xD8\xFF\xE0sentinel";
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES ('/no/such/file.jpg', 'sha2', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    std::fs::write(tmp.path().join(format!("{id}.jpg")), fake_jpeg).unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}/thumb"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(body.as_ref(), fake_jpeg);
 }

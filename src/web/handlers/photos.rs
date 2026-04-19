@@ -86,14 +86,26 @@ pub async fn get_thumb(
         return StatusCode::NOT_FOUND.into_response();
     };
 
+    let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
     let thumb_size = state.config.thumb_size;
-    match generate_thumb(&path, thumb_size) {
-        Ok(bytes) => (
-            [(header::CONTENT_TYPE, "image/jpeg")],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+
+    let result = tokio::task::spawn_blocking(move || {
+        if cache_path.exists() {
+            std::fs::read(&cache_path).map_err(|e| anyhow::anyhow!(e))
+        } else {
+            let bytes = generate_thumb(&path, thumb_size)?;
+            if let Some(parent) = cache_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&cache_path, &bytes)?;
+            Ok(bytes)
+        }
+    })
+    .await;
+
+    match result {
+        Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 
@@ -120,5 +132,31 @@ impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for PhotoRow {
             camera: row.try_get("camera")?,
             import_status: row.try_get("import_status")?,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(name)
+    }
+
+    #[test]
+    fn generate_thumb_returns_jpeg_bytes() {
+        let f = fixture("with_exif.jpg");
+        let bytes = generate_thumb(f.to_str().unwrap(), 300).unwrap();
+        assert!(!bytes.is_empty());
+        assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
+    }
+
+    #[test]
+    fn generate_thumb_missing_file_returns_error() {
+        let result = generate_thumb("/no/such/file.jpg", 300);
+        assert!(result.is_err());
     }
 }

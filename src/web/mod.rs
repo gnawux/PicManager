@@ -25,6 +25,7 @@ pub struct AppState {
 }
 
 pub fn router(pool: SqlitePool, config: Config) -> Router {
+    std::fs::create_dir_all(&config.thumb_cache_dir).ok();
     let state = AppState {
         pool,
         config,

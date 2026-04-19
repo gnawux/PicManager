@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub struct Config {
     pub library_path: PathBuf,
     pub db_path: PathBuf,
+    pub thumb_cache_dir: PathBuf,
     pub host: String,
     pub port: u16,
     pub thumb_size: u32,
@@ -23,9 +24,11 @@ impl Default for Config {
     fn default() -> Self {
         let library_path = default_library_path();
         let db_path = library_path.join("picmanager.db");
+        let thumb_cache_dir = library_path.join(".thumbs");
         Self {
             library_path,
             db_path,
+            thumb_cache_dir,
             host: "127.0.0.1".to_string(),
             port: 8080,
             thumb_size: 300,
@@ -41,6 +44,7 @@ impl Config {
             if let Some(p) = file_cfg.library_path {
                 cfg.library_path = p.clone();
                 cfg.db_path = p.join("picmanager.db");
+                cfg.thumb_cache_dir = p.join(".thumbs");
             }
             if let Some(h) = file_cfg.host   { cfg.host = h; }
             if let Some(p) = file_cfg.port   { cfg.port = p; }
