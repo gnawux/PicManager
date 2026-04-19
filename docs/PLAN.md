@@ -193,31 +193,52 @@
 
 ---
 
-## Step 12 — 文件名日期推断
+## Step 12 — 拍摄日期推断增强（EXIF 多字段回退 + 文件名解析）
 
-**目标**：当 EXIF 中没有拍摄时间时，尝试从文件名中解析日期，作为日期推断的第二优先级。
+**目标**：构建完整的日期推断链，依次尝试 EXIF 四个时间字段、文件名模式，均失败才归入 `unknown/`。
 
-**背景**：手机和相机导出的文件名常带有日期信息（如 `IMG_20240615_103000.jpg`）；部分工具将 Unix 时间戳作为文件名。此步骤独立实现，方便单独测试，后续在 Step 13 中集成进导入流水线。
+**背景**：当前 `metadata/exif.rs` 只读取 `DateTimeOriginal`，漏掉了 `DateTimeDigitized`、GPS 时间和 `DateTime`；部分手机导出文件缺少 EXIF 但文件名含日期。此步骤统一实现所有推断逻辑，供 Step 13 的文件放置模块直接调用。
 
-- 新增 `metadata/filename.rs` 模块，暴露：
-  ```rust
-  pub fn infer_date(filename: &str) -> Option<NaiveDateTime>
-  ```
-- 按顺序尝试以下规则（任意一条匹配即返回）：
-  1. **Unix 时间戳**：文件名（去除扩展名）全为数字，10 位（秒级）或 13 位（毫秒级），转换为 UTC 日期时间
-  2. **紧凑日期时间**：匹配 `YYYYMMDD_HHMMSS` 或 `YYYYMMDD-HHMMSS`（如 `20240615_103000`），允许前后有其他字符
-  3. **分隔符日期**：匹配 `YYYY-MM-DD` 或 `YYYY_MM_DD`（如 `2024-06-15`），时间部分可选
-  4. 以上均不匹配 → 返回 `None`
-- 只解析合法日期（月 1–12、日 1–31），拒绝如 `20241332` 这样的无效数字串
-- 单元测试覆盖：
-  - `IMG_20240615_103000.jpg` → `2024-06-15 10:30:00`
-  - `2024-06-15_vacation.jpg` → `2024-06-15 00:00:00`
-  - `1718443800.jpg`（Unix 秒）→ 正确 UTC 时间
-  - `1718443800000.jpg`（Unix 毫秒）→ 正确 UTC 时间
-  - `DSC_0001.jpg` → `None`
-  - `20241332_photo.jpg`（非法日期）→ `None`
+### 12a — 更新 `metadata/exif.rs`：EXIF 多字段回退
 
-**验收**：`cargo nextest run` 全部通过，`metadata::filename` 单元测试覆盖上述全部用例。
+修改 `parse_datetime(exif)` 函数，按优先级依次尝试：
+
+| 优先级 | 字段 | Tag | 说明 |
+|--------|------|-----|------|
+| 1 | DateTimeOriginal | 0x9003 | 相机按快门时写入，最可靠 |
+| 2 | DateTimeDigitized | 0x9004 | 数字化时间，数码相机通常与 Original 相同 |
+| 3 | GPS DateStamp + TimeStamp | GPS IFD | UTC 时间，需合并两个字段；时区偏差可接受 |
+| 4 | DateTime | 0x0132 | 最后修改时间，可能被编辑软件改写，最后兜底 |
+
+- GPS 时间合并：`GPSDateStamp`（`YYYY:MM:DD`）+ `GPSTimeStamp`（三个 Rational：时/分/秒）拼接为 `NaiveDateTime`
+- 任意字段解析失败则继续尝试下一个；全部失败返回 `None`
+- 单元测试：增加 fixture 或构造场景，覆盖 DateTimeDigitized 回退和 GPS 时间解析
+
+### 12b — 新增 `metadata/filename.rs`：文件名日期推断
+
+暴露：
+```rust
+pub fn infer_date(filename: &str) -> Option<NaiveDateTime>
+```
+
+按顺序尝试以下规则（任意一条匹配即返回）：
+
+1. **Unix 时间戳**：文件名（去除扩展名）全为数字，10 位（秒级）或 13 位（毫秒级），转换为 UTC NaiveDateTime
+2. **紧凑日期时间**：在文件名中扫描 `YYYYMMDD[_-]HHMMSS` 模式（如 `IMG_20240615_103000`），允许前后有其他字符
+3. **分隔符日期**：在文件名中扫描 `YYYY-MM-DD` 或 `YYYY_MM_DD`（如 `2024-06-15_photo`），时间部分可选（默认 00:00:00）
+4. 以上均不匹配 → 返回 `None`
+
+只接受合法日期（月 1–12、日 1–31），拒绝 `20241332` 等无效数值。
+
+单元测试覆盖：
+- `IMG_20240615_103000.jpg` → `2024-06-15 10:30:00`
+- `2024-06-15_vacation.jpg` → `2024-06-15 00:00:00`
+- `1718443800.jpg`（Unix 秒）→ 正确 UTC 时间
+- `1718443800000.jpg`（Unix 毫秒）→ 正确 UTC 时间
+- `DSC_0001.jpg` → `None`
+- `20241332_photo.jpg`（非法日期）→ `None`
+
+**验收**：`cargo nextest run` 全部通过；`metadata::exif` 覆盖多字段回退，`metadata::filename` 覆盖上述全部用例。
 
 ---
 
