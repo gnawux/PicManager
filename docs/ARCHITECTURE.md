@@ -77,7 +77,7 @@ picmanager/
 │           ├── albums.rs    # GET /api/albums、GET /api/albums/:id/photos、POST /api/albums/merge
 │           └── faces.rs     # POST /api/faces/analyze、GET /api/faces/jobs/:id、GET /api/photos/:id/faces
 ├── frontend/                # 静态 HTML + CSS + JS（编译时嵌入二进制）
-├── migrations/              # SQLx 数据库迁移文件（0001–0003）
+├── migrations/              # SQLx 数据库迁移文件（0001–0005）
 ├── tests/                   # 集成测试与测试 fixture
 └── docs/                    # 架构设计与开发计划
 ```
@@ -136,6 +136,17 @@ picmanager/
 
 去重结果仅写入数据库标记为候选，**不自动删除**，需用户在 Web 界面或 CLI 逐一确认后才执行删除。
 
+**扫描模式：**
+
+| 模式 | 函数 | 适用场景 | 复杂度 |
+|------|------|---------|--------|
+| 增量扫描 | `scan()` | 每次导入后运行（默认） | O(new × old + new²) |
+| 全量重扫 | `scan_full()` | `dedup --full`，首次或修复数据 | O(n × 548 × avg_bucket) |
+
+`scan()` 仅比较 `dedup_scanned_at IS NULL` 的新照片，扫描后打上时间戳；若无新照片则为 O(1) 无操作。
+
+`scan_full()` 使用多索引哈希（4 × 16-bit 分段，Hamming 距离 ≤ 2 邻桶查找），鸽巢原理保证距离 ≤ 10 的任意对至少在一个分段命中，无漏报。
+
 ### album — 相册模块
 
 **自动分组维度：**
@@ -175,7 +186,7 @@ picmanager/
 **核心表：**
 
 ```sql
-photos          -- 照片主记录（路径、sha256、phash、元数据、导入状态）
+photos          -- 照片主记录（路径、sha256、phash、元数据、导入状态、dedup_scanned_at）
 albums          -- 相册（name、kind：time / camera / location）
 photo_albums    -- 照片-相册 多对多关联
 dedup_groups    -- 重复候选组（status：pending / resolved）
@@ -184,6 +195,7 @@ import_sessions -- 导入会话记录
 geocache        -- GPS 坐标 → 城市名缓存（lat_key、lon_key、city）
 faces           -- 人脸区域（photo_id、bbox、confidence、embedding BLOB、embed_model）
 face_jobs       -- 人脸批量分析任务（status、scope、total/processed 进度）
+photo_stats     -- 单行计数器（active_count），替代全表 COUNT(*) 查询
 ```
 
 数据库文件和照片库存放在用户指定的数据目录（默认 `~/Pictures/PicManager/`）。
@@ -240,6 +252,7 @@ dedup/hash：计算感知哈希（pHash），写入 photos.phash
     │
     ▼
 storage：写入 photos 表（path = 库内新路径），import_status = 'imported'
+  photo_stats.active_count += 1
     │
     ▼
 face::analyze_one：detect() → 写入 faces 表 → 若模型可用则提取 embedding
@@ -254,13 +267,22 @@ album：按月份自动分组 → 按相机自动分组 → 按 GPS 地点自动
 picmanager dedup（CLI）或 GET /api/dedup（Web）
     │
     ▼
-dedup::scan()：O(n²) 比较 phash 汉明距离，写入 dedup_groups / dedup_members
+dedup::scan()：
+  仅比较 dedup_scanned_at IS NULL 的新照片（增量）
+  → 对每对计算 phash 汉明距离，写入 dedup_groups / dedup_members
+  → 打上 dedup_scanned_at 时间戳
+  无新照片时立即返回 0（O(1) 无操作）
+
+  picmanager dedup --full：
+    scan_full() 重置所有时间戳，使用多索引分桶全量重扫
     │
     ▼
 用户查看重复候选，选择保留哪张
     │
     ▼
-dedup::resolve()：将未保留项的 import_status 置为 'deleted'（软删除，不操作文件）
+dedup::resolve()：
+  将未保留项的 import_status 置为 'deleted'（软删除，不操作文件）
+  photo_stats.active_count -= 软删除数量
     │
     ▼
 dedup_groups.status 置为 'resolved'，不再出现在候选列表中
@@ -291,7 +313,8 @@ dedup_groups.status 置为 'resolved'，不再出现在候选列表中
 picmanager serve                            # 启动 Web 服务（默认 127.0.0.1:8080）
 picmanager import <dir>                     # 命令行导入（默认 move 文件）
 picmanager import --copy <dir>              # 命令行导入（复制，保留源文件）
-picmanager dedup                            # 命令行触发去重扫描
+picmanager dedup                            # 命令行增量去重扫描
+picmanager dedup --full                     # 全量重扫（多索引分桶）
 picmanager faces analyze                    # 全库人脸重分析
 picmanager faces analyze --photo-ids 1,2,3  # 指定照片人脸重分析
 picmanager models fetch                     # 下载 ONNX 模型文件到 config_dir/models/

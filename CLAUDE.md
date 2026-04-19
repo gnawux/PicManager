@@ -21,7 +21,7 @@
 src/
   main.rs              CLI 入口（import [--copy] / dedup / serve / config）
   lib.rs               库根
-  config.rs            Config 结构体；配置文件 ~/Library/Application Support/picmanager/config.toml
+  config.rs            Config 结构体（含 thumb_cache_dir）；配置文件 ~/Library/Application Support/picmanager/config.toml
   error.rs             AppError 枚举（NotFound / UnsupportedFormat / Metadata / Database / Io）
   importer/
     mod.rs             import_dir(pool, source_dir, library_path, copy_only) -> ImportSummary
@@ -35,9 +35,9 @@ src/
     format.rs          magic bytes 格式检测
     types.rs           ImageFormat 枚举，PhotoMeta 结构体
   dedup/
-    mod.rs             scan(), list_groups(), resolve()
+    mod.rs             scan(), scan_full(), list_groups(), resolve()
     hash.rs            compute_phash(), hamming_distance()
-    candidate.rs       O(n²) pHash 比较，写入 dedup_groups
+    candidate.rs       scan()增量扫描，scan_full()多索引分桶扫描，写入 dedup_groups
   album/
     mod.rs
     organize.rs        group_by_month(), group_by_camera()
@@ -65,6 +65,8 @@ migrations/
   0001_initial.sql     photos, albums, photo_albums, dedup_groups, dedup_members, import_sessions
   0002_geocache.sql    geocache 表（GPS 坐标 → 城市名缓存）
   0003_faces.sql       faces 表（人脸区域 + embedding BLOB）、face_jobs 表
+  0004_photo_stats.sql photo_stats 单行计数器表（active_count，避免全表 COUNT(*)）
+  0005_dedup_incremental.sql photos.dedup_scanned_at 列（增量 dedup 扫描标记）
 tests/
   web_api.rs           Web API 集成测试（tower::ServiceExt::oneshot）
   fixtures/            测试 fixture JPEG 文件（由 make_fixtures.py 生成）
@@ -86,7 +88,7 @@ docs/
 
 ## 开发状态
 
-**已完成：Steps 1–14（docs/PLAN.md 全部步骤）**
+**已完成：Steps 1–16b（docs/PLAN.md 全部步骤）**
 
 | Step | 内容 |
 |------|------|
@@ -108,8 +110,12 @@ docs/
 | 14b | 人脸检测模块（ultraface-slim-320 / ort 2.x） |
 | 14c | 人脸特征提取模块（ArcFace MobileNetV1 / ort 2.x） |
 | 14d | 导入集成 + 批量重分析 API + CLI |
+| 15a | 缩略图磁盘缓存 + spawn_blocking（`{library}/.thumbs/{id}.jpg`） |
+| 15b | COUNT(*) 替换为 photo_stats 计数器表 |
+| 16a | dedup 增量扫描（photos.dedup_scanned_at 标记，新照片才比较） |
+| 16b | dedup 全量重扫多索引分桶（4×16bit 段，pigeonhole 保证零漏报） |
 
-当前测试数：**123 个**（`cargo nextest run` 全部通过，另有 4 个 `#[ignore]` 需模型文件）
+当前测试数：**145 个**（`cargo nextest run` 全部通过，另有 4 个 `#[ignore]` 需模型文件）
 
 ## 关键实现细节（避免踩坑）
 
@@ -259,6 +265,8 @@ python3 tests/make_fixtures.py  # 重新生成 fixture 文件
 
 picmanager import <dir>                     # 导入（移动文件）
 picmanager import --copy <dir>              # 导入（保留源文件）
+picmanager dedup                            # 增量 dedup 扫描（只比较新照片）
+picmanager dedup --full                     # 全量 dedup 重扫（多索引分桶）
 picmanager faces analyze                    # 全库人脸重分析
 picmanager faces analyze --photo-ids 1,2,3 # 指定照片重分析
 picmanager models fetch                     # 下载 ONNX 模型文件
