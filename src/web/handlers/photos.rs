@@ -43,7 +43,7 @@ pub async fn list_photos(
     let offset = (pag.page.saturating_sub(1)) as i64 * pag.per_page as i64;
     let limit = pag.per_page as i64;
 
-    let total: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photos")
+    let total: (i64,) = sqlx::query_as("SELECT active_count FROM photo_stats WHERE id = 1")
         .fetch_one(&state.pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

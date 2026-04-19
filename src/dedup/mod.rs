@@ -77,12 +77,21 @@ pub async fn resolve(pool: &SqlitePool, group_id: i64, keep_ids: &[i64]) -> Resu
             .await?;
     }
 
-    // Soft-delete non-kept photos
+    // Soft-delete non-kept photos and decrement counter
     sqlx::query(
         "UPDATE photos SET import_status = 'deleted'
          WHERE id IN (
              SELECT photo_id FROM dedup_members WHERE group_id = ? AND keep = 0
          )",
+    )
+    .bind(group_id)
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "UPDATE photo_stats SET active_count = active_count - (
+             SELECT COUNT(*) FROM dedup_members WHERE group_id = ? AND keep = 0
+         ) WHERE id = 1",
     )
     .bind(group_id)
     .execute(pool)
@@ -191,5 +200,26 @@ mod tests {
         let pool = test_pool().await;
         let result = resolve(&pool, 999, &[1]).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn resolve_decrements_active_count() {
+        let pool = test_pool().await;
+
+        // Seed counter manually (no importer used in this test).
+        sqlx::query("UPDATE photo_stats SET active_count = 2 WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (gid, pa, _pb) = setup_group(&pool).await;
+        resolve(&pool, gid, &[pa]).await.unwrap();
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT active_count FROM photo_stats WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1, "soft-deleting one photo should decrement by 1");
     }
 }

@@ -89,6 +89,12 @@ async fn import_one(
     .execute(pool)
     .await?;
 
+    if result.rows_affected() > 0 {
+        sqlx::query("UPDATE photo_stats SET active_count = active_count + 1 WHERE id = 1")
+            .execute(pool)
+            .await?;
+    }
+
     let photo_id = result.last_insert_rowid();
     if let Ok(img) = image::open(&final_path) {
         crate::face::analyze_one(pool, photo_id, &img).await;
@@ -217,5 +223,44 @@ mod tests {
         let summary = import_dir(&pool, dir.path(), lib.path(), false).await.unwrap();
         assert_eq!(summary.total, 0);
         assert_eq!(summary.imported, 0);
+    }
+
+    #[tokio::test]
+    async fn import_increments_active_count() {
+        let pool = test_pool().await;
+        let src_dir = tempdir().unwrap();
+        let lib = tempdir().unwrap();
+
+        let src = src_dir.path().join("with_exif.jpg");
+        fs::copy(fixtures_dir().join("with_exif.jpg"), &src).unwrap();
+
+        import_dir(&pool, src_dir.path(), lib.path(), false).await.unwrap();
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT active_count FROM photo_stats WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1);
+    }
+
+    #[tokio::test]
+    async fn second_import_does_not_double_count() {
+        let pool = test_pool().await;
+        let src_dir = tempdir().unwrap();
+        let lib = tempdir().unwrap();
+
+        let src = src_dir.path().join("with_exif.jpg");
+        fs::copy(fixtures_dir().join("with_exif.jpg"), &src).unwrap();
+        import_dir(&pool, src_dir.path(), lib.path(), false).await.unwrap();
+        // Re-import from the library (same SHA, should skip).
+        import_dir(&pool, lib.path(), lib.path(), false).await.unwrap();
+
+        let count: (i64,) =
+            sqlx::query_as("SELECT active_count FROM photo_stats WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count.0, 1, "re-import must not increment counter again");
     }
 }
