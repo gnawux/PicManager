@@ -295,3 +295,158 @@ pub fn infer_date(filename: &str) -> Option<NaiveDateTime>
   - 跨设备 rename 降级为 copy+delete（用 tempdir 在不同挂载点模拟）
 
 **验收**：`picmanager import ~/Desktop/test_photos/` 执行后，照片出现在 `{library_path}/2024-06-15/` 等目录下，源目录中对应文件消失；`picmanager import --copy ~/Desktop/test_photos/` 执行后源文件保留。
+
+---
+
+## Step 14 — 人脸检测与特征提取
+
+**目标**：导入时自动检测人脸并提取特征向量，同时支持对全库或指定范围照片触发重分析，为后续人物相册奠定数据基础。
+
+### 14a — DB Schema 扩展
+
+新增迁移文件 `migrations/0003_faces.sql`：
+
+```sql
+-- 人脸区域：每张照片中每张脸一行
+CREATE TABLE IF NOT EXISTS faces (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    photo_id    INTEGER NOT NULL REFERENCES photos(id),
+    x           INTEGER NOT NULL,   -- 检测框左上角 x（原图像素坐标）
+    y           INTEGER NOT NULL,   -- 检测框左上角 y
+    width       INTEGER NOT NULL,
+    height      INTEGER NOT NULL,
+    confidence  REAL,               -- 检测置信度 0.0–1.0
+    embedding   BLOB,               -- 特征向量（f32 数组，小端序），NULL = 尚未提取
+    embed_model TEXT,               -- 提取模型标识，如 "arcface-mobilenet-v1"
+    detected_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- 人脸分析任务：跟踪批量（重）分析进度
+CREATE TABLE IF NOT EXISTS face_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    status      TEXT NOT NULL DEFAULT 'running',  -- running / done / failed
+    scope       TEXT,               -- NULL = 全库；JSON 整数数组 = 指定 photo_id 列表
+    total       INTEGER,
+    processed   INTEGER NOT NULL DEFAULT 0,
+    started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    finished_at TEXT
+);
+```
+
+**embedding 编码约定**：`Vec<f32>` 直接按小端序逐元素写入 BLOB，每个 f32 占 4 字节，512 维向量共 2048 字节。
+
+**单元测试**：迁移运行后两张表均可正常 INSERT / SELECT。
+
+---
+
+### 14b — 人脸检测模块
+
+**crate**：`rust-faces`（BlazeFace 320/640，纯 Rust 预处理 + `ort` ONNX 推理，无 OpenCV 依赖）
+
+BlazeFace 是 Google 为移动端设计的轻量检测模型，CPU 单张约 3 ms，精度优于老式级联分类器（SeetaFace/Haar），与 14c 的 `ort` 依赖共用，无额外系统依赖。
+
+**模型文件**：`rust-faces` 通过 `ort` 加载 BlazeFace ONNX，模型文件随 crate 提供或在首次运行时自动下载（由 `rust-faces` 内部处理）。
+
+新建 `src/face/` 模块：
+
+- `src/face/mod.rs`：re-export `detector`、`embedder`、`job` 子模块
+- `src/face/detector.rs`：
+  ```rust
+  pub struct FaceRegion { pub x: i32, pub y: i32, pub width: i32, pub height: i32, pub confidence: f32 }
+  pub fn detect(img: &image::DynamicImage) -> Vec<FaceRegion>
+  ```
+  - 内部用 `rust_faces::FaceDetector`（BlazeFace640）懒初始化（`OnceLock`）
+  - 将 `DynamicImage` 转为 `rust_faces` 期望的 `Array3<f32>` 输入格式
+  - 只返回置信度 ≥ 0.5 的检测框，按置信度降序排列
+  - 检测失败返回空 Vec，不 panic
+
+**单元测试**：对 `tests/samples/IMG_9886.HEIC`（含人脸）调用 `detect()`，断言返回至少 1 个 `FaceRegion`，置信度 ≥ 0.5。
+
+---
+
+### 14c — 人脸特征提取模块
+
+**crate**：`ort 2.x`（ONNX Runtime 官方 Rust 绑定，与 14b 的 `rust-faces` 共用同一运行时）
+
+**模型**：ArcFace-MobileNetV1（来自 insightface buffalo_sc），输入 112×112 RGB，输出 512D float32，模型文件约 10 MB，不打包进二进制。
+
+**模型文件路径**：`{config_dir}/models/arcface_mobilenetv1.onnx`（`config_dir` 即 `~/Library/Application Support/picmanager/`）
+
+`src/face/embedder.rs`：
+```rust
+pub struct Embedder { /* ort Session */ }
+impl Embedder {
+    pub fn load(model_path: &Path) -> Result<Self>
+    pub fn extract(&self, img: &DynamicImage, region: &FaceRegion) -> Result<Vec<f32>>
+}
+```
+提取流程：
+1. 按 `region` 裁剪人脸区域（略微扩边 20% 以包含额头/下巴）
+2. Resize 到 112×112，RGB 转 [-1.0, 1.0] 归一化
+3. ort 推理，取输出张量第 0 行得到 512D 向量
+4. L2 归一化后返回（保证后续余弦相似度计算等价于点积）
+
+**模型文件不存在时**的行为：`Embedder::load` 返回 `Err(AppError::ModelNotFound)`；导入流程中 embedding 留 NULL，仅记录检测框；打印 `tracing::warn` 提示用户运行 `picmanager models fetch`。
+
+**新增 `AppError` 变体**：`ModelNotFound(String)`（模型名称）。
+
+**单元测试**：
+- 对已检测到的 FaceRegion 调用 `extract()`，返回长度 512 的 f32 Vec，向量 L2 范数在 0.99–1.01 之间
+- BLOB 序列化/反序列化后与原向量数值一致（浮点相等）
+
+---
+
+### 14d — 导入集成 + 批量重分析 API
+
+**导入集成（`importer/mod.rs`）**：
+
+在每张照片写入 `photos` 表后，调用 `face::analyze_one(pool, config, photo_id, img)`：
+1. 调用 `detector::detect()` 获取 `Vec<FaceRegion>`
+2. 将所有 FaceRegion 批量写入 `faces` 表（embedding = NULL）
+3. 如果 `Embedder` 可加载，逐个提取 embedding 并 UPDATE 对应行
+4. 任何步骤失败只 `tracing::warn!`，不中断导入
+
+**批量重分析（`src/face/job.rs`）**：
+
+```rust
+pub async fn run_job(
+    pool: &SqlitePool,
+    config: &Config,
+    scope: Option<Vec<i64>>,  // None = 全库
+) -> Result<i64>  // 返回 face_jobs.id
+```
+- 在 `face_jobs` 插入运行中记录，`tokio::spawn` 异步执行
+- 对每张照片：先 `DELETE FROM faces WHERE photo_id = ?`，再重新检测+提取
+- 每处理一张更新 `face_jobs.processed`；全部完成后更新 `status = 'done'`、`finished_at`
+
+**Web API（`web/handlers/faces.rs`）**：
+
+```
+POST /api/faces/analyze
+    body: { "photo_ids": [1, 2, 3] }   # 省略或空数组 = 全库
+    resp: { "job_id": 42 }
+
+GET  /api/faces/jobs/:id
+    resp: { "id": 42, "status": "running", "total": 1000, "processed": 312 }
+
+GET  /api/photos/:id/faces
+    resp: [{ "id": 1, "x": 120, "y": 80, "width": 200, "height": 200, "confidence": 0.97 }, ...]
+    注：不返回 embedding（体积大，前端不需要）
+```
+
+**CLI（`main.rs`）**：
+
+```
+picmanager faces analyze [--photo-ids 1,2,3]   # 全库或指定照片重分析
+picmanager models fetch                         # 下载模型文件到 config_dir/models/
+```
+
+`models fetch` 实现：用 `reqwest` 从固定 URL 下载 ONNX 文件，写入目标路径，打印下载进度。
+
+**单元测试**：
+- 导入含人脸的照片后 `SELECT COUNT(*) FROM faces WHERE photo_id = ?` ≥ 1
+- 重分析后 faces 行数不累加（旧行已先删除）
+- `GET /api/photos/:id/faces` 返回正确字段，不含 embedding 字段
+- 无人脸的照片导入后 faces 表中无对应行，不报错
+
+**验收**：导入 `tests/samples/IMG_9886.HEIC` 后，`GET /api/photos/:id/faces` 返回至少 1 条记录，bounding box 覆盖图中人脸；`POST /api/faces/analyze` 触发全库重分析，`GET /api/faces/jobs/:id` 显示进度直至 `done`。
