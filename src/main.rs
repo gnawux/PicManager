@@ -20,7 +20,11 @@ enum Command {
         copy: bool,
     },
     /// 扫描重复照片并交互式确认
-    Dedup,
+    Dedup {
+        /// 重置扫描状态并全库重新扫描（默认为增量扫描）
+        #[arg(long)]
+        full: bool,
+    },
     /// 启动 Web 服务
     Serve,
     /// 显示当前生效配置
@@ -72,8 +76,12 @@ async fn main() -> anyhow::Result<()> {
                 summary.total, summary.imported, summary.skipped, summary.errors
             );
         }
-        Command::Dedup => {
-            let n = dedup::scan(&pool).await?;
+        Command::Dedup { full } => {
+            let n = if full {
+                dedup::scan_full(&pool).await?
+            } else {
+                dedup::scan(&pool).await?
+            };
             println!("扫描完成，发现 {n} 个新重复组");
 
             let groups = dedup::list_groups(&pool).await?;

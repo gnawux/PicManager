@@ -5,7 +5,7 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 use crate::error::Result;
 
-pub use candidate::scan;
+pub use candidate::{scan, scan_full};
 
 #[derive(Debug, Serialize)]
 pub struct DedupMember {
