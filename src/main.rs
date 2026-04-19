@@ -20,6 +20,8 @@ enum Command {
     Dedup,
     /// 启动 Web 服务
     Serve,
+    /// 显示当前生效配置
+    Config,
 }
 
 #[tokio::main]
@@ -27,7 +29,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     let cli = Cli::parse();
-    let config = Config::default();
+    let config = Config::load();
 
     std::fs::create_dir_all(&config.library_path)?;
     let pool = storage::connect(&config.db_url()).await?;
@@ -69,6 +71,18 @@ async fn main() -> anyhow::Result<()> {
                 dedup::resolve(&pool, group.group_id, &keep_ids).await?;
                 println!("已确认");
             }
+        }
+        Command::Config => {
+            println!("library_path : {}", config.library_path.display());
+            println!("db_path      : {}", config.db_path.display());
+            println!("host         : {}", config.host);
+            println!("port         : {}", config.port);
+            println!("thumb_size   : {}", config.thumb_size);
+            let cfg_file = dirs::config_dir()
+                .map(|p| p.join("picmanager/config.toml").display().to_string())
+                .unwrap_or_else(|| "(unknown)".to_string());
+            println!("config file  : {cfg_file}");
+            return Ok(());
         }
         Command::Serve => {
             picmanager::web::serve(pool, config).await?;

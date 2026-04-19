@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use tower_http::services::ServeDir;
 use crate::config::Config;
 use handlers::{
-    albums::{list_albums, list_album_photos},
+    albums::{list_albums, list_album_photos, merge_albums},
     dedup::{list_dedup_groups, resolve_group},
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb},
@@ -38,6 +38,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/dedup/{group_id}/resolve", post(resolve_group))
         .route("/api/albums", get(list_albums))
         .route("/api/albums/{id}/photos", get(list_album_photos))
+        .route("/api/albums/merge", post(merge_albums))
         .with_state(state)
         .fallback_service(ServeDir::new("frontend").append_index_html_on_directories(true))
 }

@@ -23,7 +23,8 @@
       "Bash(git commit -m 'feat: Step 6 - perceptual hash \\(dHash\\) and duplicate candidate detection *)",
       "Bash(git commit -m 'feat: Step 7 - dedup confirmation workflow *)",
       "Bash(git commit -m 'feat: Step 8 - auto album grouping by month and camera *)",
-      "Bash(git commit -m 'feat: Step 9 - basic web frontend *)"
+      "Bash(git commit -m 'feat: Step 9 - basic web frontend *)",
+      "Bash(git commit -m 'feat: Step 10 - config file support and album manual merge *)"
     ]
   }
 }

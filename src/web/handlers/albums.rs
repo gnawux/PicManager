@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use crate::web::AppState;
+use crate::{album, web::AppState};
 
 #[derive(Debug, Serialize)]
 pub struct AlbumRow {
@@ -87,4 +87,21 @@ pub async fn list_album_photos(
             serde_json::json!({ "id": id, "path": path, "taken_at": taken_at, "camera": camera })
         }).collect::<Vec<_>>()
     })))
+}
+
+#[derive(Deserialize)]
+pub struct MergeRequest {
+    pub source: i64,
+    pub target: i64,
+}
+
+pub async fn merge_albums(
+    State(state): State<AppState>,
+    Json(req): Json<MergeRequest>,
+) -> StatusCode {
+    match album::merge(&state.pool, req.source, req.target).await {
+        Ok(()) => StatusCode::OK,
+        Err(crate::error::AppError::NotFound(_)) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
