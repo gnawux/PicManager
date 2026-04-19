@@ -15,7 +15,7 @@ English documentation: [README.md](README.md)
 | 重复确认工作流（保留 / 软删除） | ✓ |
 | 导入状态追踪（跳过已导入文件） | ✓ |
 | 格式检测（JPEG / PNG / GIF / WebP / HEIC / ARW） | ✓ |
-| 按月份和相机自动分组为相册 | ✓ |
+| 按月份、相机、GPS 地点自动分组为相册 | ✓ |
 | 手动合并相册 | ✓ |
 | Web 界面（照片网格、相册导航、导入面板、重复处理弹窗） | ✓ |
 | REST API | ✓ |
@@ -148,7 +148,7 @@ curl -X POST http://localhost:8080/api/albums/merge \
 ## 开发
 
 ```bash
-cargo nextest run            # 运行全部 70 个测试
+cargo nextest run            # 运行全部 76 个测试
 cargo clippy -- -D warnings  # 代码检查
 cargo watch -x build         # 文件变更时自动重新编译
 ```
@@ -163,11 +163,11 @@ src/
   importer/      目录扫描、SHA-256、导入流水线
   metadata/      格式检测（魔数字节）、EXIF/GPS 提取
   dedup/         感知哈希、候选扫描、重复确认工作流
-  album/         按月份和相机自动分组、手动合并
+  album/         按月份、相机、GPS 地点自动分组；手动合并
   storage/       SQLite 连接池、数据库迁移
   web/           Axum 服务器、REST 处理器、静态文件服务
 frontend/        静态 HTML + CSS + JS（无需构建步骤）
-migrations/      SQLx 数据库迁移文件
+migrations/      SQLx 数据库迁移文件（0001 基础表、0002 geocache）
 tests/           集成测试
 docs/            架构设计与开发计划
 ```
