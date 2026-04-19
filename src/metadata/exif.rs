@@ -1,4 +1,4 @@
-use chrono::NaiveDateTime;
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime};
 use exif::{In, Reader, Tag};
 use std::io::BufReader;
 use std::fs::File;
@@ -37,10 +37,48 @@ fn detect_format(path: &Path) -> Result<super::types::ImageFormat> {
     Ok(fmt)
 }
 
+/// Try EXIF time fields in priority order:
+/// DateTimeOriginal → DateTimeDigitized → GPS DateStamp+TimeStamp → DateTime
 fn parse_datetime(exif: &exif::Exif) -> Option<NaiveDateTime> {
-    let field = exif.get_field(Tag::DateTimeOriginal, In::PRIMARY)?;
+    parse_datetime_tag(exif, Tag::DateTimeOriginal)
+        .or_else(|| parse_datetime_tag(exif, Tag::DateTimeDigitized))
+        .or_else(|| parse_gps_datetime(exif))
+        .or_else(|| parse_datetime_tag(exif, Tag::DateTime))
+}
+
+fn parse_datetime_tag(exif: &exif::Exif, tag: Tag) -> Option<NaiveDateTime> {
+    let field = exif.get_field(tag, In::PRIMARY)?;
     let s = field.display_value().to_string();
     NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S").ok()
+}
+
+/// Parse GPS DateStamp ("YYYY:MM:DD") + TimeStamp (three Rationals: H, M, S).
+fn parse_gps_datetime(exif: &exif::Exif) -> Option<NaiveDateTime> {
+    let date_field = exif.get_field(Tag::GPSDateStamp, In::PRIMARY)?;
+    let date_str = date_field.display_value().to_string();
+    // kamadak-exif shows GPSDateStamp as "YYYY:MM:DD" (with quotes stripped by display_value)
+    let date_str = date_str.trim_matches('"');
+    let date = NaiveDate::parse_from_str(date_str, "%Y:%m:%d")
+        .or_else(|_| NaiveDate::parse_from_str(date_str, "%Y-%m-%d"))
+        .ok()?;
+
+    let time_field = exif.get_field(Tag::GPSTimeStamp, In::PRIMARY)?;
+    let time = parse_gps_time(time_field)?;
+
+    Some(NaiveDateTime::new(date, time))
+}
+
+fn parse_gps_time(field: &exif::Field) -> Option<NaiveTime> {
+    use exif::Value;
+    if let Value::Rational(ref r) = field.value
+        && r.len() >= 3
+    {
+        let h = r[0].to_f64() as u32;
+        let m = r[1].to_f64() as u32;
+        let s = r[2].to_f64() as u32;
+        return NaiveTime::from_hms_opt(h, m, s);
+    }
+    None
 }
 
 fn parse_camera(exif: &exif::Exif) -> Option<String> {
@@ -59,7 +97,6 @@ fn parse_camera(exif: &exif::Exif) -> Option<String> {
     if model.is_empty() {
         return None;
     }
-    // モデル名がメーカー名を含む場合や make が空の場合はそのまま返す
     if make.is_empty() || model.to_lowercase().starts_with(&make.to_lowercase()) {
         Some(model.to_string())
     } else {
@@ -116,13 +153,8 @@ mod tests {
     fn extract_with_exif_jpeg() {
         let meta = extract_from_file(&fixture("with_exif.jpg")).unwrap();
         assert_eq!(meta.format, super::super::types::ImageFormat::Jpeg);
-        assert!(meta.taken_at.is_some(), "should have taken_at");
-        assert_eq!(
-            meta.taken_at.unwrap().to_string(),
-            "2024-06-15 10:30:00"
-        );
+        assert_eq!(meta.taken_at.unwrap().to_string(), "2024-06-15 10:30:00");
         assert_eq!(meta.camera.as_deref(), Some("Apple iPhone 15 Pro"));
-        // GPS: 37.7749 N, -122.4194 W（誤差 0.01 度以内）
         let lat = meta.gps_lat.unwrap();
         let lon = meta.gps_lon.unwrap();
         assert!((lat - 37.7749).abs() < 0.01, "lat={lat}");
@@ -145,4 +177,47 @@ mod tests {
         let result = extract_from_file(tmp.path());
         assert!(matches!(result, Err(AppError::UnsupportedFormat(_))));
     }
+
+    // --- fallback field tests ---
+
+    #[test]
+    fn fallback_to_datetime_digitized() {
+        let meta = extract_from_file(&fixture("digitized_only.jpg")).unwrap();
+        assert_eq!(
+            meta.taken_at.unwrap().to_string(),
+            "2024-07-20 09:15:00",
+            "should fall back to DateTimeDigitized"
+        );
+    }
+
+    #[test]
+    fn fallback_to_gps_datetime() {
+        let meta = extract_from_file(&fixture("gps_time_only.jpg")).unwrap();
+        let taken = meta.taken_at.unwrap();
+        assert_eq!(taken.date().to_string(), "2024-08-10", "GPS date should be used");
+        assert_eq!(taken.time().to_string(), "14:30:00", "GPS time should be used");
+    }
+
+    #[test]
+    fn fallback_to_datetime_tag() {
+        let meta = extract_from_file(&fixture("datetime_only.jpg")).unwrap();
+        assert_eq!(
+            meta.taken_at.unwrap().to_string(),
+            "2024-09-05 08:00:00",
+            "should fall back to DateTime"
+        );
+    }
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn dump_exif_field(path: &std::path::Path, tag: exif::Tag) -> String {
+    use exif::{In, Reader};
+    use std::fs::File;
+    use std::io::BufReader;
+    let f = File::open(path).unwrap();
+    let exif = Reader::new().read_from_container(&mut BufReader::new(f)).unwrap();
+    exif.get_field(tag, In::PRIMARY)
+        .map(|f| f.display_value().to_string())
+        .unwrap_or_else(|| "(absent)".to_string())
 }
