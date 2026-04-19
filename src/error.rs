@@ -19,6 +19,9 @@ pub enum AppError {
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("model not found: {0}")]
+    ModelNotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, AppError>;
