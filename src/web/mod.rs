@@ -8,6 +8,7 @@ use sqlx::SqlitePool;
 use std::sync::{Arc, Mutex};
 use crate::config::Config;
 use handlers::{
+    albums::{list_albums, list_album_photos},
     dedup::{list_dedup_groups, resolve_group},
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb},
@@ -34,6 +35,8 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/import/status", get(get_import_status))
         .route("/api/dedup", get(list_dedup_groups))
         .route("/api/dedup/{group_id}/resolve", post(resolve_group))
+        .route("/api/albums", get(list_albums))
+        .route("/api/albums/{id}/photos", get(list_album_photos))
         .with_state(state)
 }
 

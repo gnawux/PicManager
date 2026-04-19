@@ -3,9 +3,10 @@ pub mod state;
 
 use sqlx::SqlitePool;
 use std::path::Path;
+use crate::album;
+use crate::dedup::hash::compute_phash;
 use crate::error::Result;
 use crate::metadata;
-use crate::dedup::hash::compute_phash;
 use state::{ImportDecision, compute_sha256, decide};
 
 #[derive(Debug, Default)]
@@ -30,6 +31,9 @@ pub async fn import_dir(pool: &SqlitePool, source_dir: &Path) -> Result<ImportSu
             }
         }
     }
+    album::group_by_month(pool).await?;
+    album::group_by_camera(pool).await?;
+
     Ok(summary)
 }
 
