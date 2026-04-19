@@ -33,11 +33,13 @@ src/
   error.rs                 AppError 枚举，Result<T> 类型别名
   importer/
     mod.rs                 import_dir() 主入口，串联流水线
+    placer.rs              文件移动/复制到库目录，日期分目录，冲突重命名
     scanner.rs             递归目录扫描，magic bytes 格式过滤
-    state.rs               SHA-256 计算，ImportDecision 枚举
+    state.rs               SHA-256 计算，ImportDecision 枚举（按 sha256 去重）
   metadata/
-    mod.rs                 re-export extract_from_file
-    exif.rs                EXIF 解析（时间/GPS/相机）
+    mod.rs                 re-export extract_from_file, infer_date
+    exif.rs                EXIF 解析（时间四字段回退链/GPS/相机）
+    filename.rs            文件名日期推断（Unix 时间戳/紧凑/分隔符模式）
     format.rs              magic bytes 格式检测
     types.rs               ImageFormat 枚举，PhotoMeta 结构体
   dedup/
@@ -69,10 +71,14 @@ migrations/
 tests/
   web_api.rs               Web API 集成测试（tower oneshot）
   fixtures/
-    with_exif.jpg          带 EXIF（时间 2024-06-15 10:30:00，GPS 旧金山，相机 iPhone 15 Pro）
-    no_exif.jpg            无 EXIF（同一场景，EXIF 已剥离）
-    with_exif_small.jpg    with_exif.jpg 缩小版（验证 pHash 相似性）
+    with_exif.jpg          带完整 EXIF（DateTimeOriginal 2024-06-15 10:30:00，GPS 旧金山，iPhone 15 Pro）
+    with_exif_small.jpg    with_exif.jpg 50% 缩小版（验证 pHash 相似性）
+    no_exif.jpg            无 EXIF（验证 taken_at/camera/gps 均为 None）
     different.jpg          视觉上不同的图片（验证 pHash 区分度）
+    digitized_only.jpg     仅含 DateTimeDigitized（验证 EXIF 回退链）
+    gps_time_only.jpg      仅含 GPS DateStamp+TimeStamp（验证 GPS 时间回退）
+    datetime_only.jpg      仅含 DateTime IFD0 字段（验证最低优先级回退）
+make_fixtures.py           Python 脚本，写入原始 EXIF 二进制生成上述 fixture
 ```
 
 ---
@@ -84,15 +90,15 @@ tests/
 | 列 | 类型 | 说明 |
 |----|------|------|
 | id | INTEGER PK | 自增主键 |
-| path | TEXT UNIQUE | 源文件绝对路径（不复制文件） |
-| sha256 | TEXT | 文件内容 SHA-256 哈希（用于精确去重） |
-| phash | TEXT NULL | 感知哈希 Base64（dHash，导入时计算） |
-| taken_at | TEXT NULL | EXIF DateTimeOriginal，格式 `YYYY-MM-DD HH:MM:SS` |
+| path | TEXT UNIQUE | 照片在库内的绝对路径（`{library}/{yyyy-mm-dd}/filename.jpg`） |
+| sha256 | TEXT | 文件内容 SHA-256 哈希（用于精确去重，导入时检查） |
+| phash | TEXT NULL | 感知哈希 Base64（pHash/dHash，导入后计算） |
+| taken_at | TEXT NULL | 拍摄时间（EXIF 四字段回退链），格式 `YYYY-MM-DD HH:MM:SS` |
 | gps_lat | REAL NULL | GPS 纬度（十进制度，南为负） |
 | gps_lon | REAL NULL | GPS 经度（十进制度，西为负） |
 | camera | TEXT NULL | `{Make} {Model}`，若 model 已含 make 则只取 model |
 | format | TEXT | `jpeg` / `png` / `gif` / `webp` / `heic` / `arw` / `unknown` |
-| import_status | TEXT | `pending` / `imported` / `duplicate` / `deleted` |
+| import_status | TEXT | `imported` / `deleted`（软删除，由去重确认触发） |
 | imported_at | TEXT | 导入时间（UTC，`datetime('now')`） |
 
 索引：`sha256`、`import_status`、`taken_at`
@@ -190,7 +196,12 @@ pub type Result<T> = std::result::Result<T, AppError>;
 ### 公开接口
 
 ```rust
-pub async fn import_dir(pool: &SqlitePool, source_dir: &Path) -> Result<ImportSummary>
+pub async fn import_dir(
+    pool: &SqlitePool,
+    source_dir: &Path,
+    library_path: &Path,
+    copy_only: bool,
+) -> Result<ImportSummary>
 
 pub struct ImportSummary {
     pub total: usize,
@@ -205,25 +216,34 @@ pub struct ImportSummary {
 ```
 scan_dir(source_dir)
   └─ walkdir 递归，按扩展名预过滤，再用 magic bytes 确认格式
-     （supported extensions: jpg/jpeg/png/gif/webp/heic/heif/arw）
+     （扩展名白名单：jpg/jpeg/png/gif/webp/heic/heif/arw）
 
 for each path:
   compute_sha256(path)
     └─ 分块读取，sha2::Sha256
 
-  decide(pool, path, sha256)
-    ├─ 数据库中存在相同 sha256 且 path 相同 → AlreadyImported
-    ├─ 数据库中存在相同 sha256 但 path 不同 → Duplicate { existing_path }
-    └─ 其他 → New
-
-  if AlreadyImported / Duplicate:
-    INSERT OR IGNORE（幂等），返回 skipped += 1
+  decide(pool, sha256)
+    ├─ sha256 已在 DB → AlreadyImported → skipped += 1，跳过
+    └─ 未见过 → New
 
   if New:
-    metadata::extract_from_file(path)   // EXIF
-    dedup::hash::compute_phash(path)    // dHash（失败则 phash=NULL）
-    INSERT INTO photos ... import_status='imported'
-    返回 imported += 1
+    metadata::extract_from_file(path)   // EXIF 四字段回退链 + GPS + 相机
+
+    // 三级日期推断
+    date = meta.taken_at.map(|dt| dt.date())
+        ?? metadata::infer_date(filename).map(|dt| dt.date())
+        ?? None   // → unknown/
+
+    placer::place(path, library_path, date, copy_only)
+        └─ 将文件移动（copy_only=false）或复制（copy_only=true）到
+           {library_path}/{yyyy-mm-dd}/filename.jpg
+           或 {library_path}/unknown/filename.jpg
+           目标文件名冲突时追加 _1/_2... 后缀
+
+    dedup::hash::compute_phash(final_path)   // pHash（失败则 phash=NULL）
+
+    INSERT INTO photos (path=final_path, ...) import_status='imported'
+    imported += 1
 
 after all files:
   album::group_by_month(pool)
@@ -242,17 +262,33 @@ pub fn scan_dir(dir: &Path) -> Vec<PathBuf>
 - 读取文件头 12 字节，调用 `format::detect()` 二次确认（排除扩展名欺骗）
 - 返回所有通过两道过滤的文件路径，顺序不保证
 
+### placer.rs
+
+```rust
+pub fn place(
+    src: &Path,
+    library_path: &Path,
+    date: Option<NaiveDate>,
+    copy_only: bool,
+) -> Result<PathBuf>
+```
+
+- `date = Some(d)` → `{library_path}/{d:%Y-%m-%d}/`，`date = None` → `{library_path}/unknown/`
+- `copy_only = false`：`std::fs::rename`；跨设备（EXDEV）时降级为 copy + delete
+- `copy_only = true`：`std::fs::copy`，源文件保留
+- 目标文件名冲突时在文件名末尾追加 `_1`、`_2`…
+
 ### state.rs
 
 ```rust
 pub enum ImportDecision {
     New,
     AlreadyImported,
-    Duplicate { existing_path: String },
 }
 
 pub fn compute_sha256(path: &Path) -> Result<String>
-pub async fn decide(pool: &SqlitePool, path: &Path, sha256: &str) -> Result<ImportDecision>
+pub async fn decide(pool: &SqlitePool, sha256: &str) -> Result<ImportDecision>
+// 仅按 sha256 判断：EXISTS(SELECT 1 FROM photos WHERE sha256 = ?)
 ```
 
 ---
@@ -263,6 +299,7 @@ pub async fn decide(pool: &SqlitePool, path: &Path, sha256: &str) -> Result<Impo
 
 ```rust
 pub fn extract_from_file(path: &Path) -> Result<PhotoMeta>
+pub fn infer_date(filename: &str) -> Option<NaiveDateTime>   // filename.rs
 
 pub struct PhotoMeta {
     pub format: ImageFormat,
@@ -292,7 +329,16 @@ pub enum ImageFormat {
 
 使用 `kamadak-exif`，`Reader::new().read_from_container()` 可处理 JPEG/HEIC/ARW 容器。
 
-**时间**：`Tag::DateTimeOriginal`，格式 `%Y-%m-%d %H:%M:%S`（kamadak-exif 展示值）
+**时间（四字段回退链）**：
+
+| 优先级 | Tag | Tag 编号 | 说明 |
+|--------|-----|---------|------|
+| 1 | DateTimeOriginal | 0x9003 | 快门时写入，最可靠 |
+| 2 | DateTimeDigitized | 0x9004 | 数字化时间，通常与 Original 相同 |
+| 3 | GPS DateStamp + TimeStamp | GPS IFD | UTC 时间（存在时区偏差） |
+| 4 | DateTime | 0x0132 | 文件最后修改时间，可能被编辑软件改写 |
+
+kamadak-exif 的 `display_value()` 将存储格式 `YYYY:MM:DD HH:MM:SS` 转换为 `YYYY-MM-DD HH:MM:SS`（破折号分隔），再用 `chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")` 解析。
 
 **相机**：`Tag::Make` + `Tag::Model`，去双引号后拼接；若 model 已含 make 前缀则只用 model
 
@@ -302,6 +348,23 @@ pub enum ImageFormat {
 decimal = deg + min/60 + sec/3600
 若 ref == 'S' 或 'W' 则取负值
 ```
+
+### filename.rs — 文件名日期推断
+
+```rust
+pub fn infer_date(filename: &str) -> Option<NaiveDateTime>
+```
+
+从文件名（含扩展名）推断拍摄日期，按以下顺序尝试：
+
+| 顺序 | 模式 | 示例 | 说明 |
+|------|------|------|------|
+| 1 | 纯数字 10 位 | `1718447400.jpg` | Unix 秒级时间戳，返回 UTC |
+| 2 | 纯数字 13 位 | `1718447400000.jpg` | Unix 毫秒时间戳，返回 UTC |
+| 3 | 紧凑日期时间 | `IMG_20240615_103000.jpg` | `YYYYMMDD[_-]HHMMSS`（前后可有其他字符） |
+| 4 | 分隔符日期 | `2024-06-15_vacation.jpg` | `YYYY[-_]MM[-_]DD`（时间默认 00:00:00） |
+
+无效日期（如月份 13、日期 32）经 `NaiveDate::from_ymd_opt` 拒绝，返回 `None`。
 
 ---
 
@@ -462,14 +525,17 @@ POST /api/dedup/{group_id}/resolve  → resolve_group
 GET  /api/albums                    → list_albums
 GET  /api/albums/{id}/photos        → list_album_photos
 POST /api/albums/merge              → merge_albums
-/*   (fallback)                     → ServeDir("frontend/")
+/*   (fallback)                     → embed::static_handler（rust-embed 内嵌）
 ```
 
 ### import.rs
 
 **`POST /api/import`**：
+
+请求体：`{"dir": "/path/to/photos", "copy": false}`（`copy` 可省略，默认 `false`）
+
 - 若 `import_status.running == true`，返回 `409 Conflict`
-- 否则将 status 置为 `running=true`，`tokio::spawn` 执行 `importer::import_dir`
+- 否则将 status 置为 `running=true`，`tokio::spawn` 执行 `importer::import_dir`（传入 `config.library_path` 和 `copy`）
 - 任务结束后更新 status（summary 或 error），`running=false`
 - 返回 `{"status": "started", "dir": "..."}`
 
@@ -553,7 +619,7 @@ POST /api/albums/merge              → merge_albums
 |--------|------|-----------|----------|------|
 | GET | `/api/photos` | — | `PhotoList` JSON | 500 |
 | GET | `/api/photos/{id}/thumb` | — | JPEG bytes | 404 / 500 |
-| POST | `/api/import` | `{"dir":"..."}` | `{"status":"started"}` | 409（已在运行） |
+| POST | `/api/import` | `{"dir":"...","copy":false}` | `{"status":"started"}` | 409（已在运行） |
 | GET | `/api/import/status` | — | `ImportStatus` JSON | — |
 | GET | `/api/dedup` | — | `DedupGroup[]` JSON | 500 |
 | POST | `/api/dedup/{group_id}/resolve` | `{"keep":[id,...]}` | 200 | 404 / 500 |
@@ -565,7 +631,7 @@ POST /api/albums/merge              → merge_albums
 
 ## 前端
 
-纯静态文件，无构建步骤，由 `tower-http::ServeDir("frontend/")` 托管。
+纯静态文件，无构建步骤。使用 `rust-embed` 在编译时将 `frontend/` 目录嵌入二进制，通过 `web/embed.rs` 的 `static_handler` fallback 路由提供服务（不依赖运行时工作目录）。
 
 ### 主要 JS 函数（app.js）
 
@@ -589,18 +655,20 @@ POST /api/albums/merge              → merge_albums
 
 ## 测试策略
 
-### 单元/集成测试（`cargo nextest run`，共 76 个）
+### 单元/集成测试（`cargo nextest run`，共 97 个）
 
 | 模块 | 测试数 | 测试方式 |
 |------|--------|----------|
 | `error` | 3 | 错误消息格式验证 |
 | `config` | 8 | 默认值、TOML 解析（`tempfile::NamedTempFile`） |
 | `metadata::format` | 7 | magic bytes 识别（直接传字节切片） |
-| `metadata::exif` | 3 | fixture 文件（`with_exif.jpg` / `no_exif.jpg`） |
+| `metadata::exif` | 6 | fixture 文件（7 个 fixture，含 EXIF 回退链） |
+| `metadata::filename` | 12 | 纯逻辑，覆盖全部日期模式及非法日期拒绝 |
 | `metadata::types` | 2 | `as_str()` / `is_supported()` |
+| `importer::placer` | 5 | `tempdir` 临时目录，测试移动/复制/冲突/unknown |
 | `importer::scanner` | 4 | `tempdir` 临时目录 + fixture |
-| `importer::state` | 5 | 内存 SQLite |
-| `importer` | 4 | 内存 SQLite + fixture / tempdir |
+| `importer::state` | 4 | 内存 SQLite（sha256 唯一性判断） |
+| `importer` | 5 | 内存 SQLite + fixture / tempdir（含 copy_only、unknown/ 验证） |
 | `dedup::hash` | 4 | fixture 文件（含缩放/不同图片对比） |
 | `dedup::candidate` | 4 | 内存 SQLite |
 | `dedup` | 5 | 内存 SQLite |
@@ -608,7 +676,7 @@ POST /api/albums/merge              → merge_albums
 | `album::location` | 6 | 内存 SQLite，预填 geocache（无网络） |
 | `album::merge` | 4 | 内存 SQLite |
 | `storage::db` | 4 | 内存 SQLite |
-| `web_api`（集成） | 7 | `tower::ServiceExt::oneshot`，内存 SQLite |
+| `web_api`（集成） | 10 | `tower::ServiceExt::oneshot`，内存 SQLite |
 
 ### 内存 SQLite 约定
 
@@ -630,13 +698,17 @@ sqlx::migrate!("./migrations").run(&pool).await.unwrap();
 
 | 约束 | 说明 |
 |------|------|
-| 原始文件不修改 | 所有写操作只修改数据库；源文件和"已删除"文件均不做 FS 操作 |
-| 去重软删除 | `import_status='deleted'` 仅标记状态，`/api/photos` 仍会返回这些记录 |
-| 导入幂等性 | 相同 sha256 + 相同 path 会被 `INSERT OR IGNORE` 跳过 |
+| 导入默认移动文件 | `import_dir(copy_only=false)` 将源文件 rename 到库目录；跨设备时降级为 copy+delete |
+| `--copy` 保留源文件 | `copy_only=true` 时只复制，源文件保留；适合导入重要原始存档 |
+| 日期推断三级回退 | EXIF 四字段 → 文件名模式 → unknown/；每级失败才尝试下一级 |
+| 去重软删除 | `import_status='deleted'` 仅标记状态，不操作文件系统 |
+| 导入幂等性 | 相同 sha256 的文件被 `decide()` 检测为 `AlreadyImported` 直接跳过（path 无关） |
+| 文件名冲突处理 | 库内同名文件存在时追加 `_1`/`_2` 后缀，循环直至找到空位 |
 | 相册关联幂等性 | `INSERT OR IGNORE INTO photo_albums` 保证多次分组不产生重复行 |
 | Nominatim 限速 | 1 req/s，缓存命中不计入限速；NULL 结果也缓存以避免重试 |
-| pHash 缺失 | 不支持 EXIF 的格式（无法被 `image` crate 解码）pHash 为 NULL，跳过去重比较 |
+| pHash 缺失 | 无法被 `image` crate 解码的格式（HEIC 等）pHash 为 NULL，跳过去重比较 |
 | 后台导入并发 | 同时只允许一个导入任务（`status.running` 检查），重复请求返回 409 |
 | 缩略图无缓存 | 每次请求都实时解码和缩放原图，无磁盘缓存 |
 | ARW 格式 | magic bytes 为 TIFF，需同时满足"扩展名为 `.arw`"才被识别为 ARW |
 | HEIC 渲染 | `image` crate 不解码 HEIC，缩略图生成会失败返回 500；pHash 也为 NULL |
+| EXIF 存储格式 | kamadak-exif 将 `YYYY:MM:DD HH:MM:SS` 转为带破折号展示值再解析；fixture 用 Python 原始 EXIF 二进制生成（绕过 exiftool 的 XMP 写入问题） |
