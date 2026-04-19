@@ -1,4 +1,5 @@
 pub mod album;
+pub mod face;
 pub mod config;
 pub mod dedup;
 pub mod error;
