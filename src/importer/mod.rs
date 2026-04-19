@@ -74,7 +74,7 @@ async fn import_one(
 
     let phash = compute_phash(&final_path).ok();
 
-    sqlx::query(
+    let result = sqlx::query(
         "INSERT OR IGNORE INTO photos (path, sha256, phash, format, taken_at, gps_lat, gps_lon, camera, import_status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'imported')",
     )
@@ -88,6 +88,11 @@ async fn import_one(
     .bind(meta.camera)
     .execute(pool)
     .await?;
+
+    let photo_id = result.last_insert_rowid();
+    if let Ok(img) = image::open(&final_path) {
+        crate::face::analyze_one(pool, photo_id, &img).await;
+    }
 
     Ok(true)
 }

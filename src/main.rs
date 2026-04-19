@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{config::Config, storage, importer, dedup};
+use picmanager::{config::Config, face, storage, importer, dedup};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -25,6 +25,32 @@ enum Command {
     Serve,
     /// 显示当前生效配置
     Config,
+    /// 人脸检测与特征提取
+    Faces {
+        #[command(subcommand)]
+        action: FacesAction,
+    },
+    /// 管理模型文件
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum FacesAction {
+    /// 分析照片中的人脸（省略 --photo-ids 则全库重分析）
+    Analyze {
+        /// 指定照片 ID（逗号分隔），省略则分析全库
+        #[arg(long, value_delimiter = ',')]
+        photo_ids: Vec<i64>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModelsAction {
+    /// 下载模型文件到配置目录
+    Fetch,
 }
 
 #[tokio::main]
@@ -90,6 +116,64 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve => {
             picmanager::web::serve(pool, config).await?;
         }
+        Command::Faces { action } => match action {
+            FacesAction::Analyze { photo_ids } => {
+                let scope = if photo_ids.is_empty() { None } else { Some(photo_ids) };
+                let job_id = face::job::run_job(&pool, scope).await?;
+                println!("人脸分析任务已启动（job_id={job_id}），等待完成…");
+                // Poll until done
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    let status: String =
+                        sqlx::query_scalar("SELECT status FROM face_jobs WHERE id = ?")
+                            .bind(job_id)
+                            .fetch_one(&pool)
+                            .await?;
+                    if status != "running" {
+                        println!("任务 {job_id} 完成：{status}");
+                        break;
+                    }
+                }
+            }
+        },
+        Command::Models { action } => match action {
+            ModelsAction::Fetch => {
+                fetch_models(&config).await?;
+            }
+        },
     }
+    Ok(())
+}
+
+async fn fetch_models(config: &Config) -> anyhow::Result<()> {
+    let models_dir = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("picmanager/models");
+    std::fs::create_dir_all(&models_dir)?;
+
+    let downloads: &[(&str, &str)] = &[
+        (
+            "face_detector.onnx",
+            "https://github.com/Linzaer/Ultra-Light-Fast-Generic-Face-Detector-1MB/raw/master/models/onnx/version-slim-320.onnx",
+        ),
+        (
+            "arcface_mobilenetv1.onnx",
+            "https://github.com/deepinsight/insightface/releases/download/v0.7/w600k_mbf.onnx",
+        ),
+    ];
+
+    let client = reqwest::Client::new();
+    for (filename, url) in downloads {
+        let dest = models_dir.join(filename);
+        if dest.exists() {
+            println!("{filename} 已存在，跳过");
+            continue;
+        }
+        println!("下载 {filename}…");
+        let bytes = client.get(*url).send().await?.bytes().await?;
+        std::fs::write(&dest, &bytes)?;
+        println!("  → {} ({} KB)", dest.display(), bytes.len() / 1024);
+    }
+    let _ = config; // library path not used here
     Ok(())
 }

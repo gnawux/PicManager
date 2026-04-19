@@ -12,6 +12,7 @@ use embed::static_handler;
 use handlers::{
     albums::{list_albums, list_album_photos, merge_albums},
     dedup::{list_dedup_groups, resolve_group},
+    faces::{start_analyze, get_job_status, list_photo_faces},
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb},
 };
@@ -40,6 +41,9 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/albums", get(list_albums))
         .route("/api/albums/{id}/photos", get(list_album_photos))
         .route("/api/albums/merge", post(merge_albums))
+        .route("/api/faces/analyze", post(start_analyze))
+        .route("/api/faces/jobs/{id}", get(get_job_status))
+        .route("/api/photos/{id}/faces", get(list_photo_faces))
         .with_state(state)
         .fallback(static_handler)
 }
