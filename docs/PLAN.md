@@ -461,3 +461,130 @@ picmanager models fetch                         # 下载模型文件到 config_d
 - 无人脸的照片导入后 faces 表中无对应行，不报错
 
 **验收**：导入 `tests/samples/IMG_9886.HEIC` 后，`GET /api/photos/:id/faces` 返回至少 1 条记录，bounding box 覆盖图中人脸；`POST /api/faces/analyze` 触发全库重分析，`GET /api/faces/jobs/:id` 显示进度直至 `done`。
+
+---
+
+## Step 15a — 缩略图磁盘缓存 + spawn_blocking
+
+**目标**：翻页速度从 500–700 ms 降至 <50 ms（重复访问），同时不再阻塞 Tokio async runtime。
+
+**背景**：当前 `generate_thumb()` 是同步函数，每次 `GET /api/photos/:id/thumb` 都从原始文件重新解码，且直接在 async worker 线程中调用，阻塞其他任务。详见 `docs/PERFORMANCE.md` §1。
+
+**实现**：
+
+缓存目录：`{library_path}/.thumbs/{photo_id}.jpg`
+
+```
+GET /api/photos/:id/thumb 处理逻辑：
+1. cache_path = library_path/.thumbs/{id}.jpg
+2. 若 cache_path 存在 → 直接 return fs::read(cache_path)（仍用 spawn_blocking）
+3. 否则：spawn_blocking { 读原文件 → 解码 → resize → 编码 → 写 cache_path → 返回字节 }
+```
+
+- `generate_thumb()` 改为返回 `Vec<u8>`，接受 `output_path: &Path` 参数，解码完成后写缓存文件
+- `AppState` 增加 `thumb_cache_dir: PathBuf`（指向 `{library_path}/.thumbs/`，启动时创建目录）
+- 整个缩略图操作（含文件读写）全部包在 `tokio::task::spawn_blocking` 中
+
+**数据结构变更**：无 DB 改动。`.thumbs/` 目录加入 `.gitignore`。
+
+**单元测试**：
+- 首次请求生成缓存文件，响应 200 + `Content-Type: image/jpeg`
+- 第二次请求命中缓存（可 mock `generate_thumb` 计数器验证只调用一次）
+- 缓存文件不存在时降级到实时生成（不崩溃）
+
+**验收**：50 张图翻页，Network 面板总耗时从 500+ ms → 首次 ~500 ms（冷）、再次 <50 ms（热）。
+
+---
+
+## Step 15b — COUNT(*) 替换为计数器表
+
+**目标**：每次分页查询节省 3–50 ms（百万行时明显），避免全表扫描。
+
+**背景**：当前 `GET /api/photos` 每次执行 `SELECT COUNT(*) FROM photos WHERE import_status='active'`，O(n) 全表扫描。详见 `docs/PERFORMANCE.md` §2a。
+
+**实现**：
+
+新增迁移 `migrations/0004_photo_stats.sql`：
+
+```sql
+CREATE TABLE photo_stats (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    active_count INTEGER NOT NULL DEFAULT 0
+);
+INSERT INTO photo_stats (id, active_count) SELECT 1, COUNT(*) FROM photos WHERE import_status = 'active';
+```
+
+维护点：
+- 导入成功：`UPDATE photo_stats SET active_count = active_count + 1 WHERE id = 1`
+- 软删除（dedup resolve）：`UPDATE photo_stats SET active_count = active_count - 1 WHERE id = 1`
+- `GET /api/photos` 改为 `SELECT active_count FROM photo_stats WHERE id = 1`
+
+**单元测试**：
+- 导入 3 张照片后 `active_count = 3`
+- resolve dedup 软删除 1 张后 `active_count = 2`
+- `GET /api/photos` 返回的 `total` 与 `active_count` 一致
+
+**验收**：10 万张照片时，`GET /api/photos?page=1` 响应时间 <5 ms（之前约 15 ms）。
+
+---
+
+## Step 16a — dedup 增量扫描
+
+**目标**：常规使用中（每次导入后运行一次 dedup）从小时级降至秒级。
+
+**背景**：当前 `scan()` 对全库所有照片做 O(n²) pHash 比较。导入 1,000 张新照片到已有 10,000 张的库时，只需比较新照片与已有照片（10,000 × 1,000 = 1,000 万次），而不是全库 (11,000)² / 2 ≈ 6,000 万次。详见 `docs/PERFORMANCE.md` §3。
+
+**实现**：
+
+`photos` 表新增字段 `dedup_scanned_at TIMESTAMP`（迁移 `0005_dedup_incremental.sql`）：
+
+```sql
+ALTER TABLE photos ADD COLUMN dedup_scanned_at TIMESTAMP;
+```
+
+`scan(pool)` 改为增量模式：
+1. 读取所有 `dedup_scanned_at IS NULL` 的照片（新照片）
+2. 若无新照片 → 直接返回（0 次比较）
+3. 读取所有已有照片的 pHash（`dedup_scanned_at IS NOT NULL`）
+4. 仅对「新 × 已有」+「新 × 新」做 pHash 比较（不重复对已扫描照片两两比较）
+5. 写入 `dedup_groups` / `dedup_members`（逻辑不变）
+6. 将本批新照片的 `dedup_scanned_at` 更新为 `NOW()`
+
+CLI `picmanager dedup --full` 参数：重置所有 `dedup_scanned_at = NULL` 并全量重扫。
+
+**单元测试**：
+- 导入 2 张相似照片，首次 scan → 生成 1 个 dedup group，两张照片 `dedup_scanned_at` 已设置
+- 再次 scan（无新照片）→ 不产生新 group，不做任何比较
+- 再导入 1 张与第 1 张相似的照片，scan → 将新照片加入已有 group（或新建 group）
+
+**验收**：10,000 张已扫描 + 100 张新导入，`picmanager dedup` 耗时 <5 s（之前约 2 小时）。
+
+---
+
+## Step 16b — dedup pHash 前缀分桶
+
+**目标**：`picmanager dedup --full` 全库重扫从 O(n²) 降至接近 O(n log n)。
+
+**背景**：pHash 为 64 位整数，汉明距离 ≤ 10 的两张照片在前 4 位（高位 nibble）上大概率相同或相邻。按前缀分桶后，只需在同桶或相邻桶内比较。详见 `docs/PERFORMANCE.md` §3。
+
+**实现**：
+
+分桶策略：按 pHash 高 8 位（`phash >> 56`，取值 0–255）分为 256 个桶。汉明距离 ≤ 10 的两张照片中，高 8 位最多差 8 位，因此只需比较当前桶 ± 邻桶（按高 8 位汉明距离 ≤ 8 筛选邻桶，实际约 70 个桶需比较）。
+
+`scan_full(pool)` 算法：
+```
+1. 从 DB 读取全部 (id, phash) — O(n)
+2. 按 phash >> 56 分桶，256 个 HashMap<u8, Vec<(id, phash)>>
+3. 对每个桶 b，枚举桶 b 本身 + hamming_distance(b, b') ≤ 8 的所有邻桶 b'
+4. 在选出的照片子集内做 O(k²) 比较（k = 桶平均大小 ≈ n/256）
+5. 写入 dedup groups（同 Step 16a）
+```
+
+理论复杂度：O(n × 70 × k) ≈ O(n × n/256 × 70) ≈ O(n² / 3.6) — 分桶使比较次数降至约 1/3.6；配合 16a 增量扫描，全量重算场景大幅改善。
+
+**单元测试**：
+- 1,000 张随机 pHash，`scan_full` 结果与暴力 O(n²) 比较结果一致（无漏报）
+- 两张汉明距离恰好为 10 的照片（高 8 位差 8 位）：在分桶后仍被发现
+- 两张汉明距离为 11 的照片：不被报告为候选
+
+**验收**：50,000 张照片全库重扫 `--full`，耗时 <5 分钟（之前估算数天）。
