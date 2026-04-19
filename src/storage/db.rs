@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn all_tables_exist() {
         let pool = test_pool().await;
-        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions"] {
+        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs"] {
             let row: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
             )
@@ -89,5 +89,89 @@ mod tests {
             .unwrap();
             assert_eq!(row.0, 1, "table {table} should exist");
         }
+    }
+
+    #[tokio::test]
+    async fn faces_insert_and_query() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO photos (path, sha256, format) VALUES (?, ?, ?)")
+            .bind("/tmp/a.jpg").bind("aaa").bind("jpeg")
+            .execute(&pool).await.unwrap();
+        let photo_id: i64 = sqlx::query_scalar("SELECT id FROM photos WHERE sha256 = 'aaa'")
+            .fetch_one(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(photo_id).bind(10).bind(20).bind(100).bind(100).bind(0.97_f32)
+        .execute(&pool).await.unwrap();
+
+        let row: (i64, i64, i64, i64, f64) =
+            sqlx::query_as("SELECT x, y, width, height, confidence FROM faces WHERE photo_id = ?")
+                .bind(photo_id)
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!((row.0, row.1, row.2, row.3), (10, 20, 100, 100));
+        assert!((row.4 - 0.97).abs() < 0.001);
+    }
+
+    #[tokio::test]
+    async fn faces_embedding_blob_roundtrip() {
+        let pool = test_pool().await;
+        sqlx::query("INSERT INTO photos (path, sha256, format) VALUES (?, ?, ?)")
+            .bind("/tmp/b.jpg").bind("bbb").bind("jpeg")
+            .execute(&pool).await.unwrap();
+        let photo_id: i64 = sqlx::query_scalar("SELECT id FROM photos WHERE sha256 = 'bbb'")
+            .fetch_one(&pool).await.unwrap();
+
+        // 512 次元の f32 embedding を BLOB として格納・復元
+        let embedding: Vec<f32> = (0..512).map(|i| i as f32 / 512.0).collect();
+        let blob: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
+
+        sqlx::query(
+            "INSERT INTO faces (photo_id, x, y, width, height, embedding, embed_model) VALUES (?, 0, 0, 50, 50, ?, ?)",
+        )
+        .bind(photo_id).bind(&blob).bind("arcface-mobilenet-v1")
+        .execute(&pool).await.unwrap();
+
+        let (stored_blob, model): (Vec<u8>, String) =
+            sqlx::query_as("SELECT embedding, embed_model FROM faces WHERE photo_id = ?")
+                .bind(photo_id)
+                .fetch_one(&pool).await.unwrap();
+
+        assert_eq!(stored_blob.len(), 512 * 4);
+        assert_eq!(model, "arcface-mobilenet-v1");
+        let restored: Vec<f32> = stored_blob
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        assert_eq!(restored.len(), 512);
+        assert!((restored[1] - embedding[1]).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn faces_foreign_key_enforced() {
+        let pool = test_pool().await;
+        let result = sqlx::query(
+            "INSERT INTO faces (photo_id, x, y, width, height) VALUES (999, 0, 0, 10, 10)",
+        )
+        .execute(&pool).await;
+        assert!(result.is_err(), "faces.photo_id must reference an existing photo");
+    }
+
+    #[tokio::test]
+    async fn face_jobs_insert_and_query() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO face_jobs (status, scope, total) VALUES (?, ?, ?)",
+        )
+        .bind("running").bind(serde_json::json!([1, 2, 3]).to_string()).bind(3_i64)
+        .execute(&pool).await.unwrap();
+
+        let row: (String, Option<String>, i64, i64) =
+            sqlx::query_as("SELECT status, scope, total, processed FROM face_jobs")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(row.0, "running");
+        assert_eq!(row.2, 3);
+        assert_eq!(row.3, 0);
     }
 }
