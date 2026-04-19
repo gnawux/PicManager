@@ -99,3 +99,34 @@ async fn start_import_returns_started() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json["status"], "started");
 }
+
+#[tokio::test]
+async fn get_albums_returns_200() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(Request::builder().uri("/api/albums").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn get_album_photos_unknown_returns_404() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(Request::builder().uri("/api/albums/9999/photos").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn frontend_index_is_served() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    // ServeDir serves index.html; 200 means the file exists and routing works
+    assert_eq!(response.status(), StatusCode::OK);
+}

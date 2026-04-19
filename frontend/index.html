@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PicManager</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <h1>PicManager</h1>
+
+      <section class="import-panel">
+        <h2>导入照片</h2>
+        <input id="import-dir" type="text" placeholder="目录路径" />
+        <button id="import-btn">开始导入</button>
+        <div id="import-status" class="status-text"></div>
+      </section>
+
+      <section class="dedup-panel">
+        <h2>去重</h2>
+        <button id="dedup-btn">查看重复组</button>
+        <div id="dedup-count"></div>
+      </section>
+
+      <section class="albums-panel">
+        <h2>相册</h2>
+        <ul id="album-list"></ul>
+      </section>
+    </aside>
+
+    <main class="content">
+      <div class="toolbar">
+        <span id="photo-count"></span>
+        <div class="pagination">
+          <button id="prev-btn">‹</button>
+          <span id="page-info"></span>
+          <button id="next-btn">›</button>
+        </div>
+      </div>
+      <div id="photo-grid" class="photo-grid"></div>
+    </main>
+  </div>
+
+  <div id="dedup-modal" class="modal hidden">
+    <div class="modal-inner">
+      <h2>重复照片组</h2>
+      <div id="dedup-groups"></div>
+      <button id="close-dedup">关闭</button>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

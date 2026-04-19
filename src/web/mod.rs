@@ -6,6 +6,7 @@ use axum::{
 };
 use sqlx::SqlitePool;
 use std::sync::{Arc, Mutex};
+use tower_http::services::ServeDir;
 use crate::config::Config;
 use handlers::{
     albums::{list_albums, list_album_photos},
@@ -38,6 +39,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/albums", get(list_albums))
         .route("/api/albums/{id}/photos", get(list_album_photos))
         .with_state(state)
+        .fallback_service(ServeDir::new("frontend").append_index_html_on_directories(true))
 }
 
 pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
