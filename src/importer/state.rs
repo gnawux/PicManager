@@ -8,7 +8,6 @@ use crate::error::Result;
 pub enum ImportDecision {
     New,
     AlreadyImported,
-    Duplicate { existing_path: String },
 }
 
 pub fn compute_sha256(path: &Path) -> Result<String> {
@@ -25,22 +24,19 @@ pub fn compute_sha256(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-pub async fn decide(pool: &SqlitePool, path: &Path, sha256: &str) -> Result<ImportDecision> {
-    let path_str = path.to_string_lossy();
-
-    let row: Option<(String, String)> = sqlx::query_as(
-        "SELECT path, import_status FROM photos WHERE sha256 = ? LIMIT 1",
+/// Return New if this SHA has never been imported, AlreadyImported otherwise.
+pub async fn decide(pool: &SqlitePool, sha256: &str) -> Result<ImportDecision> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM photos WHERE sha256 = ?)",
     )
     .bind(sha256)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
 
-    match row {
-        None => Ok(ImportDecision::New),
-        Some((existing_path, _)) if existing_path == path_str.as_ref() => {
-            Ok(ImportDecision::AlreadyImported)
-        }
-        Some((existing_path, _)) => Ok(ImportDecision::Duplicate { existing_path }),
+    if exists {
+        Ok(ImportDecision::AlreadyImported)
+    } else {
+        Ok(ImportDecision::New)
     }
 }
 
@@ -84,39 +80,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn new_file_returns_new() {
+    async fn new_sha_returns_new() {
         let pool = test_pool().await;
-        let decision = decide(&pool, Path::new("/tmp/a.jpg"), "deadbeef").await.unwrap();
+        let decision = decide(&pool, "deadbeef").await.unwrap();
         assert_eq!(decision, ImportDecision::New);
     }
 
     #[tokio::test]
-    async fn same_path_and_hash_returns_already_imported() {
+    async fn known_sha_returns_already_imported() {
         let pool = test_pool().await;
         sqlx::query("INSERT INTO photos (path, sha256, format) VALUES (?, ?, ?)")
-            .bind("/tmp/a.jpg")
+            .bind("/lib/2024-06-15/a.jpg")
             .bind("abc123")
             .bind("jpeg")
             .execute(&pool)
             .await
             .unwrap();
 
-        let decision = decide(&pool, Path::new("/tmp/a.jpg"), "abc123").await.unwrap();
+        let decision = decide(&pool, "abc123").await.unwrap();
         assert_eq!(decision, ImportDecision::AlreadyImported);
-    }
-
-    #[tokio::test]
-    async fn same_hash_different_path_returns_duplicate() {
-        let pool = test_pool().await;
-        sqlx::query("INSERT INTO photos (path, sha256, format) VALUES (?, ?, ?)")
-            .bind("/original/a.jpg")
-            .bind("abc123")
-            .bind("jpeg")
-            .execute(&pool)
-            .await
-            .unwrap();
-
-        let decision = decide(&pool, Path::new("/new/a.jpg"), "abc123").await.unwrap();
-        assert!(matches!(decision, ImportDecision::Duplicate { .. }));
     }
 }

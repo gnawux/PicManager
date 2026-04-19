@@ -1,3 +1,4 @@
+pub mod placer;
 pub mod scanner;
 pub mod state;
 
@@ -17,12 +18,17 @@ pub struct ImportSummary {
     pub errors: usize,
 }
 
-pub async fn import_dir(pool: &SqlitePool, source_dir: &Path) -> Result<ImportSummary> {
+pub async fn import_dir(
+    pool: &SqlitePool,
+    source_dir: &Path,
+    library_path: &Path,
+    copy_only: bool,
+) -> Result<ImportSummary> {
     let paths = scanner::scan_dir(source_dir);
     let mut summary = ImportSummary { total: paths.len(), ..Default::default() };
 
     for path in &paths {
-        match import_one(pool, path).await {
+        match import_one(pool, path, library_path, copy_only).await {
             Ok(true)  => summary.imported += 1,
             Ok(false) => summary.skipped += 1,
             Err(e) => {
@@ -38,40 +44,41 @@ pub async fn import_dir(pool: &SqlitePool, source_dir: &Path) -> Result<ImportSu
     Ok(summary)
 }
 
-/// 返り値: true = 新規インポート, false = スキップ
-async fn import_one(pool: &SqlitePool, path: &Path) -> Result<bool> {
+/// Returns true = newly imported, false = skipped.
+async fn import_one(
+    pool: &SqlitePool,
+    path: &Path,
+    library_path: &Path,
+    copy_only: bool,
+) -> Result<bool> {
     let sha256 = compute_sha256(path)?;
-    let decision = decide(pool, path, &sha256).await?;
+    let decision = decide(pool, &sha256).await?;
 
-    match decision {
-        ImportDecision::AlreadyImported | ImportDecision::Duplicate { .. } => {
-            let status = if matches!(decision, ImportDecision::Duplicate { .. }) {
-                "duplicate"
-            } else {
-                "imported"
-            };
-            sqlx::query(
-                "INSERT OR IGNORE INTO photos (path, sha256, format, import_status) VALUES (?, ?, ?, ?)",
-            )
-            .bind(path.to_string_lossy().as_ref())
-            .bind(&sha256)
-            .bind("unknown")
-            .bind(status)
-            .execute(pool)
-            .await?;
-            return Ok(false);
-        }
-        ImportDecision::New => {}
+    if matches!(decision, ImportDecision::AlreadyImported) {
+        return Ok(false);
     }
 
     let meta = metadata::extract_from_file(path)?;
-    let phash = compute_phash(path).ok();
+
+    // Three-level date inference: EXIF → filename → None (unknown/)
+    let date = meta.taken_at
+        .map(|dt| dt.date())
+        .or_else(|| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| metadata::infer_date(n))
+                .map(|dt| dt.date())
+        });
+
+    let final_path = placer::place(path, library_path, date, copy_only)?;
+
+    let phash = compute_phash(&final_path).ok();
 
     sqlx::query(
-        "INSERT INTO photos (path, sha256, phash, format, taken_at, gps_lat, gps_lon, camera, import_status)
+        "INSERT OR IGNORE INTO photos (path, sha256, phash, format, taken_at, gps_lat, gps_lon, camera, import_status)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'imported')",
     )
-    .bind(path.to_string_lossy().as_ref())
+    .bind(final_path.to_string_lossy().as_ref())
     .bind(&sha256)
     .bind(&phash)
     .bind(meta.format.as_str())
@@ -109,43 +116,101 @@ mod tests {
     #[tokio::test]
     async fn import_fixtures_dir() {
         let pool = test_pool().await;
-        let summary = import_dir(&pool, &fixtures_dir()).await.unwrap();
+        let lib = tempdir().unwrap();
+        // Use copy_only to avoid destroying shared fixture files.
+        let summary = import_dir(&pool, &fixtures_dir(), lib.path(), true).await.unwrap();
         assert!(summary.total > 0);
         assert_eq!(summary.errors, 0);
         assert!(summary.imported > 0);
     }
 
     #[tokio::test]
+    async fn import_moves_file_to_library() {
+        let pool = test_pool().await;
+        let src_dir = tempdir().unwrap();
+        let lib_dir = tempdir().unwrap();
+
+        // Copy a fixture into src_dir to avoid destroying the fixture.
+        let src = src_dir.path().join("with_exif.jpg");
+        fs::copy(fixtures_dir().join("with_exif.jpg"), &src).unwrap();
+
+        let summary = import_dir(&pool, src_dir.path(), lib_dir.path(), false).await.unwrap();
+        assert_eq!(summary.imported, 1);
+        assert_eq!(summary.errors, 0);
+
+        // Source should be gone.
+        assert!(!src.exists(), "source file should be moved");
+
+        // Library should have the file under a date directory.
+        let mut found = false;
+        for entry in fs::read_dir(lib_dir.path()).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                let sub: Vec<_> = fs::read_dir(entry.path()).unwrap().collect();
+                if !sub.is_empty() {
+                    found = true;
+                }
+            }
+        }
+        assert!(found, "file should appear in a library subdirectory");
+    }
+
+    #[tokio::test]
+    async fn copy_only_preserves_source() {
+        let pool = test_pool().await;
+        let src_dir = tempdir().unwrap();
+        let lib_dir = tempdir().unwrap();
+
+        let src = src_dir.path().join("with_exif.jpg");
+        fs::copy(fixtures_dir().join("with_exif.jpg"), &src).unwrap();
+
+        let summary = import_dir(&pool, src_dir.path(), lib_dir.path(), true).await.unwrap();
+        assert_eq!(summary.imported, 1);
+        assert!(src.exists(), "source should be preserved with copy_only");
+    }
+
+    #[tokio::test]
+    async fn no_date_goes_to_unknown() {
+        let pool = test_pool().await;
+        let src_dir = tempdir().unwrap();
+        let lib_dir = tempdir().unwrap();
+
+        let src = src_dir.path().join("no_exif.jpg");
+        fs::copy(fixtures_dir().join("no_exif.jpg"), &src).unwrap();
+
+        let summary = import_dir(&pool, src_dir.path(), lib_dir.path(), false).await.unwrap();
+        assert_eq!(summary.imported, 1);
+
+        let unknown_dir = lib_dir.path().join("unknown");
+        assert!(unknown_dir.exists(), "unknown/ directory should be created");
+        let files: Vec<_> = fs::read_dir(&unknown_dir).unwrap().collect();
+        assert!(!files.is_empty(), "file should be in unknown/");
+    }
+
+    #[tokio::test]
     async fn second_import_is_idempotent() {
         let pool = test_pool().await;
-        let s1 = import_dir(&pool, &fixtures_dir()).await.unwrap();
-        let s2 = import_dir(&pool, &fixtures_dir()).await.unwrap();
-        assert_eq!(s1.imported, s2.skipped);
-        assert_eq!(s2.imported, 0);
+        let src_dir = tempdir().unwrap();
+        let lib_dir = tempdir().unwrap();
+
+        // First: copy into src_dir and import (move to lib).
+        let src = src_dir.path().join("with_exif.jpg");
+        fs::copy(fixtures_dir().join("with_exif.jpg"), &src).unwrap();
+        let s1 = import_dir(&pool, src_dir.path(), lib_dir.path(), false).await.unwrap();
+        assert_eq!(s1.imported, 1);
+
+        // Second: import the lib itself — same SHA already in DB, should skip.
+        let s2 = import_dir(&pool, lib_dir.path(), lib_dir.path(), false).await.unwrap();
+        assert_eq!(s2.imported, 0, "re-import of already-imported sha should be skipped");
     }
 
     #[tokio::test]
     async fn import_empty_dir_returns_zero() {
         let pool = test_pool().await;
         let dir = tempdir().unwrap();
-        let summary = import_dir(&pool, dir.path()).await.unwrap();
+        let lib = tempdir().unwrap();
+        let summary = import_dir(&pool, dir.path(), lib.path(), false).await.unwrap();
         assert_eq!(summary.total, 0);
         assert_eq!(summary.imported, 0);
-    }
-
-    #[tokio::test]
-    async fn duplicate_file_marked_as_skipped() {
-        let pool = test_pool().await;
-        let dir = tempdir().unwrap();
-        let src = fixtures_dir().join("with_exif.jpg");
-
-        // 同じ内容で2つのパス
-        fs::copy(&src, dir.path().join("a.jpg")).unwrap();
-        fs::copy(&src, dir.path().join("b.jpg")).unwrap();
-
-        let summary = import_dir(&pool, dir.path()).await.unwrap();
-        assert_eq!(summary.total, 2);
-        assert_eq!(summary.imported, 1);
-        assert_eq!(summary.skipped, 1);
     }
 }

@@ -22,6 +22,8 @@ pub type SharedImportStatus = Arc<Mutex<ImportStatus>>;
 #[derive(Debug, Deserialize)]
 pub struct ImportRequest {
     pub dir: String,
+    #[serde(default)]
+    pub copy: bool,
 }
 
 pub async fn start_import(
@@ -42,9 +44,11 @@ pub async fn start_import(
     let pool = state.pool.clone();
     let import_status = state.import_status.clone();
     let dir = std::path::PathBuf::from(req.dir.clone());
+    let library_path = state.config.library_path.clone();
+    let copy_only = req.copy;
 
     tokio::spawn(async move {
-        let result = crate::importer::import_dir(&pool, &dir).await;
+        let result = crate::importer::import_dir(&pool, &dir, &library_path, copy_only).await;
         let mut status = import_status.lock().unwrap();
         match result {
             Ok(summary) => {

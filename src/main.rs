@@ -15,6 +15,9 @@ enum Command {
     Import {
         /// 源目录路径
         dir: PathBuf,
+        /// 复制文件（保留源文件），不移动
+        #[arg(long)]
+        copy: bool,
     },
     /// 扫描重复照片并交互式确认
     Dedup,
@@ -35,9 +38,9 @@ async fn main() -> anyhow::Result<()> {
     let pool = storage::connect(&config.db_url()).await?;
 
     match cli.command {
-        Command::Import { dir } => {
+        Command::Import { dir, copy } => {
             println!("从 {} 导入照片...", dir.display());
-            let summary = importer::import_dir(&pool, &dir).await?;
+            let summary = importer::import_dir(&pool, &dir, &config.library_path, copy).await?;
             println!(
                 "完成：共 {} 张，导入 {}，跳过 {}，失败 {}",
                 summary.total, summary.imported, summary.skipped, summary.errors
