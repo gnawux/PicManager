@@ -19,7 +19,7 @@ English documentation: [README.md](README.md)
 | 手动合并相册 | ✓ |
 | Web 界面（照片网格、相册导航、导入面板、重复处理弹窗） | ✓ |
 | REST API | ✓ |
-| 配置文件（`~/.config/picmanager/config.toml`） | ✓ |
+| 配置文件（`~/Library/Application Support/picmanager/config.toml`） | ✓ |
 
 ## 环境要求
 
@@ -86,7 +86,7 @@ picmanager config
 
 ## 配置
 
-创建 `~/.config/picmanager/config.toml` 来覆盖默认值：
+创建 `~/Library/Application Support/picmanager/config.toml` 来覆盖默认值：
 
 ```toml
 library_path = "/Volumes/NAS/Photos/PicManager"

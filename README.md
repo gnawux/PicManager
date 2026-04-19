@@ -19,7 +19,7 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 | Manual album merge | ✓ |
 | Web UI (photo grid, album nav, import panel, dedup modal) | ✓ |
 | REST API | ✓ |
-| Config file (`~/.config/picmanager/config.toml`) | ✓ |
+| Config file (`~/Library/Application Support/picmanager/config.toml`) | ✓ |
 
 ## Requirements
 
@@ -86,7 +86,7 @@ Prints all settings and the config file path.
 
 ## Configuration
 
-Create `~/.config/picmanager/config.toml` to override any default:
+Create `~/Library/Application Support/picmanager/config.toml` to override any default:
 
 ```toml
 library_path = "/Volumes/NAS/Photos/PicManager"

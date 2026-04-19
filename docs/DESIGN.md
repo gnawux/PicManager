@@ -143,7 +143,7 @@ tests/
 
 ### 配置文件
 
-路径：`~/.config/picmanager/config.toml`（`dirs::config_dir()` 解析）
+路径：`~/Library/Application Support/picmanager/config.toml`（macOS，`dirs::config_dir()` 解析）
 
 ```toml
 library_path = "/Volumes/NAS/Photos/PicManager"
