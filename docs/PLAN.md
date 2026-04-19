@@ -164,5 +164,29 @@
 - CLI 子命令 `picmanager config show` 打印当前生效配置（含来源：默认值 / 配置文件 / 命令行）
 - 单元测试：merge 后 source 相册不存在，target 相册包含两者全部照片，无重复关联
 
-**验收**：编辑 `~/.config/picmanager/config.toml` 修改端口后重启生效；
+**验收**：编辑 `~/Library/Application Support/picmanager/config.toml` 修改端口后重启生效；
 `POST /api/albums/merge` 合并后相册数量减一，照片全部保留。
+
+---
+
+## Step 11 — 按地点（GPS）自动划分相册
+
+**目标**：GPS 坐标已提取并入库，现在让有 GPS 的照片按拍摄地点自动归集为地点相册。
+
+**背景**：需求原文为"按照时间和地点、拍摄相机划分相册"，当前只实现了时间和相机两个维度，地点维度尚缺。
+
+- 新增 `reqwest` 依赖（带 `json` feature），用于调用 OSM Nominatim 免费反地理编码 API
+- 新建迁移文件，添加 `geocache` 表（`lat_key TEXT, lon_key TEXT, city TEXT, cached_at TEXT`）缓存坐标→地名映射，避免重复请求
+- `album/location.rs`：
+  - `reverse_geocode(lat, lon, pool) -> Result<Option<String>>`：先查 `geocache`，命中则直接返回；否则调用 `https://nominatim.openstreetmap.org/reverse`，解析 `city` / `town` / `county` 字段，写入缓存
+  - 严格限速 1 req/s（Nominatim 使用条款要求），连续请求间插入 `tokio::time::sleep(1s)`
+  - `group_by_location(pool) -> Result<()>`：查询所有有 GPS 且尚未归入地点相册的照片，逐一反解地名，按地名建 `kind = 'location'` 相册，将照片写入 `photo_albums`（`INSERT OR IGNORE`，保持幂等）
+  - 无 GPS 的照片直接跳过，不报错
+- 在 `importer::import_dir()` 末尾与 `group_by_month` / `group_by_camera` 一同调用
+- 现有 `GET /api/albums` 接口无需改动，地点相册会自动出现在返回列表中
+- 单元测试：
+  - 有 GPS 坐标的照片导入后，`geocache` 中有对应记录
+  - 同一坐标两次调用只触发一次网络请求（缓存命中）
+  - 无 GPS 的照片导入后不产生地点相册
+
+**验收**：导入一批带 GPS 的照片后，`GET /api/albums` 返回列表中出现 `kind = 'location'` 的相册，相册名为可识别的城市/地区名；无 GPS 的照片不影响导入流程。
