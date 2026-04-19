@@ -190,3 +190,87 @@
   - 无 GPS 的照片导入后不产生地点相册
 
 **验收**：导入一批带 GPS 的照片后，`GET /api/albums` 返回列表中出现 `kind = 'location'` 的相册，相册名为可识别的城市/地区名；无 GPS 的照片不影响导入流程。
+
+---
+
+## Step 12 — 文件名日期推断
+
+**目标**：当 EXIF 中没有拍摄时间时，尝试从文件名中解析日期，作为日期推断的第二优先级。
+
+**背景**：手机和相机导出的文件名常带有日期信息（如 `IMG_20240615_103000.jpg`）；部分工具将 Unix 时间戳作为文件名。此步骤独立实现，方便单独测试，后续在 Step 13 中集成进导入流水线。
+
+- 新增 `metadata/filename.rs` 模块，暴露：
+  ```rust
+  pub fn infer_date(filename: &str) -> Option<NaiveDateTime>
+  ```
+- 按顺序尝试以下规则（任意一条匹配即返回）：
+  1. **Unix 时间戳**：文件名（去除扩展名）全为数字，10 位（秒级）或 13 位（毫秒级），转换为 UTC 日期时间
+  2. **紧凑日期时间**：匹配 `YYYYMMDD_HHMMSS` 或 `YYYYMMDD-HHMMSS`（如 `20240615_103000`），允许前后有其他字符
+  3. **分隔符日期**：匹配 `YYYY-MM-DD` 或 `YYYY_MM_DD`（如 `2024-06-15`），时间部分可选
+  4. 以上均不匹配 → 返回 `None`
+- 只解析合法日期（月 1–12、日 1–31），拒绝如 `20241332` 这样的无效数字串
+- 单元测试覆盖：
+  - `IMG_20240615_103000.jpg` → `2024-06-15 10:30:00`
+  - `2024-06-15_vacation.jpg` → `2024-06-15 00:00:00`
+  - `1718443800.jpg`（Unix 秒）→ 正确 UTC 时间
+  - `1718443800000.jpg`（Unix 毫秒）→ 正确 UTC 时间
+  - `DSC_0001.jpg` → `None`
+  - `20241332_photo.jpg`（非法日期）→ `None`
+
+**验收**：`cargo nextest run` 全部通过，`metadata::filename` 单元测试覆盖上述全部用例。
+
+---
+
+## Step 13 — 导入重构：移动文件到 library，按日期目录组织
+
+**目标**：将导入行为从"只记录路径"改为"将文件物理移入 library，按拍摄日期组织目录结构"。
+
+**背景**：当前实现只在数据库中记录源文件路径，不移动文件。新需求要求导入即整理：文件移动到 `{library_path}/{yyyy-mm-dd}/` 下，数据库记录新路径。
+
+**目录结构变更：**
+```
+{library_path}/
+  2024-06-15/
+    IMG_20240615_103000.jpg
+    DSC_0042.arw
+  2024-07-01/
+    photo.heic
+  unknown/
+    DSC_0001.jpg   ← 无法判断日期的文件
+```
+
+**实现要点：**
+
+- `importer/placer.rs`：新模块，负责文件的物理移动/复制：
+  - `place(src, library_path, date, copy_only) -> Result<PathBuf>`
+    - `date` 为 `Option<NaiveDate>`：有值则放入 `yyyy-mm-dd/`，`None` 放入 `unknown/`
+    - `copy_only = false`（默认）：`std::fs::rename`，跨设备时降级为复制后删除源文件
+    - `copy_only = true`：`std::fs::copy`，保留源文件
+    - 目标路径已存在同名文件时在文件名末尾追加 `_1`、`_2` 等后缀避免覆盖
+  - 返回文件在 library 中的最终绝对路径
+
+- **日期来源整合**（`import_one` 中）：
+  1. 先尝试 EXIF `taken_at`
+  2. EXIF 无结果时调用 `metadata::filename::infer_date(filename)`
+  3. 两者均无则 `date = None` → 放入 `unknown/`
+
+- **数据库**：`photos.path` 存储 library 内的新路径（而非源路径）
+
+- **CLI 变更**：
+  ```
+  picmanager import [--copy] <dir>
+  ```
+  `--copy` 对应 clap 的 `bool` flag
+
+- **Web API 变更**：`POST /api/import` body 增加可选字段 `"copy": true`
+
+- **已导入文件的幂等性**：SHA-256 相同的文件继续跳过，不重复移动
+
+- **单元测试**：
+  - 文件被移动到正确的 `yyyy-mm-dd/` 子目录
+  - `--copy` 时源文件保留，目标文件存在
+  - 无日期文件进入 `unknown/`
+  - 目标文件名冲突时自动加后缀
+  - 跨设备 rename 降级为 copy+delete（用 tempdir 在不同挂载点模拟）
+
+**验收**：`picmanager import ~/Desktop/test_photos/` 执行后，照片出现在 `{library_path}/2024-06-15/` 等目录下，源目录中对应文件消失；`picmanager import --copy ~/Desktop/test_photos/` 执行后源文件保留。
