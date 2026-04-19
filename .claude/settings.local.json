@@ -20,7 +20,8 @@
       "Bash(cargo doc *)",
       "Read(//Users/gnawux/.cargo/registry/src/**)",
       "Bash(git add *)",
-      "Bash(git commit -m 'feat: Step 6 - perceptual hash \\(dHash\\) and duplicate candidate detection *)"
+      "Bash(git commit -m 'feat: Step 6 - perceptual hash \\(dHash\\) and duplicate candidate detection *)",
+      "Bash(git commit -m 'feat: Step 7 - dedup confirmation workflow *)"
     ]
   }
 }
