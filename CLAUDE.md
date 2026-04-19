@@ -12,6 +12,8 @@
 - 图像处理：image 0.25 + image_hasher 3
 - 静态文件：rust-embed 8（前端编译进二进制）
 - CLI：clap 4
+- ONNX 推理：ort 2.0.0-rc.12（load-dynamic + ndarray features）
+- 数值计算：ndarray 0.17
 
 ## 实际项目结构
 
@@ -44,6 +46,11 @@ src/
   storage/
     mod.rs
     db.rs              connect()，运行迁移
+  face/
+    mod.rs             analyze_one(pool, photo_id, img)：检测+嵌入，导入时调用
+    detector.rs        detect(img) -> Vec<FaceRegion>；OnceLock<Mutex<Session>> 懒加载
+    embedder.rs        Embedder::load(path)/extract(img, region) -> Vec<f32> 512D L2归一化
+    job.rs             run_job(pool, scope) -> job_id；execute_job() pub(crate) 供测试调用
   web/
     mod.rs             AppState, router(), serve()
     embed.rs           rust-embed 静态文件服务
@@ -52,17 +59,20 @@ src/
       photos.rs        GET /api/photos, GET /api/photos/{id}/thumb
       dedup.rs         GET /api/dedup, POST /api/dedup/{group_id}/resolve
       albums.rs        GET /api/albums, GET /api/albums/{id}/photos, POST /api/albums/merge
+      faces.rs         POST /api/faces/analyze, GET /api/faces/jobs/{id}, GET /api/photos/{id}/faces
 frontend/              HTML + CSS + JS（编译进二进制，不依赖运行时工作目录）
 migrations/
   0001_initial.sql     photos, albums, photo_albums, dedup_groups, dedup_members, import_sessions
   0002_geocache.sql    geocache 表（GPS 坐标 → 城市名缓存）
+  0003_faces.sql       faces 表（人脸区域 + embedding BLOB）、face_jobs 表
 tests/
   web_api.rs           Web API 集成测试（tower::ServiceExt::oneshot）
   fixtures/            测试 fixture JPEG 文件（由 make_fixtures.py 生成）
+  samples/             真实照片样本（IMG_9886.HEIC iPhone / IMG_20250204_135549.jpg 华为）
   make_fixtures.py     生成所有 fixture（Pillow + 原始 EXIF 二进制写入）
 docs/
   REQUIREMENTS.md      需求文档
-  PLAN.md              开发计划（Steps 1–13 已全部完成）
+  PLAN.md              开发计划（Steps 1–14 已全部完成）
   ARCHITECTURE.md      架构设计
   DESIGN.md            详细设计（模块接口、DB schema、API 参考、测试策略）
 ```
@@ -76,7 +86,7 @@ docs/
 
 ## 开发状态
 
-**已完成：Steps 1–13（docs/PLAN.md 全部步骤）**
+**已完成：Steps 1–14（docs/PLAN.md 全部步骤）**
 
 | Step | 内容 |
 |------|------|
@@ -94,8 +104,12 @@ docs/
 | 12a | EXIF 四字段回退链 |
 | 12b | 文件名日期推断（metadata/filename.rs） |
 | 13 | 导入重构：移动文件到 library，按日期目录组织，--copy 选项 |
+| 14a | DB Schema 扩展：faces + face_jobs 表 |
+| 14b | 人脸检测模块（ultraface-slim-320 / ort 2.x） |
+| 14c | 人脸特征提取模块（ArcFace MobileNetV1 / ort 2.x） |
+| 14d | 导入集成 + 批量重分析 API + CLI |
 
-当前测试数：**97 个**（`cargo nextest run` 全部通过）
+当前测试数：**123 个**（`cargo nextest run` 全部通过，另有 4 个 `#[ignore]` 需模型文件）
 
 ## 关键实现细节（避免踩坑）
 
@@ -137,6 +151,104 @@ EXIF 四字段（DateTimeOriginal→DateTimeDigitized→GPS→DateTime）
   → None（→ library/unknown/）
 ```
 
+### ort 2.0.0-rc.12 关键 API（避免踩坑）
+
+Step 14 全程使用 `ort = "=2.0.0-rc.12"`，以下细节与文档和 AI 训练数据常见说法不一致：
+
+**1. Session 的 import 路径**
+
+```rust
+// ✗ 错误：ort::Session 在 RC.12 未在 crate root 再导出
+use ort::Session;
+
+// ✓ 正确
+use ort::session::Session;
+```
+
+**2. ndarray 版本必须是 0.17**
+
+ort RC.12 内部依赖 ndarray 0.17（不是 0.15 或 0.16）。`Cargo.toml` 中必须写：
+
+```toml
+ndarray = "0.17"
+```
+
+版本不匹配时 `TensorArrayData` trait bound 不满足，错误信息极不直观。
+
+**3. TensorRef 构造：传 `&Array`，不是 `.view()`**
+
+```rust
+// ✗ 错误
+TensorRef::from_array_view(input.view())?
+
+// ✓ 正确：传引用，不是 ArrayView
+let tensor = TensorRef::from_array_view(&input)?;
+```
+
+**4. `try_extract_tensor` 返回的是 `(Shape, &[f32])` 元组，不是 ndarray**
+
+```rust
+// ✗ 错误：.view() 对 tuple 无效
+let sv = outputs["scores"].try_extract_tensor::<f32>()?;
+sv.view()
+
+// ✓ 正确：解构元组，用平坦切片索引
+let (_shape, scores) = outputs["scores"].try_extract_tensor::<f32>()?;
+let conf = scores[i * 2 + 1];         // ultraface: [1,4420,2]
+let x1   = scores_boxes[i * 4];       // ultraface boxes: [1,4420,4]
+```
+
+**5. `Session::run()` 需要 `&mut self` → 全局 Session 要用 `Mutex`**
+
+```rust
+// ✗ 错误：OnceLock<Option<Session>> 只能给出 &Session，无法 run
+static SESSION: OnceLock<Option<Session>> = OnceLock::new();
+
+// ✓ 正确
+static SESSION: OnceLock<Option<Mutex<Session>>> = OnceLock::new();
+// 使用时：
+let mut session = mtx.lock().unwrap();
+run_inference(&mut session, img)
+```
+
+**6. `Session::builder().and_then(...)` 中闭包需要 `mut`**
+
+```rust
+// ✗ 错误
+Session::builder().and_then(|b| b.commit_from_file(&path))
+
+// ✓ 正确：commit_from_file 消耗 self，闭包参数需 mut
+Session::builder().and_then(|mut b| b.commit_from_file(&path))
+```
+
+**7. `SessionOutputs` 不支持 `&String` 作为索引键**
+
+```rust
+// ✗ 错误
+let key: String = outputs.keys().next().unwrap().to_owned();
+outputs[&key]   // 编译失败：无 Index<&String> impl
+
+// ✓ 正确：用 &str、String（owned）或 usize
+outputs[0usize]
+outputs["scores"]
+```
+
+**8. `inputs!` 宏不返回 `Result`，不加 `?`**
+
+```rust
+// ✗ 错误
+session.run(ort::inputs!["input" => tensor]?)?
+
+// ✓ 正确
+session.run(ort::inputs!["input" => tensor])?
+```
+
+### face 模块测试模式
+
+- 纯函数测试（`iou`、`nms`、`preprocess`、`l2_normalize`、`encode/decode`）无需模型文件，始终在 CI 中运行
+- 需要 ONNX 模型的测试标记 `#[ignore = "requires ... in config_dir/picmanager/models/"]`
+- `execute_job` 标为 `pub(crate)` 供测试同步调用，避免 `tokio::spawn` 导致的竞争条件
+
 ## 常用命令
 
 ```bash
@@ -145,8 +257,11 @@ cargo nextest run <模块>     # 跑特定模块，如 metadata::exif
 cargo clippy                 # 检查警告
 python3 tests/make_fixtures.py  # 重新生成 fixture 文件
 
-picmanager import <dir>      # 导入（移动文件）
-picmanager import --copy <dir>  # 导入（保留源文件）
-picmanager serve             # 启动 Web（http://127.0.0.1:8080）
-picmanager config            # 显示当前配置
+picmanager import <dir>                     # 导入（移动文件）
+picmanager import --copy <dir>              # 导入（保留源文件）
+picmanager faces analyze                    # 全库人脸重分析
+picmanager faces analyze --photo-ids 1,2,3 # 指定照片重分析
+picmanager models fetch                     # 下载 ONNX 模型文件
+picmanager serve                            # 启动 Web（http://127.0.0.1:8080）
+picmanager config                           # 显示当前配置
 ```

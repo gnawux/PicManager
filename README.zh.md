@@ -1,6 +1,6 @@
 # PicManager
 
-用 Rust 编写的家庭照片管理工具。自动整理照片、检测重复，按时间和相机分组归集为相册，同时提供 Web 界面和命令行工具。
+用 Rust 编写的家庭照片管理工具。自动整理照片、检测重复，按时间、相机和地点分组归集为相册，本地离线检测人脸，同时提供 Web 界面和命令行工具。
 
 English documentation: [README.md](README.md)
 
@@ -20,15 +20,23 @@ English documentation: [README.md](README.md)
 | Web 界面（照片网格、相册导航、导入面板、重复处理弹窗） | ✓ |
 | REST API | ✓ |
 | 配置文件（`~/Library/Application Support/picmanager/config.toml`） | ✓ |
+| 导入时本地离线人脸检测（ultraface-slim-320 ONNX） | ✓ |
+| 人脸特征提取（ArcFace MobileNetV1，512 维 L2 归一化） | ✓ |
+| 批量人脸重分析（全库或指定照片） | ✓ |
+| CLI 下载 ONNX 模型文件（`models fetch`） | ✓ |
 
 ## 环境要求
 
 - Rust 1.95+
 - macOS（主要平台；其他平台计划支持）
 - [libheif](https://github.com/strukturag/libheif) — 用于 HEIC / Apple Live Photo 支持
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) — 用于人脸检测和特征提取（可选；不安装时人脸功能静默跳过）
 
 ```bash
 brew install libheif
+# 可选 — 启用人脸检测：
+brew install onnxruntime
+picmanager models fetch   # 下载 face_detector.onnx + arcface_mobilenetv1.onnx
 ```
 
 ## 编译
@@ -84,6 +92,31 @@ picmanager config
 
 输出所有配置项及配置文件路径。
 
+### 人脸检测与特征提取
+
+首次使用前下载模型文件：
+
+```bash
+picmanager models fetch
+```
+
+将 `face_detector.onnx`（约 1 MB）和 `arcface_mobilenetv1.onnx`（约 10 MB）下载到
+`~/Library/Application Support/picmanager/models/`。此后每次导入照片时自动检测人脸。
+
+对全库照片重新分析（例如首次下载模型后）：
+
+```bash
+picmanager faces analyze
+```
+
+对指定照片重新分析：
+
+```bash
+picmanager faces analyze --photo-ids 1,2,3
+```
+
+人脸数据仅存储在本地 SQLite 数据库，不调用任何云服务。
+
 ## 配置
 
 创建 `~/Library/Application Support/picmanager/config.toml` 来覆盖默认值：
@@ -110,6 +143,9 @@ thumb_size   = 400
 | GET | `/api/albums` | 列出所有相册及照片数量 |
 | GET | `/api/albums/:id/photos` | 分页获取相册内的照片 |
 | POST | `/api/albums/merge` | 合并两个相册 |
+| GET | `/api/photos/:id/faces` | 获取照片中检测到的人脸区域 |
+| POST | `/api/faces/analyze` | 触发人脸重分析任务（全库或指定照片） |
+| GET | `/api/faces/jobs/:id` | 轮询人脸分析任务进度 |
 
 **示例 — 触发导入：**
 
@@ -148,7 +184,7 @@ curl -X POST http://localhost:8080/api/albums/merge \
 ## 开发
 
 ```bash
-cargo nextest run            # 运行全部 76 个测试
+cargo nextest run            # 运行全部 123 个测试（另有 4 个 #[ignore] 需要 ONNX 模型文件）
 cargo clippy -- -D warnings  # 代码检查
 cargo watch -x build         # 文件变更时自动重新编译
 ```
@@ -157,17 +193,18 @@ cargo watch -x build         # 文件变更时自动重新编译
 
 ```
 src/
-  main.rs        CLI 入口（import / dedup / serve / config）
+  main.rs        CLI 入口（import / dedup / faces / models / serve / config）
   config.rs      Config 结构体及 TOML 配置文件加载
-  error.rs       统一的 AppError 类型
+  error.rs       统一的 AppError 类型（含 ModelNotFound）
   importer/      目录扫描、SHA-256、导入流水线
   metadata/      格式检测（魔数字节）、EXIF/GPS 提取
   dedup/         感知哈希、候选扫描、重复确认工作流
   album/         按月份、相机、GPS 地点自动分组；手动合并
+  face/          本地人脸检测（ultraface）、特征提取（ArcFace）、批量作业
   storage/       SQLite 连接池、数据库迁移
   web/           Axum 服务器、REST 处理器、静态文件服务
 frontend/        静态 HTML + CSS + JS（无需构建步骤）
-migrations/      SQLx 数据库迁移文件（0001 基础表、0002 geocache）
-tests/           集成测试
+migrations/      SQLx 数据库迁移文件（0001 基础表、0002 geocache、0003 faces）
+tests/           集成测试 + 真实相机样本照片
 docs/            架构设计与开发计划
 ```

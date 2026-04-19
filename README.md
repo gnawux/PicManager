@@ -1,6 +1,6 @@
 # PicManager
 
-A family photo management tool built in Rust. Automatically organizes photos, detects duplicates, groups them into albums by time and camera, and provides both a Web UI and a CLI.
+A family photo management tool built in Rust. Automatically organizes photos, detects duplicates, groups them into albums by time, camera and location, detects faces locally, and provides both a Web UI and a CLI.
 
 中文文档：[README.zh.md](README.zh.md)
 
@@ -20,15 +20,23 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 | Web UI (photo grid, album nav, import panel, dedup modal) | ✓ |
 | REST API | ✓ |
 | Config file (`~/Library/Application Support/picmanager/config.toml`) | ✓ |
+| Local face detection on import (ultraface-slim-320 ONNX) | ✓ |
+| Face embedding extraction (ArcFace MobileNetV1, 512-D L2-normalised) | ✓ |
+| Batch face re-analysis (all library or specific photos) | ✓ |
+| ONNX model download via CLI (`models fetch`) | ✓ |
 
 ## Requirements
 
 - Rust 1.95+
 - macOS (primary platform; other platforms planned)
 - [libheif](https://github.com/strukturag/libheif) — for HEIC / Apple Live Photo support
+- [ONNX Runtime](https://github.com/microsoft/onnxruntime) — for face detection and embedding (optional; face features are silently skipped when not present)
 
 ```bash
 brew install libheif
+# Optional — for face detection:
+brew install onnxruntime
+picmanager models fetch   # downloads face_detector.onnx + arcface_mobilenetv1.onnx
 ```
 
 ## Build
@@ -84,6 +92,30 @@ picmanager config
 
 Prints all settings and the config file path.
 
+### Face detection and embedding
+
+Download the ONNX model files once:
+
+```bash
+picmanager models fetch
+```
+
+This downloads `face_detector.onnx` (~1 MB) and `arcface_mobilenetv1.onnx` (~10 MB) to `~/Library/Application Support/picmanager/models/`. After that, face detection runs automatically on every imported photo.
+
+To re-analyse the entire library (e.g. after downloading models for the first time):
+
+```bash
+picmanager faces analyze
+```
+
+To re-analyse specific photos:
+
+```bash
+picmanager faces analyze --photo-ids 1,2,3
+```
+
+Face data is stored locally in the SQLite database; no cloud service is used.
+
 ## Configuration
 
 Create `~/Library/Application Support/picmanager/config.toml` to override any default:
@@ -110,6 +142,9 @@ Command-line flags (when added) take precedence over the config file, which take
 | GET | `/api/albums` | List all albums with photo counts |
 | GET | `/api/albums/:id/photos` | Paginated photos in an album |
 | POST | `/api/albums/merge` | Merge one album into another |
+| GET | `/api/photos/:id/faces` | Face regions detected in a photo |
+| POST | `/api/faces/analyze` | Trigger face re-analysis (all or given photo IDs) |
+| GET | `/api/faces/jobs/:id` | Poll face job progress |
 
 **Example — trigger import:**
 
@@ -148,7 +183,7 @@ Original photo files are **never modified**. The database stores only metadata a
 ## Development
 
 ```bash
-cargo nextest run            # run all 76 tests
+cargo nextest run            # run all 123 tests (4 more need ONNX model files, marked #[ignore])
 cargo clippy -- -D warnings  # lint
 cargo watch -x build         # rebuild on file changes
 ```
@@ -157,17 +192,18 @@ cargo watch -x build         # rebuild on file changes
 
 ```
 src/
-  main.rs        CLI entry point (import / dedup / serve / config)
+  main.rs        CLI entry point (import / dedup / faces / models / serve / config)
   config.rs      Config struct with TOML file loading
-  error.rs       Unified AppError type
+  error.rs       Unified AppError type (incl. ModelNotFound)
   importer/      Directory scanner, SHA-256, import pipeline
   metadata/      Format detection (magic bytes), EXIF/GPS extraction
   dedup/         Perceptual hash, candidate scan, resolve workflow
   album/         Auto-grouping by month, camera & GPS location; manual merge
+  face/          Local face detection (ultraface), embedding (ArcFace), batch jobs
   storage/       SQLite connection pool, migrations
   web/           Axum server, REST handlers, static file serving
 frontend/        Static HTML + CSS + JS (no build step)
-migrations/      SQLx migration files (0001 schema, 0002 geocache)
-tests/           Integration tests
+migrations/      SQLx migration files (0001 schema, 0002 geocache, 0003 faces)
+tests/           Integration tests + real-camera sample images
 docs/            Architecture design and development plan
 ```
