@@ -341,11 +341,13 @@ CREATE TABLE IF NOT EXISTS face_jobs (
 
 ### 14b — 人脸检测模块
 
-**crate**：`rust-faces`（BlazeFace 320/640，纯 Rust 预处理 + `ort` ONNX 推理，无 OpenCV 依赖）
+**crate**：`ort 2.x`（直接使用，不经过 `rust-faces`）
 
-BlazeFace 是 Google 为移动端设计的轻量检测模型，CPU 单张约 3 ms，精度优于老式级联分类器（SeetaFace/Haar），与 14c 的 `ort` 依赖共用，无额外系统依赖。
+`rust-faces` 内部依赖 `ort 1.x`，与 14c 所需的 `ort 2.x` 存在主版本冲突，两套 ONNX Runtime 会同时出现在依赖树中，macOS 动态库加载也会冲突。因此 14b/14c 统一使用 `ort 2.x`，检测预处理和后处理自行实现。
 
-**模型文件**：`rust-faces` 通过 `ort` 加载 BlazeFace ONNX，模型文件随 crate 提供或在首次运行时自动下载（由 `rust-faces` 内部处理）。
+**模型**：ultraface-slim-320（Linzaer），输入 `[1, 3, 240, 320]` float32 BGR `(pixel-127)/128`，输出 `scores [1, 4420, 2]` + `boxes [1, 4420, 4]`（归一化 x1y1x2y2），后处理简单，模型约 1 MB。
+
+**模型文件路径**：`{config_dir}/models/face_detector.onnx`
 
 新建 `src/face/` 模块：
 
@@ -355,18 +357,27 @@ BlazeFace 是 Google 为移动端设计的轻量检测模型，CPU 单张约 3 m
   pub struct FaceRegion { pub x: i32, pub y: i32, pub width: i32, pub height: i32, pub confidence: f32 }
   pub fn detect(img: &image::DynamicImage) -> Vec<FaceRegion>
   ```
-  - 内部用 `rust_faces::FaceDetector`（BlazeFace640）懒初始化（`OnceLock`）
-  - 将 `DynamicImage` 转为 `rust_faces` 期望的 `Array3<f32>` 输入格式
-  - 只返回置信度 ≥ 0.5 的检测框，按置信度降序排列
-  - 检测失败返回空 Vec，不 panic
+  - 预处理：`resize_exact(320, 240)`，BGR 转 `[1,3,H,W]` float32，`(px-127)/128`
+  - `OnceLock<Option<Session>>` 懒加载模型；模型不存在时返回空 Vec + `tracing::warn`
+  - 后处理：过滤 confidence ≥ 0.5，IoU NMS（阈值 0.45），按置信度降序
+  - 任何推理失败返回空 Vec，不 panic
+- 纯函数可独立测试：`iou()`、`nms()`、`preprocess()`
 
-**单元测试**：对 `tests/samples/IMG_9886.HEIC`（含人脸）调用 `detect()`，断言返回至少 1 个 `FaceRegion`，置信度 ≥ 0.5。
+**单元测试**（无需模型文件）：
+- `FaceRegion` 字段读写
+- `iou()` 无重叠→0、完全重叠→1、半重叠→1/3
+- `nms()` 保留最高置信度、抑制高重叠框、保留无重叠框
+- 极小图（4×4）直接返回空
+
+**集成测试**（`#[ignore]`，需要模型文件）：
+- 已知含人脸的 JPEG 样张 → 至少 1 个 FaceRegion，confidence ≥ 0.5
+- 纯白图 → 空列表
 
 ---
 
 ### 14c — 人脸特征提取模块
 
-**crate**：`ort 2.x`（ONNX Runtime 官方 Rust 绑定，与 14b 的 `rust-faces` 共用同一运行时）
+**crate**：`ort 2.x`（与 14b 共用同一 ONNX Runtime 实例）
 
 **模型**：ArcFace-MobileNetV1（来自 insightface buffalo_sc），输入 112×112 RGB，输出 512D float32，模型文件约 10 MB，不打包进二进制。
 
