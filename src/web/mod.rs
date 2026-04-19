@@ -1,3 +1,4 @@
+pub mod embed;
 pub mod handlers;
 
 use axum::{
@@ -6,8 +7,8 @@ use axum::{
 };
 use sqlx::SqlitePool;
 use std::sync::{Arc, Mutex};
-use tower_http::services::ServeDir;
 use crate::config::Config;
+use embed::static_handler;
 use handlers::{
     albums::{list_albums, list_album_photos, merge_albums},
     dedup::{list_dedup_groups, resolve_group},
@@ -40,7 +41,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/albums/{id}/photos", get(list_album_photos))
         .route("/api/albums/merge", post(merge_albums))
         .with_state(state)
-        .fallback_service(ServeDir::new("frontend").append_index_html_on_directories(true))
+        .fallback(static_handler)
 }
 
 pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
