@@ -1,1 +1,2 @@
-// placeholder
+pub mod hash;
+pub mod candidate;

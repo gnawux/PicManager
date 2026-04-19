@@ -5,6 +5,7 @@ use sqlx::SqlitePool;
 use std::path::Path;
 use crate::error::Result;
 use crate::metadata;
+use crate::dedup::hash::compute_phash;
 use state::{ImportDecision, compute_sha256, decide};
 
 #[derive(Debug, Default)]
@@ -59,13 +60,15 @@ async fn import_one(pool: &SqlitePool, path: &Path) -> Result<bool> {
     }
 
     let meta = metadata::extract_from_file(path)?;
+    let phash = compute_phash(path).ok();
 
     sqlx::query(
-        "INSERT INTO photos (path, sha256, format, taken_at, gps_lat, gps_lon, camera, import_status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'imported')",
+        "INSERT INTO photos (path, sha256, phash, format, taken_at, gps_lat, gps_lon, camera, import_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'imported')",
     )
     .bind(path.to_string_lossy().as_ref())
     .bind(&sha256)
+    .bind(&phash)
     .bind(meta.format.as_str())
     .bind(meta.taken_at.map(|t| t.to_string()))
     .bind(meta.gps_lat)

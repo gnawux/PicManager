@@ -14,7 +14,13 @@
       "Bash(cargo nextest *)",
       "Bash(cargo clippy *)",
       "Bash(exiftool *)",
-      "Bash(sips -s format jpeg '/System/Library/Desktop Pictures/Sonoma.heic' --out /Volumes/PLATEA/Documents/Workspace/PicManager/tests/fixtures/no_exif.jpg)"
+      "Bash(sips -s format jpeg '/System/Library/Desktop Pictures/Sonoma.heic' --out /Volumes/PLATEA/Documents/Workspace/PicManager/tests/fixtures/no_exif.jpg)",
+      "Bash(cargo run *)",
+      "Bash(sips *)",
+      "Bash(cargo doc *)",
+      "Read(//Users/gnawux/.cargo/registry/src/**)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'feat: Step 6 - perceptual hash \\(dHash\\) and duplicate candidate detection *)"
     ]
   }
 }
