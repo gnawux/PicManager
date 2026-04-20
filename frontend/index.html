@@ -33,14 +33,41 @@
     <main class="content">
       <div class="toolbar">
         <span id="photo-count"></span>
-        <div class="pagination">
-          <button id="prev-btn">‹</button>
-          <span id="page-info"></span>
-          <button id="next-btn">›</button>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="select-toggle-btn" class="btn-ghost">☑ 选择</button>
+          <div class="pagination">
+            <button id="prev-btn">‹</button>
+            <span id="page-info"></span>
+            <button id="next-btn">›</button>
+          </div>
         </div>
+      </div>
+      <!-- Batch action bar (visible when items selected) -->
+      <div id="batch-bar" class="batch-bar hidden">
+        <span id="batch-count">已选 0 张</span>
+        <button id="batch-time-btn">调整时间/时区</button>
+        <button id="batch-deselect-btn" class="btn-ghost">取消选择</button>
       </div>
       <div id="photo-grid" class="photo-grid"></div>
     </main>
+  </div>
+
+  <!-- Batch time edit dialog -->
+  <div id="batch-time-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:400px">
+      <h2>批量调整时间 / 时区</h2>
+      <label style="display:block;margin-bottom:12px">设置绝对时间（留空则不修改）
+        <input id="batch-taken-at" type="datetime-local" style="display:block;width:100%;margin-top:4px;padding:6px;border:1px solid #ccc;border-radius:6px" />
+      </label>
+      <label style="display:block;margin-bottom:16px">时区偏移（分钟，留空则不修改）
+        <input id="batch-timezone" type="number" step="30" min="-720" max="840"
+               placeholder="如 480 = UTC+8" style="display:block;width:100%;margin-top:4px;padding:6px;border:1px solid #ccc;border-radius:6px" />
+      </label>
+      <div style="display:flex;gap:8px">
+        <button id="batch-time-save-btn">保存</button>
+        <button id="batch-time-cancel-btn" class="btn-ghost">取消</button>
+      </div>
+    </div>
   </div>
 
   <!-- Photo detail modal -->
@@ -56,6 +83,21 @@
       <div class="detail-meta">
         <h2 id="detail-title"></h2>
         <table id="detail-table" class="meta-table"></table>
+        <div id="detail-edit-form" class="detail-edit-form hidden">
+          <label>拍摄时间
+            <input id="edit-taken-at" type="datetime-local" />
+          </label>
+          <label>时区偏移（分钟，如 +480 = UTC+8）
+            <input id="edit-timezone" type="number" step="30" min="-720" max="840" />
+          </label>
+          <div class="edit-actions">
+            <button id="edit-save-btn">保存</button>
+            <button id="edit-cancel-btn" class="btn-ghost">取消</button>
+          </div>
+        </div>
+        <div id="detail-actions" class="detail-actions">
+          <button id="detail-edit-btn" class="btn-ghost">✎ 编辑时间</button>
+        </div>
       </div>
     </div>
   </div>

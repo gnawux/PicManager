@@ -8,6 +8,9 @@ const state = {
   importPollId: null,
   photos: [],       // current page photos for detail navigation
   detailIdx: -1,    // index into state.photos of currently open detail
+  selectMode: false,
+  selected: new Set(), // selected photo IDs
+  currentDetail: null, // full detail object of the open photo
 };
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -22,6 +25,29 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('close-dedup').addEventListener('click', () => {
     document.getElementById('dedup-modal').classList.add('hidden');
   });
+
+  // Detail edit
+  document.getElementById('detail-edit-btn').addEventListener('click', () => {
+    openDetailEdit();
+  });
+  document.getElementById('edit-save-btn').addEventListener('click', saveDetailEdit);
+  document.getElementById('edit-cancel-btn').addEventListener('click', cancelDetailEdit);
+
+  // Batch select
+  document.getElementById('select-toggle-btn').addEventListener('click', toggleSelectMode);
+  document.getElementById('batch-deselect-btn').addEventListener('click', () => {
+    clearSelection();
+    toggleSelectMode(); // exit select mode
+  });
+  document.getElementById('batch-time-btn').addEventListener('click', () => {
+    document.getElementById('batch-taken-at').value = '';
+    document.getElementById('batch-timezone').value = '';
+    document.getElementById('batch-time-modal').classList.remove('hidden');
+  });
+  document.getElementById('batch-time-cancel-btn').addEventListener('click', () => {
+    document.getElementById('batch-time-modal').classList.add('hidden');
+  });
+  document.getElementById('batch-time-save-btn').addEventListener('click', saveBatchTime);
 
   document.getElementById('detail-close').addEventListener('click', closeDetail);
   document.getElementById('detail-prev').addEventListener('click', () => navigateDetail(-1));
@@ -59,14 +85,76 @@ function renderGrid(photos) {
   grid.innerHTML = '';
   photos.forEach((p, idx) => {
     const card = document.createElement('div');
-    card.className = 'photo-card';
+    card.className = 'photo-card' + (state.selectMode ? ' select-mode' : '');
+    if (state.selected.has(p.id)) card.classList.add('selected');
     const label = p.taken_at ? p.taken_at.slice(0, 10) : p.path.split('/').pop();
     card.innerHTML = `
+      <div class="card-check"></div>
       <img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
       <div class="meta">${label}</div>`;
-    card.addEventListener('click', () => openDetail(idx));
+    card.addEventListener('click', () => {
+      if (state.selectMode) {
+        toggleCardSelect(p.id, card);
+      } else {
+        openDetail(idx);
+      }
+    });
     grid.appendChild(card);
   });
+}
+
+// ── Batch selection ───────────────────────────────────────────────────────────
+function toggleSelectMode() {
+  state.selectMode = !state.selectMode;
+  const btn = document.getElementById('select-toggle-btn');
+  btn.textContent = state.selectMode ? '✕ 退出选择' : '☑ 选择';
+  if (!state.selectMode) clearSelection();
+  renderGrid(state.photos);
+}
+
+function toggleCardSelect(photoId, card) {
+  if (state.selected.has(photoId)) {
+    state.selected.delete(photoId);
+    card.classList.remove('selected');
+  } else {
+    state.selected.add(photoId);
+    card.classList.add('selected');
+  }
+  updateBatchBar();
+}
+
+function clearSelection() {
+  state.selected.clear();
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const bar = document.getElementById('batch-bar');
+  const n = state.selected.size;
+  if (n > 0) {
+    bar.classList.remove('hidden');
+    document.getElementById('batch-count').textContent = `已选 ${n} 张`;
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+async function saveBatchTime() {
+  const takenAt = document.getElementById('batch-taken-at').value.replace('T', 'T');
+  const tzRaw = document.getElementById('batch-timezone').value;
+  const body = { photo_ids: [...state.selected] };
+  if (takenAt) body.taken_at = takenAt.replace('T', 'T');
+  if (tzRaw !== '') body.timezone_offset = parseInt(tzRaw, 10);
+  if (!body.taken_at && body.timezone_offset === undefined) {
+    alert('请至少填写一个字段'); return;
+  }
+  await fetch('/api/photos/batch-update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  document.getElementById('batch-time-modal').classList.add('hidden');
+  loadPhotos();
 }
 
 // ── Photo detail modal ────────────────────────────────────────────────────────
@@ -84,13 +172,52 @@ async function openDetail(idx) {
 
   // Fetch full metadata
   const detail = await fetchJSON(`/api/photos/${photo.id}`);
-  if (detail) renderDetailMeta(detail);
+  if (detail) { state.currentDetail = detail; renderDetailMeta(detail); }
+  cancelDetailEdit();
 
   // Fetch and draw face boxes
   const faces = await fetchJSON(`/api/photos/${photo.id}/faces`);
   if (faces) renderFaceOverlay(faces);
 
   updateDetailNav();
+}
+
+// ── Detail edit ───────────────────────────────────────────────────────────────
+function openDetailEdit() {
+  const d = state.currentDetail;
+  if (!d) return;
+  // Prefill form
+  const ta = d.taken_at ? d.taken_at.replace(' ', 'T') : '';
+  document.getElementById('edit-taken-at').value = ta.length > 16 ? ta.slice(0, 16) : ta;
+  document.getElementById('edit-timezone').value = d.timezone_offset != null ? d.timezone_offset : '';
+  document.getElementById('detail-edit-form').classList.remove('hidden');
+  document.getElementById('detail-actions').classList.add('hidden');
+}
+
+async function saveDetailEdit() {
+  const d = state.currentDetail;
+  if (!d) return;
+  const body = {};
+  const ta = document.getElementById('edit-taken-at').value;
+  if (ta) body.taken_at = ta.replace('T', 'T');
+  const tz = document.getElementById('edit-timezone').value;
+  if (tz !== '') body.timezone_offset = parseInt(tz, 10);
+  await fetch(`/api/photos/${d.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  cancelDetailEdit();
+  const updated = await fetchJSON(`/api/photos/${d.id}`);
+  if (updated) { state.currentDetail = updated; renderDetailMeta(updated); }
+  // Refresh grid photo label
+  const p = state.photos.find(x => x.id === d.id);
+  if (p && body.taken_at) { p.taken_at = body.taken_at; renderGrid(state.photos); }
+}
+
+function cancelDetailEdit() {
+  document.getElementById('detail-edit-form').classList.add('hidden');
+  document.getElementById('detail-actions').classList.remove('hidden');
 }
 
 function renderDetailMeta(detail) {
