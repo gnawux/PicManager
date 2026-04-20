@@ -232,6 +232,112 @@ async fn get_thumb_generates_and_caches() {
 }
 
 #[tokio::test]
+async fn patch_photo_updates_taken_at_and_timezone() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/p.jpg', 'sha_p', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "taken_at": "2024-06-15T10:30:00", "timezone_offset": 480 });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let (taken_at, tz): (Option<String>, Option<i64>) =
+        sqlx::query_as("SELECT taken_at, timezone_offset FROM photos WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(taken_at.as_deref(), Some("2024-06-15T10:30:00"));
+    assert_eq!(tz, Some(480));
+}
+
+#[tokio::test]
+async fn patch_photo_unknown_id_returns_404() {
+    let app = test_app().await;
+    let body = serde_json::json!({ "timezone_offset": 0 });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/photos/9999")
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn batch_update_photos_updates_all() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let id1: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/b1.jpg', 'sha_b1', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let id2: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/b2.jpg', 'sha_b2', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({
+        "photo_ids": [id1, id2],
+        "timezone_offset": -300
+    });
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/photos/batch-update")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["updated"], 2);
+
+    for id in [id1, id2] {
+        let tz: Option<i64> =
+            sqlx::query_scalar("SELECT timezone_offset FROM photos WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(tz, Some(-300));
+    }
+}
+
+#[tokio::test]
 async fn timezone_offset_roundtrip() {
     let (_app, pool, _tmp) = test_app_with_pool().await;
 

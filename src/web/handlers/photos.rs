@@ -8,6 +8,87 @@ use serde::{Deserialize, Serialize};
 use crate::web::AppState;
 
 #[derive(Debug, Deserialize)]
+pub struct PatchPhotoBody {
+    pub taken_at: Option<String>,
+    pub timezone_offset: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchUpdateBody {
+    pub photo_ids: Vec<i64>,
+    pub taken_at: Option<String>,
+    pub timezone_offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchUpdateResponse {
+    pub updated: u64,
+}
+
+pub async fn patch_photo(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<PatchPhotoBody>,
+) -> Result<StatusCode, StatusCode> {
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM photos WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if exists.is_none() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    if let Some(ref taken_at) = body.taken_at {
+        sqlx::query("UPDATE photos SET taken_at = ? WHERE id = ?")
+            .bind(taken_at)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    if let Some(tz) = body.timezone_offset {
+        sqlx::query("UPDATE photos SET timezone_offset = ? WHERE id = ?")
+            .bind(tz)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+    Ok(StatusCode::OK)
+}
+
+pub async fn batch_update_photos(
+    State(state): State<AppState>,
+    Json(body): Json<BatchUpdateBody>,
+) -> Result<Json<BatchUpdateResponse>, StatusCode> {
+    if body.photo_ids.is_empty() {
+        return Ok(Json(BatchUpdateResponse { updated: 0 }));
+    }
+    let mut updated: u64 = 0;
+    for &id in &body.photo_ids {
+        if let Some(ref taken_at) = body.taken_at {
+            sqlx::query("UPDATE photos SET taken_at = ? WHERE id = ?")
+                .bind(taken_at)
+                .bind(id)
+                .execute(&state.pool)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if let Some(tz) = body.timezone_offset {
+            sqlx::query("UPDATE photos SET timezone_offset = ? WHERE id = ?")
+                .bind(tz)
+                .bind(id)
+                .execute(&state.pool)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        updated += 1;
+    }
+    Ok(Json(BatchUpdateResponse { updated }))
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Pagination {
     #[serde(default = "default_page")]
     pub page: u32,

@@ -3,7 +3,7 @@ pub mod handlers;
 
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use sqlx::SqlitePool;
 use std::sync::{Arc, Mutex};
@@ -14,7 +14,7 @@ use handlers::{
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
     import::{start_import, get_import_status, ImportStatus},
-    photos::{list_photos, get_thumb},
+    photos::{list_photos, get_thumb, patch_photo, batch_update_photos},
 };
 
 #[derive(Clone)]
@@ -34,6 +34,8 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
 
     Router::new()
         .route("/api/photos", get(list_photos))
+        .route("/api/photos/batch-update", post(batch_update_photos))
+        .route("/api/photos/{id}", patch(patch_photo))
         .route("/api/photos/{id}/thumb", get(get_thumb))
         .route("/api/import", post(start_import))
         .route("/api/import/status", get(get_import_status))
