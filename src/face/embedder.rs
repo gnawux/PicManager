@@ -83,21 +83,28 @@ impl Embedder {
         let Some(mtx) = get_session() else {
             return Err(AppError::ModelNotFound("embedder not loaded".into()));
         };
-        let input = preprocess(img, region);
-        let tensor = TensorRef::from_array_view(&input)
-            .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
         let mut session = mtx
             .lock()
             .map_err(|_| AppError::ModelNotFound("embedder session mutex poisoned".into()))?;
-        let outputs = session
-            .run(ort::inputs!["data" => tensor])
-            .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
-        let (_shape, raw) = outputs[0usize]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
-        let embedding = l2_normalize(raw);
-        Ok(embedding)
+        embed_with_session(&mut session, img, region)
     }
+}
+
+pub(crate) fn embed_with_session(
+    session: &mut Session,
+    img: &DynamicImage,
+    region: &FaceRegion,
+) -> crate::error::Result<Vec<f32>> {
+    let input = preprocess(img, region);
+    let tensor = TensorRef::from_array_view(&input)
+        .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
+    let outputs = session
+        .run(ort::inputs!["input.1" => tensor])
+        .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
+    let (_shape, raw) = outputs[0usize]
+        .try_extract_tensor::<f32>()
+        .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
+    Ok(l2_normalize(raw))
 }
 
 // ── pure helpers ─────────────────────────────────────────────────────────────
@@ -216,17 +223,23 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires arcface_mobilenetv1.onnx in config_dir/picmanager/models/"]
     fn extract_returns_512d_l2_normalized() {
         let model_path = dirs::config_dir()
             .unwrap()
-            .join("picmanager")
-            .join("models")
-            .join("arcface_mobilenetv1.onnx");
-        let embedder = Embedder::load(&model_path).unwrap();
-        let img = image::open("tests/samples/IMG_20250204_135549.jpg").unwrap();
+            .join("picmanager/models/arcface_mobilenetv1.onnx");
+        let mut session = Session::builder()
+            .unwrap()
+            .with_execution_providers([ort::ep::coreml::CoreML::default().build()])
+            .unwrap()
+            .commit_from_file(&model_path)
+            .unwrap();
+        let img = image::open(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/samples/IMG_9844.JPG"),
+        )
+        .unwrap();
         let region = FaceRegion { x: 100, y: 50, width: 200, height: 200, confidence: 0.95 };
-        let emb = embedder.extract(&img, &region).unwrap();
+        let emb = embed_with_session(&mut session, &img, &region).unwrap();
         assert_eq!(emb.len(), 512);
         let norm: f32 = emb.iter().map(|x| x * x).sum::<f32>().sqrt();
         assert!((norm - 1.0).abs() < 0.01, "L2 norm={norm}");

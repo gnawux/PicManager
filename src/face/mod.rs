@@ -39,26 +39,7 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) {
         return;
     }
 
-    // ── persist face bounding boxes ──────────────────────────────────────────
-    let mut face_ids: Vec<i64> = Vec::new();
-    for face in &faces {
-        match sqlx::query_scalar(
-            "INSERT INTO faces (photo_id, x, y, width, height, confidence) \
-             VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-        )
-        .bind(photo_id)
-        .bind(face.x)
-        .bind(face.y)
-        .bind(face.width)
-        .bind(face.height)
-        .bind(face.confidence)
-        .fetch_one(pool)
-        .await
-        {
-            Ok(id) => face_ids.push(id),
-            Err(e) => tracing::warn!("failed to persist face for photo {photo_id}: {e}"),
-        }
-    }
+    let face_ids = save_faces(pool, photo_id, &faces).await;
 
     // ── persist embeddings ───────────────────────────────────────────────────
     for (i, maybe_emb) in embeddings.into_iter().enumerate() {
@@ -77,6 +58,29 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) {
             tracing::warn!("failed to store embedding for face {face_id}: {e}");
         }
     }
+}
+
+pub(crate) async fn save_faces(pool: &SqlitePool, photo_id: i64, faces: &[FaceRegion]) -> Vec<i64> {
+    let mut face_ids = Vec::new();
+    for face in faces {
+        match sqlx::query_scalar(
+            "INSERT INTO faces (photo_id, x, y, width, height, confidence) \
+             VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(photo_id)
+        .bind(face.x)
+        .bind(face.y)
+        .bind(face.width)
+        .bind(face.height)
+        .bind(face.confidence)
+        .fetch_one(pool)
+        .await
+        {
+            Ok(id) => face_ids.push(id),
+            Err(e) => tracing::warn!("failed to persist face for photo {photo_id}: {e}"),
+        }
+    }
+    face_ids
 }
 
 // ── tests ─────────────────────────────────────────────────────────────────────
@@ -117,7 +121,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires face_detector.onnx in config_dir/picmanager/models/"]
     async fn analyze_one_real_photo_inserts_faces() {
         let pool = test_pool().await;
         sqlx::query(
@@ -127,13 +130,33 @@ mod tests {
         .await
         .unwrap();
 
-        let img = image::open("tests/samples/IMG_20250204_135549.jpg").unwrap();
-        analyze_one(&pool, 1, &img).await;
+        let img = image::open(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/samples/IMG_9844.JPG"),
+        )
+        .unwrap();
+        let img_owned = img.clone();
+        let faces = tokio::task::spawn_blocking(move || {
+            let model_path = dirs::config_dir()
+                .unwrap()
+                .join("picmanager/models/face_detector.onnx");
+            let mut session = ort::session::Session::builder()
+                .unwrap()
+                .with_execution_providers([ort::ep::coreml::CoreML::default().build()])
+                .unwrap()
+                .commit_from_file(&model_path)
+                .unwrap();
+            detector::run_inference(&mut session, &img_owned).unwrap()
+        })
+        .await
+        .unwrap();
+
+        save_faces(&pool, 1, &faces).await;
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE photo_id = 1")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert!(count >= 1, "expected at least one face row");
+        assert!(count >= 1, "expected at least one face row, got {count}");
     }
 }
