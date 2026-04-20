@@ -16,7 +16,7 @@ use handlers::{
     geo::get_geo_hierarchy,
     people::{list_people, get_person_photos, get_people_tree, cluster_people, merge_people, reparent_person, get_face_thumb},
     import::{start_import, get_import_status, ImportStatus},
-    photos::{list_photos, get_thumb, get_photo, patch_photo, batch_update_photos},
+    photos::{list_photos, get_thumb, get_photo, get_gps_points, patch_photo, batch_update_photos},
 };
 
 #[derive(Clone)]
@@ -36,6 +36,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
 
     Router::new()
         .route("/api/photos", get(list_photos))
+        .route("/api/photos/gps-points", get(get_gps_points))
         .route("/api/photos/batch-update", post(batch_update_photos))
         .route("/api/photos/{id}", get(get_photo).patch(patch_photo))
         .route("/api/photos/{id}/thumb", get(get_thumb))

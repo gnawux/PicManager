@@ -562,8 +562,56 @@ function switchGeoView(view) {
     b.classList.toggle('active', b.dataset.geoview === view);
   });
   document.getElementById('geo-list-view').classList.toggle('hidden', view !== 'list');
-  document.getElementById('geo-map-view').classList.toggle('hidden', view !== 'map');
-  if (view === 'map') initMap();
+  const mapDiv = document.getElementById('geo-map-view');
+  mapDiv.classList.toggle('hidden', view !== 'map');
+  if (view === 'map') {
+    // Delay to let the div become visible before initialising Leaflet
+    setTimeout(initMap, 50);
+  }
+}
+
+let leafletMap = null;
+
+async function initMap() {
+  // Leaflet may not be loaded if offline
+  if (typeof L === 'undefined') {
+    document.getElementById('leaflet-map').textContent = '地图需要网络连接才能加载（Leaflet CDN）';
+    return;
+  }
+
+  const mapEl = document.getElementById('leaflet-map');
+  if (leafletMap) {
+    leafletMap.invalidateSize();
+    return;
+  }
+
+  leafletMap = L.map(mapEl).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(leafletMap);
+
+  const pts = await fetchJSON('/api/photos/gps-points');
+  if (!pts || pts.length === 0) return;
+
+  const cluster = L.markerClusterGroup();
+  for (const p of pts) {
+    const marker = L.marker([p.gps_lat, p.gps_lon]);
+    const date = p.taken_at ? p.taken_at.slice(0, 10) : '未知日期';
+    marker.bindPopup(`
+      <div style="text-align:center">
+        <img src="/api/photos/${p.id}/thumb" style="max-width:120px;max-height:120px;display:block;margin:0 auto 4px">
+        <div style="font-size:12px">${date}</div>
+      </div>`);
+    cluster.addLayer(marker);
+  }
+  leafletMap.addLayer(cluster);
+
+  // Fit to markers
+  if (pts.length > 0) {
+    const bounds = L.latLngBounds(pts.map(p => [p.gps_lat, p.gps_lon]));
+    leafletMap.fitBounds(bounds, { padding: [40, 40] });
+  }
 }
 
 // ── People list ───────────────────────────────────────────────────────────────

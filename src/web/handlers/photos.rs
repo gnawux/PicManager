@@ -20,6 +20,33 @@ pub struct PhotoDetail {
     pub import_status: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct GpsPoint {
+    pub id: i64,
+    pub taken_at: Option<String>,
+    pub gps_lat: f64,
+    pub gps_lon: f64,
+}
+
+pub async fn get_gps_points(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<GpsPoint>>, StatusCode> {
+    let rows: Vec<(i64, Option<String>, f64, f64)> = sqlx::query_as(
+        "SELECT id, taken_at, gps_lat, gps_lon FROM photos
+         WHERE import_status = 'imported' AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
+         ORDER BY taken_at DESC NULLS LAST",
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|(id, taken_at, gps_lat, gps_lon)| GpsPoint { id, taken_at, gps_lat, gps_lon })
+            .collect(),
+    ))
+}
+
 pub async fn get_photo(
     State(state): State<AppState>,
     Path(id): Path<i64>,

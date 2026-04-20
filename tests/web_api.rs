@@ -380,6 +380,30 @@ async fn batch_update_photos_updates_all() {
 }
 
 #[tokio::test]
+async fn get_photos_gps_points_returns_only_gps_photos() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    sqlx::query(
+        "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+         VALUES ('/gps.jpg', 'shgps', 'jpeg', 'imported', 37.77, -122.41)",
+    ).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/nogps.jpg', 'shnogps', 'jpeg', 'imported')",
+    ).execute(&pool).await.unwrap();
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/photos/gps-points").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let pts = json.as_array().unwrap();
+    assert_eq!(pts.len(), 1);
+    assert!((pts[0]["gps_lat"].as_f64().unwrap() - 37.77).abs() < 0.01);
+}
+
+#[tokio::test]
 async fn geo_hierarchy_groups_by_country_state_city() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 
