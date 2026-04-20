@@ -380,6 +380,135 @@ async fn batch_update_photos_updates_all() {
 }
 
 #[tokio::test]
+async fn get_people_empty() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(Request::builder().uri("/api/people").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn post_people_cluster_returns_count() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/people/cluster")
+                .method("POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json["people_created"].is_number());
+}
+
+#[tokio::test]
+async fn post_people_merge_and_reparent() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+
+    // Insert 2 people and a photo + face
+    let pid1: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('A') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let pid2: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('B') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES ('/m.jpg','shm','jpeg','imported') RETURNING id"
+    ).fetch_one(&pool).await.unwrap();
+    let face_id: i64 = sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,0,0,50,50,0.9) RETURNING id"
+    ).bind(photo_id).fetch_one(&pool).await.unwrap();
+    sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(pid2).bind(face_id).execute(&pool).await.unwrap();
+
+    let config = {
+        let mut c = picmanager::config::Config::default();
+        c.thumb_cache_dir = tmp.path().to_path_buf();
+        c
+    };
+    let app = picmanager::web::router(pool.clone(), config);
+
+    // Merge pid2 into pid1
+    let body = serde_json::json!({ "source_id": pid2, "target_id": pid1 });
+    let resp = app.clone()
+        .oneshot(Request::builder().uri("/api/people/merge").method("POST")
+            .header("content-type","application/json")
+            .body(Body::from(body.to_string())).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // pid2 should be gone
+    let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM people WHERE id = ?")
+        .bind(pid2).fetch_one(&pool).await.unwrap();
+    assert_eq!(exists, 0);
+    // face moved to pid1
+    let fc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM person_faces WHERE person_id = ?")
+        .bind(pid1).fetch_one(&pool).await.unwrap();
+    assert_eq!(fc, 1);
+
+    // Reparent pid1 to itself is not tested (would be cyclic); use a new child
+    let child_id: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('C') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let body2 = serde_json::json!({ "new_parent_id": pid1 });
+    let resp2 = app
+        .oneshot(Request::builder().uri(&format!("/api/people/{child_id}/reparent"))
+            .method("POST")
+            .header("content-type","application/json")
+            .body(Body::from(body2.to_string())).unwrap())
+        .await.unwrap();
+    assert_eq!(resp2.status(), StatusCode::OK);
+    let parent: Option<i64> = sqlx::query_scalar("SELECT parent_id FROM people WHERE id = ?")
+        .bind(child_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(parent, Some(pid1));
+}
+
+#[tokio::test]
+async fn get_face_thumb_returns_jpeg() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/with_exif.jpg");
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES (?,  'shft', 'jpeg', 'imported') RETURNING id"
+    ).bind(fixture.to_str().unwrap()).fetch_one(&pool).await.unwrap();
+    let face_id: i64 = sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,10,10,100,100,0.9) RETURNING id"
+    ).bind(photo_id).fetch_one(&pool).await.unwrap();
+
+    let mut config = picmanager::config::Config::default();
+    config.thumb_cache_dir = tmp.path().to_path_buf();
+    let app = picmanager::web::router(pool.clone(), config);
+
+    let resp = app
+        .oneshot(Request::builder().uri(&format!("/api/faces/{face_id}/thumb")).body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
+
+    // Cache file written
+    assert!(tmp.path().join(format!("face_{face_id}.jpg")).exists());
+}
+
+#[tokio::test]
+async fn get_face_thumb_unknown_returns_404() {
+    let app = test_app().await;
+    let resp = app
+        .oneshot(Request::builder().uri("/api/faces/9999/thumb").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn people_schema_tree_and_faces() {
     let (_app, pool, _tmp) = test_app_with_pool().await;
 
