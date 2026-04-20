@@ -13,11 +13,33 @@ use sqlx::SqlitePool;
 /// embedding model is available) fill in 512-D embeddings.  All failures
 /// are warned — never propagated.
 pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) {
-    let faces = detector::detect(img);
+    // Detection and embedding are CPU-bound (ONNX inference).  Run them on a
+    // blocking thread so the tokio executor is not starved.
+    let img_owned = img.clone();
+    let (faces, embeddings): (Vec<FaceRegion>, Vec<Option<Vec<f32>>>) =
+        tokio::task::spawn_blocking(move || {
+            let faces = detector::detect(&img_owned);
+            if faces.is_empty() {
+                return (vec![], vec![]);
+            }
+            let emb = embedder::Embedder::load(std::path::Path::new("")).ok();
+            let embeddings = faces
+                .iter()
+                .map(|face| emb.as_ref().and_then(|e| e.extract(&img_owned, face).ok()))
+                .collect();
+            (faces, embeddings)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("face analysis task panicked for photo {photo_id}: {e}");
+            (vec![], vec![])
+        });
+
     if faces.is_empty() {
         return;
     }
 
+    // ── persist face bounding boxes ──────────────────────────────────────────
     let mut face_ids: Vec<i64> = Vec::new();
     for face in &faces {
         match sqlx::query_scalar(
@@ -38,33 +60,21 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) {
         }
     }
 
-    let emb_path = dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("picmanager/models/arcface_mobilenetv1.onnx");
-
-    let emb = match embedder::Embedder::load(&emb_path) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-
-    for (i, face) in faces.iter().enumerate() {
+    // ── persist embeddings ───────────────────────────────────────────────────
+    for (i, maybe_emb) in embeddings.into_iter().enumerate() {
         let Some(&face_id) = face_ids.get(i) else { continue };
-        match emb.extract(img, face) {
-            Ok(vec) => {
-                let blob = embedder::encode_embedding(&vec);
-                if let Err(e) = sqlx::query(
-                    "UPDATE faces SET embedding = ?, embed_model = 'arcface-mobilenet-v1' \
-                     WHERE id = ?",
-                )
-                .bind(&blob)
-                .bind(face_id)
-                .execute(pool)
-                .await
-                {
-                    tracing::warn!("failed to store embedding for face {face_id}: {e}");
-                }
-            }
-            Err(e) => tracing::warn!("embedding failed for face {face_id}: {e}"),
+        let Some(emb_vec) = maybe_emb else { continue };
+        let blob = embedder::encode_embedding(&emb_vec);
+        if let Err(e) = sqlx::query(
+            "UPDATE faces SET embedding = ?, embed_model = 'arcface-mobilenet-v1' \
+             WHERE id = ?",
+        )
+        .bind(&blob)
+        .bind(face_id)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!("failed to store embedding for face {face_id}: {e}");
         }
     }
 }
@@ -89,7 +99,6 @@ mod tests {
     #[tokio::test]
     async fn analyze_one_blank_image_inserts_nothing() {
         let pool = test_pool().await;
-        // Insert a dummy photo row so FK is satisfied
         sqlx::query(
             "INSERT INTO photos (id, path, sha256, format, import_status) VALUES (1, 'x', 'abc', 'jpeg', 'imported')"
         )
@@ -104,7 +113,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count, 0, "no model → detect returns [] → no rows inserted");
+        assert_eq!(count, 0, "blank image → no faces detected → no rows inserted");
     }
 
     #[tokio::test]

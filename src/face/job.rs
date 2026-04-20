@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use sqlx::{Row, SqlitePool};
 use crate::error::Result;
 
@@ -48,6 +49,8 @@ pub(crate) async fn execute_job(
     job_id: i64,
     scope: Option<Vec<i64>>,
 ) -> Result<()> {
+    let scope_set: Option<HashSet<i64>> = scope.map(|ids| ids.into_iter().collect());
+
     let rows = sqlx::query(
         "SELECT id, path FROM photos WHERE import_status = 'imported'",
     )
@@ -58,7 +61,7 @@ pub(crate) async fn execute_job(
         let photo_id: i64 = row.get("id");
         let path: String = row.get("path");
 
-        if let Some(ids) = &scope {
+        if let Some(ids) = &scope_set {
             if !ids.contains(&photo_id) {
                 continue;
             }

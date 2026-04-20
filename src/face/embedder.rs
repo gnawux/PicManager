@@ -5,42 +5,80 @@ use ndarray::Array4;
 use ort::session::Session;
 use ort::value::TensorRef;
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
-pub struct Embedder {
-    session: Mutex<Session>,
+// ── global session (loaded at most once per process) ─────────────────────────
+
+static SESSION: OnceLock<Option<Mutex<Session>>> = OnceLock::new();
+
+fn model_path() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("picmanager")
+        .join("models")
+        .join("arcface_mobilenetv1.onnx")
 }
 
-impl Embedder {
-    pub fn load(model_path: &Path) -> crate::error::Result<Self> {
-        // Try bytes compiled into the binary first.
-        let filename = model_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if let Some(bytes) = crate::get_embedded_model(filename) {
-            if let Ok(session) = Session::builder().and_then(|mut b| b.commit_from_memory(&bytes)) {
-                return Ok(Self { session: Mutex::new(session) });
+fn get_session() -> Option<&'static Mutex<Session>> {
+    SESSION
+        .get_or_init(|| {
+            // Prefer bytes compiled into the binary (via `models bundle` + rebuild).
+            if let Some(bytes) = crate::get_embedded_model("arcface_mobilenetv1.onnx") {
+                match Session::builder().and_then(|mut b| b.commit_from_memory(&bytes)) {
+                    Ok(s) => return Some(Mutex::new(s)),
+                    Err(e) => tracing::warn!("embedded embedder model failed: {e}"),
+                }
             }
+            // In test builds skip disk loading — ONNX runtime init can hang in CI.
+            if cfg!(test) {
+                return None;
+            }
+            // Fall back to the on-disk model in the config directory.
+            let path = model_path();
+            if !path.exists() {
+                tracing::warn!(
+                    "face embedding model not found at {}; embeddings will be skipped",
+                    path.display()
+                );
+                return None;
+            }
+            match Session::builder().and_then(|mut b| b.commit_from_file(&path)) {
+                Ok(s) => Some(Mutex::new(s)),
+                Err(e) => {
+                    tracing::warn!("failed to load face embedding model: {e}");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+// ── public API ────────────────────────────────────────────────────────────────
+
+/// Zero-cost handle that confirms the embedding session is ready.
+/// The underlying ONNX session is a process-wide singleton loaded at most once.
+pub struct Embedder;
+
+impl Embedder {
+    /// Returns `Ok(Embedder)` if the model is available (embedded or on disk).
+    /// The model is loaded at most once per process regardless of how many times
+    /// `load` is called.
+    pub fn load(_model_path: &Path) -> crate::error::Result<Self> {
+        if get_session().is_some() {
+            Ok(Self)
+        } else {
+            Err(AppError::ModelNotFound("arcface model unavailable".into()))
         }
-        // Fall back to disk.
-        if !model_path.exists() {
-            tracing::warn!(
-                "face embedding model not found at {}; embeddings will be skipped",
-                model_path.display()
-            );
-            return Err(AppError::ModelNotFound(
-                model_path.display().to_string(),
-            ));
-        }
-        let session = Session::builder()
-            .and_then(|mut b| b.commit_from_file(model_path))
-            .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
-        Ok(Self { session: Mutex::new(session) })
     }
 
     pub fn extract(&self, img: &DynamicImage, region: &FaceRegion) -> crate::error::Result<Vec<f32>> {
+        let Some(mtx) = get_session() else {
+            return Err(AppError::ModelNotFound("embedder not loaded".into()));
+        };
         let input = preprocess(img, region);
         let tensor = TensorRef::from_array_view(&input)
             .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
-        let mut session = self.session.lock().unwrap();
+        let mut session = mtx.lock().unwrap();
         let outputs = session
             .run(ort::inputs!["data" => tensor])
             .map_err(|e| AppError::ModelNotFound(e.to_string()))?;

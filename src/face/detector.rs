@@ -53,6 +53,11 @@ fn get_session() -> Option<&'static Mutex<Session>> {
                     Err(e) => tracing::warn!("embedded face detection model failed: {e}"),
                 }
             }
+            // In test builds skip disk loading — ONNX runtime init can hang in CI.
+            // Tests requiring real model inference use #[ignore] explicitly.
+            if cfg!(test) {
+                return None;
+            }
             // Fall back to the on-disk model in the config directory.
             let path = model_path();
             if !path.exists() {
