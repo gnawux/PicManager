@@ -11,6 +11,8 @@ use crate::web::AppState;
 pub struct AnalyzeRequest {
     #[serde(default)]
     pub photo_ids: Vec<i64>,
+    #[serde(default)]
+    pub missing_only: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -35,7 +37,20 @@ pub async fn start_analyze(
     State(state): State<AppState>,
     Json(req): Json<AnalyzeRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let scope = if req.photo_ids.is_empty() { None } else { Some(req.photo_ids) };
+    let scope = if req.missing_only {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM photos WHERE import_status = 'imported' \
+             AND NOT EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id)",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        Some(ids)
+    } else if req.photo_ids.is_empty() {
+        None
+    } else {
+        Some(req.photo_ids)
+    };
     let job_id = crate::face::job::run_job(&state.pool, scope)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;

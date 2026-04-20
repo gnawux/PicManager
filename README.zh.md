@@ -31,6 +31,7 @@ English documentation: [README.md](README.md)
 | 地点层级视图（国家 → 省/州 → 城市三列钻取） | ✓ |
 | 地图打点视图（Leaflet.js + markercluster） | ✓ |
 | 照片时间/时区编辑（仅写数据库，不回写 EXIF） | ✓ |
+| 元数据补全按钮（为无人脸记录的照片补人脸分析，为有 GPS 但无地理编码的照片补地理信息） | ✓ |
 
 ## 环境要求
 
@@ -155,10 +156,12 @@ thumb_size   = 400
 | GET | `/api/albums/:id/photos` | 分页获取相册内的照片 |
 | POST | `/api/albums/merge` | 合并两个相册 |
 | GET | `/api/photos/:id/faces` | 获取照片中检测到的人脸区域 |
-| POST | `/api/faces/analyze` | 触发人脸重分析任务（全库或指定照片） |
+| POST | `/api/faces/analyze` | 触发人脸重分析任务（全库、指定照片或 missing_only 仅补缺） |
 | GET | `/api/faces/jobs/:id` | 轮询人脸分析任务进度 |
 | GET | `/api/faces/:id/thumb` | 人脸裁剪缩略图 |
 | GET | `/api/geo/hierarchy` | 地理层级（国家→省→城市，含照片数） |
+| POST | `/api/geo/regeocode` | 为有 GPS 但缺 geocache 条目的照片触发后台反地理编码 |
+| GET | `/api/geo/regeocode/status` | 查询反地理编码后台任务是否在运行 |
 | GET | `/api/people` | 人物列表 |
 | GET | `/api/people/tree` | 嵌套人物树 |
 | POST | `/api/people/cluster` | 触发 DBSCAN 重聚类 |

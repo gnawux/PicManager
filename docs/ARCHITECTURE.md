@@ -75,16 +75,16 @@ picmanager/
 │   │   ├── mod.rs
 │   │   └── db.rs            # SQLite 连接池，运行迁移
 │   └── web/
-│       ├── mod.rs           # AppState、router()、serve()
+│       ├── mod.rs           # AppState（含 geo_running: Arc<AtomicBool>）、router()、serve()
 │       ├── embed.rs         # rust-embed 静态文件服务（frontend/ 编译进二进制）
 │       └── handlers/
 │           ├── import.rs    # POST /api/import、GET /api/import/status
 │           ├── photos.rs    # GET /api/photos、GET /api/photos/:id/thumb、GET/PATCH /api/photos/:id、POST /api/photos/batch-update、GET /api/photos/gps-points
 │           ├── dedup.rs     # GET /api/dedup、POST /api/dedup/:id/resolve
 │           ├── albums.rs    # GET /api/albums、GET /api/albums/:id/photos、POST /api/albums/merge
-│           ├── faces.rs     # POST /api/faces/analyze、GET /api/faces/jobs/:id、GET /api/photos/:id/faces
+│           ├── faces.rs     # POST /api/faces/analyze（支持 missing_only）、GET /api/faces/jobs/:id、GET /api/photos/:id/faces
 │           ├── people.rs    # GET /api/people、GET /api/people/tree、POST /api/people/cluster/merge、GET /api/people/:id、POST /api/people/:id/reparent、GET /api/faces/:id/thumb
-│           ├── geo.rs       # GET /api/geo/hierarchy
+│           ├── geo.rs       # GET /api/geo/hierarchy、POST /api/geo/regeocode、GET /api/geo/regeocode/status
 │           └── animals.rs   # GET /api/animals/species、GET /api/animals/:species/photos、GET /api/photos/:id/animals
 ├── frontend/                # 静态 HTML + CSS + JS（编译时嵌入二进制）
 ├── migrations/              # SQLx 数据库迁移文件（0001–0009）
@@ -258,10 +258,12 @@ POST   /api/dedup/:group_id/resolve       # 确认保留（软删除其余项）
 GET    /api/albums                        # 相册列表（含 photo_count）
 GET    /api/albums/:id/photos             # 相册内照片列表（分页）
 POST   /api/albums/merge                  # 合并相册
-POST   /api/faces/analyze                 # 触发人脸重分析任务（全库或指定 photo_ids）
+POST   /api/faces/analyze                 # 触发人脸重分析任务（全库、指定 photo_ids 或 missing_only）
 GET    /api/faces/jobs/:id                # 轮询重分析任务进度
 GET    /api/faces/:id/thumb               # 人脸裁剪缩略图（磁盘缓存）
 GET    /api/geo/hierarchy                 # 地理层级（country→state→city 含照片数）
+POST   /api/geo/regeocode                 # 为有 GPS 但缺 geocache 的照片触发后台反地理编码
+GET    /api/geo/regeocode/status          # 查询反地理编码后台任务是否在运行
 GET    /api/people                        # 人物列表
 GET    /api/people/tree                   # 人物树（嵌套 JSON）
 POST   /api/people/cluster                # 触发 DBSCAN 重聚类
@@ -272,7 +274,7 @@ GET    /api/animals/species               # 动物种类列表（含照片数）
 GET    /api/animals/:species/photos       # 指定种类的照片列表
 ```
 
-长耗时任务（导入、人脸分析）通过 **tokio::spawn** 后台执行，进度通过客户端轮询对应 status API 获取。
+长耗时任务（导入、人脸分析、反地理编码）通过 **tokio::spawn** 后台执行，进度通过客户端轮询对应 status API 获取。导入和地理编码各用 `Arc<Mutex<>>` / `Arc<AtomicBool>` 防止并发重入。
 
 ## 数据流
 

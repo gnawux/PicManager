@@ -71,9 +71,9 @@ src/
       photos.rs            list_photos, get_thumb, get_photo, patch_photo, batch_update_photos, get_gps_points
       dedup.rs             list_dedup_groups, resolve_group
       albums.rs            list_albums, list_album_photos, merge_albums
-      faces.rs             start_analyze, get_job_status, list_photo_faces
+      faces.rs             start_analyze (支持 missing_only), get_job_status, list_photo_faces
       people.rs            list_people, get_person_photos, get_people_tree, cluster_people, merge_people, reparent_person, get_face_thumb
-      geo.rs               get_geo_hierarchy
+      geo.rs               get_geo_hierarchy, start_regeocode, get_regeocode_status
       animals.rs           list_species, list_species_photos, list_photo_animals
 frontend/
   index.html               主页面（侧边栏 + 照片网格 + 弹窗骨架）
@@ -778,10 +778,11 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: Config,
     pub import_status: Arc<Mutex<ImportStatus>>,
+    pub geo_running: Arc<AtomicBool>,
 }
 ```
 
-`import_status` 用 `Arc<Mutex<ImportStatus>>` 在主线程（HTTP handler）与 `tokio::spawn` 后台任务之间共享进度。
+`import_status` 用 `Arc<Mutex<ImportStatus>>` 在主线程（HTTP handler）与 `tokio::spawn` 后台任务之间共享进度。`geo_running` 用 `Arc<AtomicBool>` 标记反地理编码后台任务是否正在运行，防止并发重入（已在运行时返回 `{"status":"already_running"}`）。
 
 ### 路由表
 
@@ -805,6 +806,8 @@ POST   /api/faces/analyze                 → start_analyze
 GET    /api/faces/jobs/{id}               → get_job_status
 GET    /api/faces/{id}/thumb              → get_face_thumb
 GET    /api/geo/hierarchy                 → get_geo_hierarchy
+POST   /api/geo/regeocode                 → start_regeocode
+GET    /api/geo/regeocode/status          → get_regeocode_status
 GET    /api/people                        → list_people
 GET    /api/people/tree                   → get_people_tree
 POST   /api/people/cluster                → cluster_people
@@ -931,6 +934,14 @@ GET    /api/animals/{species}/photos      → list_species_photos
   ]}
 ```
 
+**`POST /api/geo/regeocode`**：为数据库中有 GPS 坐标但 `geocache` 表尚无对应条目的照片触发反地理编码。
+
+- 若后台任务已在运行，返回 `{"status":"already_running"}`（不启动新任务）
+- 否则统计待处理数量，`tokio::spawn` 调用 `album::group_by_location()`，立即返回 `{"status":"started","count":N}`
+- `AppState.geo_running`（`Arc<AtomicBool>`）在任务启动时置 `true`，完成后置 `false`
+
+**`GET /api/geo/regeocode/status`**：返回 `{"running":true/false}`，供前端轮询。
+
 ### animals.rs
 
 **`GET /api/animals/species`**：返回所有检测到的动物种类及照片数：
@@ -970,6 +981,8 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | POST | `/api/albums/merge` | `{"source":id,"target":id}` | 200 | 404 / 500 |
 | GET | `/api/faces/{id}/thumb` | — | JPEG bytes（人脸裁剪图） | 404 / 500 |
 | GET | `/api/geo/hierarchy` | — | 地理层级嵌套 JSON | 500 |
+| POST | `/api/geo/regeocode` | — | `{"status":"started","count":N}` 或 `{"status":"already_running"}` | 500 |
+| GET | `/api/geo/regeocode/status` | — | `{"running":true/false}` | — |
 | GET | `/api/people` | — | `PersonRow[]` JSON | 500 |
 | GET | `/api/people/tree` | — | 嵌套树 JSON | 500 |
 | POST | `/api/people/cluster` | — | `{"job_id":N}` | 500 |
@@ -978,7 +991,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | POST | `/api/people/{id}/reparent` | `{"new_parent_id":N}` | 200 | 404 / 500 |
 | GET | `/api/animals/species` | — | 种类列表 JSON | 500 |
 | GET | `/api/animals/{species}/photos` | — | 分页照片 JSON | 500 |
-| POST | `/api/faces/analyze` | `{"photo_ids":[...]}` | `{"job_id":42}` | 500 |
+| POST | `/api/faces/analyze` | `{"photo_ids":[...],"missing_only":false}` | `{"job_id":42}` | 500 |
 | GET | `/api/faces/jobs/{id}` | — | `JobStatusResponse` JSON | 404 / 500 |
 
 **FaceResponse 结构：**
@@ -1007,6 +1020,8 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 **导航标签页**：照片 | 人物 | 地点 | 动物
 
+**侧边栏区块**：导入照片 | 去重 | 元数据补全 | 相册
+
 ### 主要 JS 函数（app.js）
 
 | 函数 | 说明 |
@@ -1021,6 +1036,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | `openPhotoDetail(id)` | GET `/api/photos/{id}`，弹出详情模态框（大图 + 元信息 + 人脸/动物 overlay） |
 | `patchPhoto(id, data)` | PATCH `/api/photos/{id}`，保存时间/时区修改 |
 | `batchUpdatePhotos(ids, data)` | POST `/api/photos/batch-update`，批量时间/时区调整 |
+| `fillMissingMeta()` | 并行 POST `/api/faces/analyze`（`missing_only:true`）+ POST `/api/geo/regeocode`；每 2s 轮询人脸 job 状态和 geo 运行状态，状态栏显示"人脸：X/Y \| 地理：处理中/完成"；完成后刷新当前视图 |
 | `loadPeople()` | GET `/api/people`，渲染人物卡片网格 |
 | `clusterPeople()` | POST `/api/people/cluster`，触发重聚类，轮询进度 |
 | `loadPeopleTree()` | GET `/api/people/tree`，渲染层级树 |

@@ -1,5 +1,6 @@
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Serialize;
+use std::sync::atomic::Ordering;
 use crate::web::AppState;
 
 #[derive(Debug, Serialize)]
@@ -76,4 +77,45 @@ pub async fn get_geo_hierarchy(
     }
 
     Ok(Json(GeoHierarchy { countries }))
+}
+
+pub async fn start_regeocode(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if state.geo_running.swap(true, Ordering::SeqCst) {
+        return Ok(Json(serde_json::json!({"status": "already_running"})));
+    }
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos ph
+         WHERE ph.import_status = 'imported'
+           AND ph.gps_lat IS NOT NULL
+           AND ph.gps_lon IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM geocache gc
+             WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+               AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+           )",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| {
+        state.geo_running.store(false, Ordering::SeqCst);
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
+
+    let pool = state.pool.clone();
+    let running = state.geo_running.clone();
+    tokio::spawn(async move {
+        let _ = crate::album::group_by_location(&pool).await;
+        running.store(false, Ordering::SeqCst);
+    });
+
+    Ok(Json(serde_json::json!({"status": "started", "count": count})))
+}
+
+pub async fn get_regeocode_status(
+    State(state): State<AppState>,
+) -> Json<serde_json::Value> {
+    Json(serde_json::json!({"running": state.geo_running.load(Ordering::SeqCst)}))
 }

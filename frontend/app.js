@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // People view
+  document.getElementById('fill-meta-btn').addEventListener('click', fillMissingMeta);
   document.getElementById('recluster-btn').addEventListener('click', triggerRecluster);
   document.getElementById('person-back-btn').addEventListener('click', () => showPeopleList());
   document.getElementById('person-name-input').addEventListener('change', savePersonName);
@@ -742,6 +743,61 @@ async function savePersonName() {
   // and will add the endpoint in a later step if needed
   const p = state.allPeople.find(x => x.id === personId);
   if (p) p.name = input.value;
+}
+
+async function fillMissingMeta() {
+  const btn = document.getElementById('fill-meta-btn');
+  const statusEl = document.getElementById('fill-meta-status');
+  btn.disabled = true;
+  statusEl.textContent = '启动中…';
+
+  const [faceRes, geoRes] = await Promise.all([
+    fetchJSON('/api/faces/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ missing_only: true }) }),
+    fetchJSON('/api/geo/regeocode', { method: 'POST' }),
+  ]);
+
+  if (!faceRes && !geoRes) {
+    statusEl.textContent = '启动失败';
+    btn.disabled = false;
+    return;
+  }
+
+  const faceJobId = faceRes && faceRes.job_id;
+  let geoCount = geoRes ? geoRes.count : 0;
+  let geoStatus = geoRes ? geoRes.status : 'done';
+
+  function updateStatus(faceText, geoText) {
+    statusEl.textContent = `人脸：${faceText} | 地理：${geoText}`;
+  }
+
+  const pollId = setInterval(async () => {
+    const [faceJob, geoSt] = await Promise.all([
+      faceJobId ? fetchJSON(`/api/faces/jobs/${faceJobId}`) : Promise.resolve(null),
+      fetchJSON('/api/geo/regeocode/status'),
+    ]);
+
+    const faceText = faceJob
+      ? (faceJob.status === 'running'
+          ? `${faceJob.processed}/${faceJob.total ?? '?'}`
+          : faceJob.status === 'done' ? '完成' : '失败')
+      : (faceRes ? '完成' : '跳过');
+
+    const geoRunning = geoSt && geoSt.running;
+    const geoText = geoRunning
+      ? `处理中（${geoCount} 张待编码）`
+      : (geoStatus === 'already_running' ? '已在运行' : `完成（${geoCount} 张）`);
+
+    const faceDone = !faceJob || faceJob.status !== 'running';
+    if (faceDone && !geoRunning) {
+      clearInterval(pollId);
+      btn.disabled = false;
+      updateStatus(faceText, geoText);
+      if (state.currentView === 'locations') loadGeoHierarchy();
+      if (state.currentView === 'people') loadPeopleList();
+    } else {
+      updateStatus(faceText, geoText);
+    }
+  }, 2000);
 }
 
 async function triggerRecluster() {

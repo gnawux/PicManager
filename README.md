@@ -31,6 +31,7 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 | Geographic hierarchy view (country → state → city drill-down) | ✓ |
 | Map view with GPS markers (Leaflet.js + markercluster) | ✓ |
 | Photo time/timezone editing (DB-only, no EXIF write-back) | ✓ |
+| Fill missing metadata button (face re-analysis + geo re-coding for uncovered photos) | ✓ |
 
 ## Requirements
 
@@ -154,10 +155,12 @@ Command-line flags (when added) take precedence over the config file, which take
 | GET | `/api/albums/:id/photos` | Paginated photos in an album |
 | POST | `/api/albums/merge` | Merge one album into another |
 | GET | `/api/photos/:id/faces` | Face regions detected in a photo |
-| POST | `/api/faces/analyze` | Trigger face re-analysis (all or given photo IDs) |
+| POST | `/api/faces/analyze` | Trigger face re-analysis (all, given photo IDs, or `missing_only`) |
 | GET | `/api/faces/jobs/:id` | Poll face job progress |
 | GET | `/api/faces/:id/thumb` | Cropped face thumbnail |
 | GET | `/api/geo/hierarchy` | Nested country → state → city hierarchy with photo counts |
+| POST | `/api/geo/regeocode` | Trigger background reverse-geocoding for photos with GPS but no cached location |
+| GET | `/api/geo/regeocode/status` | Poll whether the geocoding background task is still running |
 | GET | `/api/people` | List all people (clustered) |
 | GET | `/api/people/tree` | Nested person tree |
 | POST | `/api/people/cluster` | Trigger DBSCAN re-clustering |
