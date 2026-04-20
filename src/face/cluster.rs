@@ -114,8 +114,35 @@ pub async fn run_clustering(pool: &SqlitePool) -> Result<usize> {
     let count = clusters.len();
 
     for group in clusters {
+        // Pick the face with highest detection confidence as the cover.
+        let cover_face_id: i64 = {
+            let mut best_id = group[0];
+            let mut best_conf: f32 = sqlx::query_scalar(
+                "SELECT confidence FROM faces WHERE id = ?",
+            )
+            .bind(best_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0.0);
+            for &fid in &group[1..] {
+                let conf: f32 = sqlx::query_scalar(
+                    "SELECT confidence FROM faces WHERE id = ?",
+                )
+                .bind(fid)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0.0);
+                if conf > best_conf {
+                    best_conf = conf;
+                    best_id = fid;
+                }
+            }
+            best_id
+        };
+
         let person_id: i64 =
-            sqlx::query_scalar("INSERT INTO people DEFAULT VALUES RETURNING id")
+            sqlx::query_scalar("INSERT INTO people (cover_face_id) VALUES (?) RETURNING id")
+                .bind(cover_face_id)
                 .fetch_one(pool)
                 .await?;
         for face_id in group {

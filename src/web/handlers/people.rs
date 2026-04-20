@@ -127,7 +127,11 @@ pub async fn list_people(
 ) -> Result<Json<Vec<PersonRow>>, StatusCode> {
     let rows: Vec<(i64, Option<String>, Option<i64>, Option<i64>, i64, i64)> =
         sqlx::query_as(
-            "SELECT p.id, p.name, p.parent_id, p.cover_face_id,
+            "SELECT p.id, p.name, p.parent_id,
+                    COALESCE(p.cover_face_id,
+                        (SELECT pf2.face_id FROM person_faces pf2
+                         WHERE pf2.person_id = p.id
+                         ORDER BY pf2.face_id LIMIT 1)) AS cover_face_id,
                     COUNT(DISTINCT pf.face_id)       AS face_count,
                     COUNT(DISTINCT f.photo_id)       AS photo_count
              FROM people p
