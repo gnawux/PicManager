@@ -98,6 +98,7 @@ async fn import_one(
     let photo_id = result.last_insert_rowid();
     if let Ok(img) = image::open(&final_path) {
         crate::face::analyze_one(pool, photo_id, &img).await;
+        crate::animal::detect_and_save(pool, photo_id, &img).await;
     }
 
     Ok(true)

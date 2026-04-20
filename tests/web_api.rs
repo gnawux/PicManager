@@ -733,3 +733,57 @@ async fn get_thumb_serves_from_cache() {
         .unwrap();
     assert_eq!(body.as_ref(), fake_jpeg);
 }
+
+#[tokio::test]
+async fn animals_schema_exists_and_detect_and_save_is_noop_without_model() {
+    let (_app, pool, _tmp) = test_app_with_pool().await;
+
+    // Insert a photo to reference
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/cat.jpg', 'sha_cat', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Without model file, detect_and_save inserts nothing
+    let img = image::DynamicImage::new_rgb8(100, 100);
+    picmanager::animal::detect_and_save(&pool, photo_id, &img).await;
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM animals WHERE photo_id = ?")
+        .bind(photo_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0, "no animals should be saved when model is absent");
+}
+
+#[tokio::test]
+async fn animals_table_accepts_manual_insert() {
+    let (_app, pool, _tmp) = test_app_with_pool().await;
+
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/dog.jpg', 'sha_dog', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO animals (photo_id, species, confidence, x, y, width, height)
+         VALUES (?, 'dog', 0.92, 10, 20, 100, 150)",
+    )
+    .bind(photo_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let species: (String,) = sqlx::query_as("SELECT species FROM animals WHERE photo_id = ?")
+        .bind(photo_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(species.0, "dog");
+}

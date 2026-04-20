@@ -1,4 +1,5 @@
 pub mod album;
+pub mod animal;
 pub mod face;
 pub mod config;
 pub mod dedup;
