@@ -171,6 +171,18 @@ mod tests {
     }
 
     #[test]
+    fn extract_gps_from_heic_sample() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/samples/IMG_9886.HEIC");
+        let meta = extract_from_file(&path).unwrap();
+        let lat = meta.gps_lat.expect("IMG_9886.HEIC should have GPS latitude");
+        let lon = meta.gps_lon.expect("IMG_9886.HEIC should have GPS longitude");
+        // 39°50'26.05"N, 116°13'4.73"E (Beijing area)
+        assert!((lat - 39.8406).abs() < 0.001, "unexpected lat={lat}");
+        assert!((lon - 116.2180).abs() < 0.001, "unexpected lon={lon}");
+    }
+
+    #[test]
     fn unsupported_format_returns_error() {
         let tmp = tempfile::NamedTempFile::with_suffix(".bmp").unwrap();
         std::fs::write(tmp.path(), b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00").unwrap();

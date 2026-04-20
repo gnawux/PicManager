@@ -94,7 +94,7 @@ fn get_session() -> Option<&'static Mutex<Session>> {
 
 // ── inference ────────────────────────────────────────────────────────────────
 
-fn run_inference(
+pub(crate) fn run_inference(
     session: &mut Session,
     img: &DynamicImage,
 ) -> Result<Vec<FaceRegion>, Box<dyn std::error::Error>> {
@@ -287,6 +287,31 @@ mod tests {
         let faces = detect(&img);
         assert!(!faces.is_empty(), "expected at least one face");
         assert!(faces[0].confidence >= 0.5);
+        assert!(faces[0].width > 0 && faces[0].height > 0);
+    }
+
+    #[test]
+    #[ignore = "requires face_detector.onnx in config_dir/picmanager/models/"]
+    fn detect_faces_in_img9844() {
+        let model_path = dirs::config_dir()
+            .unwrap()
+            .join("picmanager")
+            .join("models")
+            .join("face_detector.onnx");
+        let mut session = ort::session::Session::builder()
+            .unwrap()
+            .with_execution_providers([ort::ep::coreml::CoreML::default().build()])
+            .unwrap()
+            .commit_from_file(&model_path)
+            .unwrap();
+        let img = image::open(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/samples/IMG_9844.JPG"),
+        )
+        .unwrap();
+        let faces = run_inference(&mut session, &img).unwrap();
+        assert!(!faces.is_empty(), "expected at least one face in IMG_9844.JPG");
+        assert!(faces[0].confidence >= 0.5, "confidence={}", faces[0].confidence);
         assert!(faces[0].width > 0 && faces[0].height > 0);
     }
 
