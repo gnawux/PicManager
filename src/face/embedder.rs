@@ -86,7 +86,9 @@ impl Embedder {
         let input = preprocess(img, region);
         let tensor = TensorRef::from_array_view(&input)
             .map_err(|e| AppError::ModelNotFound(e.to_string()))?;
-        let mut session = mtx.lock().unwrap();
+        let mut session = mtx
+            .lock()
+            .map_err(|_| AppError::ModelNotFound("embedder session mutex poisoned".into()))?;
         let outputs = session
             .run(ort::inputs!["data" => tensor])
             .map_err(|e| AppError::ModelNotFound(e.to_string()))?;

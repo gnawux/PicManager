@@ -34,7 +34,13 @@ pub fn detect(img: &DynamicImage) -> Vec<AnimalDetection> {
     let Some(mtx) = get_session() else {
         return vec![];
     };
-    let mut session = mtx.lock().unwrap();
+    let mut session = match mtx.lock() {
+        Ok(g) => g,
+        Err(_) => {
+            tracing::warn!("animal detection session mutex poisoned; skipping");
+            return vec![];
+        }
+    };
     run_inference(&mut session, img).unwrap_or_else(|e| {
         tracing::warn!("animal detection failed: {e}");
         vec![]
