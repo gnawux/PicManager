@@ -111,6 +111,18 @@ picmanager models fetch
 
 This downloads `face_detector.onnx` (~1 MB), `arcface_mobilenetv1.onnx` (~10 MB), and `yolov8n.onnx` (~6 MB) to `~/Library/Application Support/picmanager/models/`. After that, face detection and animal detection run automatically on every imported photo.
 
+**Embed models into the binary (optional)**
+
+To build a fully self-contained binary that does not require model files on disk at runtime:
+
+```bash
+picmanager models fetch                   # download to config dir (once)
+picmanager models bundle                  # copy to ./models/ in the project root
+cargo build --release                     # rebuild — models are now compiled in
+```
+
+After the rebuild, the binary works without any files under `~/Library/Application Support/picmanager/models/`. If the binary was built without embedded models, it falls back to the on-disk path automatically.
+
 To re-analyse the entire library (e.g. after downloading models for the first time):
 
 ```bash

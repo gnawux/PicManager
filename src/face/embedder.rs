@@ -13,6 +13,14 @@ pub struct Embedder {
 
 impl Embedder {
     pub fn load(model_path: &Path) -> crate::error::Result<Self> {
+        // Try bytes compiled into the binary first.
+        let filename = model_path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if let Some(bytes) = crate::get_embedded_model(filename) {
+            if let Ok(session) = Session::builder().and_then(|mut b| b.commit_from_memory(&bytes)) {
+                return Ok(Self { session: Mutex::new(session) });
+            }
+        }
+        // Fall back to disk.
         if !model_path.exists() {
             tracing::warn!(
                 "face embedding model not found at {}; embeddings will be skipped",

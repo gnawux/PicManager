@@ -10,7 +10,7 @@
 - 异步运行时：tokio
 - EXIF 解析：kamadak-exif 0.5
 - 图像处理：image 0.25 + image_hasher 3
-- 静态文件：rust-embed 8（前端编译进二进制）
+- 静态文件：rust-embed 8（前端 + 可选 ONNX 模型编译进二进制）
 - CLI：clap 4
 - ONNX 推理：ort 2.0.0-rc.12（load-dynamic + ndarray features）
 - 数值计算：ndarray 0.17
@@ -19,8 +19,8 @@
 
 ```
 src/
-  main.rs              CLI 入口（import [--copy] / dedup / serve / config）
-  lib.rs               库根
+  main.rs              CLI 入口（import [--copy] / dedup / serve / config / models fetch|bundle）
+  lib.rs               库根；EmbeddedModels（rust-embed，models/ 目录）；get_embedded_model(name)
   config.rs            Config 结构体（含 thumb_cache_dir）；配置文件 ~/Library/Application Support/picmanager/config.toml
   error.rs             AppError 枚举（NotFound / UnsupportedFormat / Metadata / Database / Io）
   importer/
@@ -307,7 +307,8 @@ picmanager dedup                            # 增量 dedup 扫描（只比较新
 picmanager dedup --full                     # 全量 dedup 重扫（多索引分桶）
 picmanager faces analyze                    # 全库人脸重分析
 picmanager faces analyze --photo-ids 1,2,3 # 指定照片重分析
-picmanager models fetch                     # 下载 ONNX 模型文件
+picmanager models fetch                     # 下载 ONNX 模型文件到配置目录
+picmanager models bundle                    # 复制模型到 ./models/，再 cargo build 可内置于二进制
 picmanager serve                            # 启动 Web（http://127.0.0.1:8080）
 picmanager config                           # 显示当前配置
 ```

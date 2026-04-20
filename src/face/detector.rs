@@ -46,6 +46,14 @@ fn model_path() -> std::path::PathBuf {
 fn get_session() -> Option<&'static Mutex<Session>> {
     SESSION
         .get_or_init(|| {
+            // Prefer bytes compiled into the binary (via `models bundle` + rebuild).
+            if let Some(bytes) = crate::get_embedded_model("face_detector.onnx") {
+                match Session::builder().and_then(|mut b| b.commit_from_memory(&bytes)) {
+                    Ok(s) => return Some(Mutex::new(s)),
+                    Err(e) => tracing::warn!("embedded face detection model failed: {e}"),
+                }
+            }
+            // Fall back to the on-disk model in the config directory.
             let path = model_path();
             if !path.exists() {
                 tracing::warn!(

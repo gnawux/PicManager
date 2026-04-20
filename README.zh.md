@@ -112,6 +112,18 @@ picmanager models fetch
 将 `face_detector.onnx`（约 1 MB）、`arcface_mobilenetv1.onnx`（约 10 MB）和 `yolov8n.onnx`（约 6 MB）下载到
 `~/Library/Application Support/picmanager/models/`。此后每次导入照片时自动检测人脸和动物。
 
+**将模型编译进二进制（可选）**
+
+如需构建无需运行时模型文件的自包含二进制：
+
+```bash
+picmanager models fetch                   # 下载到配置目录（一次性）
+picmanager models bundle                  # 复制到项目根目录的 models/ 子目录
+cargo build --release                     # 重新编译 — 模型已内置于二进制中
+```
+
+重新编译后，二进制无需 `~/Library/Application Support/picmanager/models/` 下的文件即可运行。如果编译时未内置模型，运行时会自动回退到磁盘路径。
+
 对全库照片重新分析（例如首次下载模型后）：
 
 ```bash

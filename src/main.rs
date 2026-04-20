@@ -64,6 +64,12 @@ enum FacesAction {
 enum ModelsAction {
     /// 下载模型文件到配置目录
     Fetch,
+    /// 将配置目录中的模型文件复制到项目 models/ 目录，以便编译进二进制
+    Bundle {
+        /// 项目根目录（含 models/ 子目录），默认为当前目录
+        #[arg(long, default_value = ".")]
+        project_dir: PathBuf,
+    },
 }
 
 #[tokio::main]
@@ -156,6 +162,9 @@ async fn main() -> anyhow::Result<()> {
         Command::Models { action } => match action {
             ModelsAction::Fetch => {
                 fetch_models(&config).await?;
+            }
+            ModelsAction::Bundle { project_dir } => {
+                bundle_models(&project_dir).await?;
             }
         },
         Command::FillMissing { faces, geo } => {
@@ -351,5 +360,34 @@ async fn fetch_models(config: &Config) -> anyhow::Result<()> {
         println!("  → {} ({} KB)", dest.display(), bytes.len() / 1024);
     }
     let _ = config; // library path not used here
+    Ok(())
+}
+
+async fn bundle_models(project_dir: &std::path::Path) -> anyhow::Result<()> {
+    let src = dirs::config_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("picmanager/models");
+    let dst = project_dir.join("models");
+    std::fs::create_dir_all(&dst)?;
+
+    let model_files = ["face_detector.onnx", "arcface_mobilenetv1.onnx", "yolov8n.onnx"];
+    let mut copied = 0usize;
+    for name in &model_files {
+        let src_file = src.join(name);
+        if src_file.exists() {
+            let dst_file = dst.join(name);
+            std::fs::copy(&src_file, &dst_file)?;
+            println!("复制 {name} → {}", dst_file.display());
+            copied += 1;
+        } else {
+            println!("跳过 {name}（未找到，请先运行 models fetch）");
+        }
+    }
+    if copied > 0 {
+        println!("\n已复制 {copied} 个模型文件到 {}。", dst.display());
+        println!("重新编译（cargo build --release）后，模型将内置于二进制文件中。");
+    } else {
+        println!("\n未复制任何文件。请先运行 `picmanager models fetch` 下载模型。");
+    }
     Ok(())
 }
