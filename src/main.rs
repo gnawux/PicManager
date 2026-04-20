@@ -334,7 +334,7 @@ async fn fetch_models(config: &Config) -> anyhow::Result<()> {
         ),
         (
             "arcface_mobilenetv1.onnx",
-            "https://github.com/deepinsight/insightface/releases/download/v0.7/w600k_mbf.onnx",
+            "https://github.com/yakhyo/face-reidentification/releases/download/v0.0.1/w600k_mbf.onnx",
         ),
     ];
 
