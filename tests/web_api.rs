@@ -380,6 +380,87 @@ async fn batch_update_photos_updates_all() {
 }
 
 #[tokio::test]
+async fn people_schema_tree_and_faces() {
+    let (_app, pool, _tmp) = test_app_with_pool().await;
+
+    // Insert a root person
+    let parent_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name) VALUES ('Alice') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Insert a child person
+    let child_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name, parent_id) VALUES ('Alice (child)', ?) RETURNING id",
+    )
+    .bind(parent_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Verify tree relationship
+    let got_parent: Option<i64> =
+        sqlx::query_scalar("SELECT parent_id FROM people WHERE id = ?")
+            .bind(child_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(got_parent, Some(parent_id));
+
+    // Root has no parent
+    let root_parent: Option<i64> =
+        sqlx::query_scalar("SELECT parent_id FROM people WHERE id = ?")
+            .bind(parent_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(root_parent, None);
+
+    // Insert a photo + face, then link to person
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/pf.jpg', 'sha_pf', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let face_id: i64 = sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence)
+         VALUES (?, 10, 10, 50, 50, 0.99) RETURNING id",
+    )
+    .bind(photo_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(parent_id)
+        .bind(face_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // Duplicate person_face insertion should fail (PRIMARY KEY)
+    let dup = sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(parent_id)
+        .bind(face_id)
+        .execute(&pool)
+        .await;
+    assert!(dup.is_err());
+
+    // Count faces for person
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM person_faces WHERE person_id = ?")
+            .bind(parent_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 1);
+}
+
+#[tokio::test]
 async fn timezone_offset_roundtrip() {
     let (_app, pool, _tmp) = test_app_with_pool().await;
 
