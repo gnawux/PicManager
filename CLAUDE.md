@@ -81,7 +81,7 @@ migrations/
 tests/
   web_api.rs           Web API 集成测试（tower::ServiceExt::oneshot）
   fixtures/            测试 fixture JPEG 文件（由 make_fixtures.py 生成）
-  samples/             真实照片样本（IMG_9886.HEIC iPhone / IMG_20250204_135549.jpg 华为）
+  samples/             真实照片样本（详见下方"测试样本照片"一节）
   make_fixtures.py     生成所有 fixture（Pillow + 原始 EXIF 二进制写入）
 docs/
   REQUIREMENTS.md      需求文档
@@ -138,7 +138,7 @@ docs/
 | 20a | DB: animals 表 + YOLOv8-nano 导入集成（src/animal/） |
 | 20b | 动物 API + 前端动物标签页 |
 
-当前测试数：**189 个**（`cargo nextest run` 全部通过，另有 5 个 `#[ignore]` 需模型文件）
+当前测试数：**195 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
@@ -293,9 +293,30 @@ session.run(ort::inputs!["input" => tensor])?
 ### face 模块测试模式
 
 - 纯函数测试（`iou`、`nms`、`preprocess`、`l2_normalize`、`encode/decode`）无需模型文件，始终在 CI 中运行
-- 需要 ONNX 模型的测试标记 `#[ignore = "requires ... in config_dir/picmanager/models/"]`
+- 需要 ONNX 模型的测试**直接**在测试函数内创建 `Session`（见下方模板），不依赖全局 OnceLock
 - `execute_job` 标为 `pub(crate)` 供测试同步调用，避免 `tokio::spawn` 导致的竞争条件
 - session loader 中 `if cfg!(test) { return None; }` 的作用：纯单元测试不需要推理，跳过加载避免无谓开销，**不是**对运行时配置问题的掩盖
+- 需要 DB 持久化的测试：调用 `pub(crate)` 的底层函数（如 `run_inference`、`embed_with_session`、`save_faces`），不经过全局 OnceLock
+
+**模型测试模板：**
+
+```rust
+// detector 测试
+fn detector_session() -> Session {
+    let path = dirs::config_dir().unwrap().join("picmanager/models/face_detector.onnx");
+    Session::builder().unwrap()
+        .with_execution_providers([ort::ep::coreml::CoreML::default().build()]).unwrap()
+        .commit_from_file(&path).unwrap()
+}
+
+#[test]
+fn my_model_test() {
+    let mut session = detector_session();
+    let img = image::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/samples/IMG_9844.JPG")).unwrap();
+    let faces = run_inference(&mut session, &img).unwrap();
+    assert!(!faces.is_empty());
+}
+```
 
 ### ort 推理性能问题诊断
 
@@ -333,6 +354,43 @@ ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "nd
 - 动物类索引 14–23（0-based COCO）：bird/cat/dog/horse/sheep/cow/elephant/bear/zebra/giraffe
 - 与 face detector 不同，YOLOv8 输入归一化为 `[0,1]` RGB，face detector 是 `(pixel-127)/128` BGR
 - 模型路径：`{config_dir}/picmanager/models/yolov8n.onnx`（约 6 MB）
+
+### NMS 结果收集不能用 Vec::remove
+
+`Vec::remove(i)` 会把后续元素前移，对 NMS 返回的原始索引集合逐一调用会导致越界 panic（移除第一个元素后，后续原始索引全部偏移）。
+
+```rust
+// ✗ 错误：remove(0) 后 candidates 长度缩减，remove(1) 可能越界
+let kept = nms(&candidates, 0.45);
+let result: Vec<_> = kept.into_iter().map(|i| candidates.remove(i).0).collect();
+
+// ✓ 正确：直接索引 + clone，不修改 vec
+let result: Vec<_> = kept.into_iter().map(|i| candidates[i].0.clone()).collect();
+```
+
+### ONNX 模型输入输出节点名必须验证
+
+不同来源的 ONNX 模型节点名可能与常见示例不同，**不能假设**。已知：
+
+| 模型 | 输入名 | 输出 |
+|------|--------|------|
+| ultraface-slim-320（face_detector.onnx） | `"input"` | `"scores"` `"boxes"` |
+| w600k_mbf（arcface_mobilenetv1.onnx） | `"input.1"` | `outputs[0usize]` |
+| yolov8n | `"images"` | `outputs[0usize]` |
+
+验证方法：`python3 -c "import onnx; m=onnx.load('model.onnx'); print([i.name for i in m.graph.input])"`，或在二进制中搜索字符串（见 ONNX protobuf 格式）。
+
+### 测试样本照片（tests/samples/）
+
+**选用原则：根据内容选正确的文件，不要混用。**
+
+| 文件 | 相机 | 内容 | 有人脸 | GPS | 用途 |
+|------|------|------|--------|-----|------|
+| `IMG_20250204_135549.jpg` | 华为 ABR-AL60 | 场景照片（无人物）| ✗ | ✗ | EXIF 日期解析；ONNX 推理 smoke test（只验证不 panic）|
+| `IMG_9886.HEIC` | iPhone（HEIC 格式）| 含 GPS 信息的照片 | ✗ | ✓ 39.8406°N 116.2180°E（北京）| GPS 提取测试；HEIC 格式解析 |
+| `IMG_9844.JPG` | 尼康 Z 8 | 人像照片 | ✓ | ✗ | 人脸检测/嵌入测试；需要断言检测到人脸时必须用此文件 |
+
+**注意**：`IMG_20250204_135549.jpg` 没有可检测的人脸，不能用于 `assert!(!faces.is_empty())` 类测试。
 
 ## 常用命令
 
