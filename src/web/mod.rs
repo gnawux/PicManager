@@ -11,6 +11,7 @@ use crate::config::Config;
 use embed::static_handler;
 use handlers::{
     albums::{list_albums, list_album_photos, merge_albums},
+    animals::{list_species, list_species_photos, list_photo_animals},
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
     geo::get_geo_hierarchy,
@@ -55,6 +56,9 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/people/{id}", get(get_person_photos))
         .route("/api/people/{id}/reparent", post(reparent_person))
         .route("/api/faces/{id}/thumb", get(get_face_thumb))
+        .route("/api/animals/species", get(list_species))
+        .route("/api/animals/{species}/photos", get(list_species_photos))
+        .route("/api/photos/{id}/animals", get(list_photo_animals))
         .route("/api/faces/analyze", post(start_analyze))
         .route("/api/faces/jobs/{id}", get(get_job_status))
         .route("/api/photos/{id}/faces", get(list_photo_faces))

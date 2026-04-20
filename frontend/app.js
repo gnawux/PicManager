@@ -11,10 +11,15 @@ const state = {
   selectMode: false,
   selected: new Set(), // selected photo IDs
   currentDetail: null, // full detail object of the open photo
-  currentView: 'photos', // 'photos' | 'people'
+  currentView: 'photos', // 'photos' | 'people' | 'locations' | 'animals'
   currentPersonId: null, // person being viewed in detail
   allPeople: [],    // cached people list for merge dialog
   mergeTargetId: null,
+  // Animals
+  animalSpecies: null,  // current species being browsed
+  animalPage: 1,
+  animalTotal: 0,
+  animalPhotos: [],
 };
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -73,6 +78,11 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('batch-time-modal').classList.add('hidden');
   });
   document.getElementById('batch-time-save-btn').addEventListener('click', saveBatchTime);
+
+  // Animals view
+  document.getElementById('animal-back-btn').addEventListener('click', showAnimalSpeciesList);
+  document.getElementById('animal-prev-btn').addEventListener('click', () => changeAnimalPage(-1));
+  document.getElementById('animal-next-btn').addEventListener('click', () => changeAnimalPage(1));
 
   document.getElementById('detail-close').addEventListener('click', closeDetail);
   document.getElementById('detail-prev').addEventListener('click', () => navigateDetail(-1));
@@ -204,6 +214,10 @@ async function openDetail(idx) {
   const faces = await fetchJSON(`/api/photos/${photo.id}/faces`);
   if (faces) renderFaceOverlay(faces);
 
+  // Fetch and draw animal boxes
+  const animals = await fetchJSON(`/api/photos/${photo.id}/animals`);
+  if (animals) renderAnimalOverlay(animals);
+
   updateDetailNav();
 }
 
@@ -292,6 +306,7 @@ function renderFaceOverlay(faces) {
 function closeDetail() {
   document.getElementById('detail-modal').classList.add('hidden');
   document.getElementById('detail-faces').innerHTML = '';
+  document.getElementById('detail-animals').innerHTML = '';
   state.detailIdx = -1;
 }
 
@@ -460,6 +475,7 @@ function switchView(view) {
 
   if (view === 'people') loadPeopleList();
   if (view === 'locations') loadGeoHierarchy();
+  if (view === 'animals') loadAnimalSpecies();
 }
 
 // ── Geo view ──────────────────────────────────────────────────────────────────
@@ -788,6 +804,119 @@ async function confirmMerge() {
   });
   document.getElementById('merge-modal').classList.add('hidden');
   showPersonDetail(state.mergeTargetId);
+}
+
+// ── Animals ───────────────────────────────────────────────────────────────────
+const SPECIES_EMOJI = {
+  bird: '🐦', cat: '🐱', dog: '🐶', horse: '🐴', sheep: '🐑',
+  cow: '🐄', elephant: '🐘', bear: '🐻', zebra: '🦓', giraffe: '🦒',
+};
+
+async function loadAnimalSpecies() {
+  const data = await fetchJSON('/api/animals/species');
+  if (!data) return;
+  const grid = document.getElementById('animal-species-grid');
+  const count = document.getElementById('animal-count');
+  count.textContent = `共 ${data.length} 种动物`;
+  grid.innerHTML = '';
+  for (const s of data) {
+    const card = document.createElement('div');
+    card.className = 'species-card';
+    const emoji = SPECIES_EMOJI[s.species] || '🐾';
+    card.innerHTML = `
+      <span class="species-emoji">${emoji}</span>
+      <div class="species-name">${s.chinese}</div>
+      <div class="species-count">${s.photo_count} 张</div>`;
+    card.addEventListener('click', () => showAnimalSpeciesPhotos(s.species, s.chinese));
+    grid.appendChild(card);
+  }
+  showAnimalSpeciesList();
+}
+
+function showAnimalSpeciesList() {
+  document.getElementById('animal-species-section').classList.remove('hidden');
+  document.getElementById('animal-photos-section').classList.add('hidden');
+  state.animalSpecies = null;
+}
+
+async function showAnimalSpeciesPhotos(species, chinese) {
+  state.animalSpecies = species;
+  state.animalPage = 1;
+  document.getElementById('animal-species-title').textContent = `${SPECIES_EMOJI[species] || '🐾'} ${chinese}`;
+  document.getElementById('animal-species-section').classList.add('hidden');
+  document.getElementById('animal-photos-section').classList.remove('hidden');
+  await loadAnimalPhotos();
+}
+
+async function loadAnimalPhotos() {
+  const data = await fetchJSON(
+    `/api/animals/${state.animalSpecies}/photos?page=${state.animalPage}&per_page=${state.perPage}`
+  );
+  if (!data) return;
+  state.animalTotal = data.total;
+  state.animalPhotos = data.photos;
+
+  // Render into animal-photos-grid using the same card style
+  const grid = document.getElementById('animal-photos-grid');
+  grid.innerHTML = '';
+  data.photos.forEach((p, idx) => {
+    const card = document.createElement('div');
+    card.className = 'photo-card';
+    const label = p.taken_at ? p.taken_at.slice(0, 10) : p.path.split('/').pop();
+    card.innerHTML = `
+      <img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
+      <div class="meta">${label}</div>`;
+    card.addEventListener('click', () => openAnimalPhotoDetail(idx));
+    grid.appendChild(card);
+  });
+
+  // Pagination
+  const totalPages = Math.max(1, Math.ceil(data.total / state.perPage));
+  document.getElementById('animal-page-info').textContent =
+    `${state.animalPage} / ${totalPages}`;
+  document.getElementById('animal-prev-btn').disabled = state.animalPage <= 1;
+  document.getElementById('animal-next-btn').disabled = state.animalPage >= totalPages;
+}
+
+function changeAnimalPage(delta) {
+  state.animalPage = Math.max(1, state.animalPage + delta);
+  loadAnimalPhotos();
+}
+
+async function openAnimalPhotoDetail(idx) {
+  // Temporarily swap state.photos so the detail navigator works within this species view
+  const saved = state.photos;
+  state.photos = state.animalPhotos;
+  await openDetail(idx);
+  state.photos = saved;
+}
+
+function renderAnimalOverlay(animals) {
+  const svg = document.getElementById('detail-animals');
+  svg.innerHTML = '';
+  if (!animals.length) return;
+
+  const img = document.getElementById('detail-img');
+  const w = img.naturalWidth || img.width || 1;
+  const h = img.naturalHeight || img.height || 1;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+  for (const a of animals) {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', a.x);
+    rect.setAttribute('y', a.y);
+    rect.setAttribute('width', a.width);
+    rect.setAttribute('height', a.height);
+    rect.setAttribute('class', 'animal-box');
+    svg.appendChild(rect);
+
+    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', a.x + 2);
+    text.setAttribute('y', a.y > 14 ? a.y - 3 : a.y + a.height + 12);
+    text.setAttribute('class', 'animal-label');
+    text.textContent = `${SPECIES_EMOJI[a.species] || '🐾'} ${a.species}`;
+    svg.appendChild(text);
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

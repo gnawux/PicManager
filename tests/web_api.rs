@@ -787,3 +787,133 @@ async fn animals_table_accepts_manual_insert() {
         .unwrap();
     assert_eq!(species.0, "dog");
 }
+
+#[tokio::test]
+async fn get_animals_species_empty() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/animals/species")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn get_animals_species_groups_by_species() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Insert two photos with animals
+    let p1: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/a.jpg', 'sha_a', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    let p2: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/b.jpg', 'sha_b', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO animals (photo_id, species, confidence, x, y, width, height)
+         VALUES (?, 'cat', 0.9, 0, 0, 100, 100), (?, 'cat', 0.8, 0, 0, 100, 100), (?, 'dog', 0.7, 0, 0, 100, 100)",
+    )
+    .bind(p1).bind(p2).bind(p1)
+    .execute(&pool).await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/animals/species")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 2);
+    // cat has 2 distinct photos, dog has 1 — cat should be first
+    assert_eq!(arr[0]["species"], "cat");
+    assert_eq!(arr[0]["photo_count"], 2);
+    assert_eq!(arr[0]["chinese"], "猫");
+    assert_eq!(arr[1]["species"], "dog");
+    assert_eq!(arr[1]["photo_count"], 1);
+}
+
+#[tokio::test]
+async fn get_animals_species_photos_paginates() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let p1: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/c.jpg', 'sha_c', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO animals (photo_id, species, confidence, x, y, width, height)
+         VALUES (?, 'bird', 0.95, 0, 0, 50, 50)",
+    )
+    .bind(p1).execute(&pool).await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/animals/bird/photos")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["photos"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn get_photo_animals_returns_detections() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let p1: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/d.jpg', 'sha_d', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO animals (photo_id, species, confidence, x, y, width, height)
+         VALUES (?, 'horse', 0.88, 10, 20, 200, 300)",
+    )
+    .bind(p1).execute(&pool).await.unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{p1}/animals"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["species"], "horse");
+    assert_eq!(arr[0]["x"], 10);
+    assert_eq!(arr[0]["y"], 20);
+    assert_eq!(arr[0]["width"], 200);
+    assert_eq!(arr[0]["height"], 300);
+}
