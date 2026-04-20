@@ -109,7 +109,7 @@ fn run_inference(
     let (_sb, boxes_flat) = outputs["boxes"].try_extract_tensor::<f32>()?;
     let n = 4420usize;
 
-    let mut candidates: Vec<(FaceRegion, f32)> = (0..n)
+    let candidates: Vec<(FaceRegion, f32)> = (0..n)
         .filter_map(|i| {
             let conf = scores_flat[i * 2 + 1];
             if conf < 0.5 {
@@ -127,7 +127,7 @@ fn run_inference(
         .collect();
 
     let kept = nms(&candidates, 0.45);
-    let mut result: Vec<FaceRegion> = kept.into_iter().map(|i| candidates.remove(i).0).collect();
+    let mut result: Vec<FaceRegion> = kept.into_iter().map(|i| candidates[i].0.clone()).collect();
     result.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
     Ok(result)
 }
