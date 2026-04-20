@@ -232,6 +232,41 @@ async fn get_thumb_generates_and_caches() {
 }
 
 #[tokio::test]
+async fn timezone_offset_roundtrip() {
+    let (_app, pool, _tmp) = test_app_with_pool().await;
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, timezone_offset)
+         VALUES ('/tmp/tz.jpg', 'shatz', 'jpeg', 'imported', 480) RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let tz: Option<i64> = sqlx::query_scalar("SELECT timezone_offset FROM photos WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tz, Some(480));
+
+    // NULL timezone_offset also works
+    let id2: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/notz.jpg', 'shanotz', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let tz2: Option<i64> = sqlx::query_scalar("SELECT timezone_offset FROM photos WHERE id = ?")
+        .bind(id2)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tz2, None);
+}
+
+#[tokio::test]
 async fn get_thumb_serves_from_cache() {
     let (app, pool, tmp) = test_app_with_pool().await;
 
