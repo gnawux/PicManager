@@ -24,7 +24,11 @@ fn get_session() -> Option<&'static Mutex<Session>> {
         .get_or_init(|| {
             // Prefer bytes compiled into the binary (via `models bundle` + rebuild).
             if let Some(bytes) = crate::get_embedded_model("arcface_mobilenetv1.onnx") {
-                match Session::builder().and_then(|mut b| b.commit_from_memory(&bytes)) {
+                match (|| -> ort::Result<Session> {
+                    Session::builder()?
+                        .with_execution_providers([ort::ep::coreml::CoreML::default().build()])?
+                        .commit_from_memory(&bytes)
+                })() {
                     Ok(s) => return Some(Mutex::new(s)),
                     Err(e) => tracing::warn!("embedded embedder model failed: {e}"),
                 }
@@ -42,7 +46,11 @@ fn get_session() -> Option<&'static Mutex<Session>> {
                 );
                 return None;
             }
-            match Session::builder().and_then(|mut b| b.commit_from_file(&path)) {
+            match (|| -> ort::Result<Session> {
+                Session::builder()?
+                    .with_execution_providers([ort::ep::coreml::CoreML::default().build()])?
+                    .commit_from_file(&path)
+            })() {
                 Ok(s) => Some(Mutex::new(s)),
                 Err(e) => {
                     tracing::warn!("failed to load face embedding model: {e}");

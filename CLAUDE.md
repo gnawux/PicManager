@@ -12,7 +12,7 @@
 - 图像处理：image 0.25 + image_hasher 3
 - 静态文件：rust-embed 8（前端 + 可选 ONNX 模型编译进二进制）
 - CLI：clap 4
-- ONNX 推理：ort 2.0.0-rc.12（load-dynamic + ndarray features）
+- ONNX 推理：ort 2.0.0-rc.12（download-binaries + coreml + ndarray features；macOS 上自动使用 CoreML / ANE）
 - 数值计算：ndarray 0.17
 
 ## 实际项目结构
@@ -184,6 +184,24 @@ EXIF 四字段（DateTimeOriginal→DateTimeDigitized→GPS→DateTime）
 
 Step 14 全程使用 `ort = "=2.0.0-rc.12"`，以下细节与文档和 AI 训练数据常见说法不一致：
 
+**0. Cargo features 配置（M4 Mac 优化）**
+
+```toml
+ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "ndarray"] }
+```
+
+- `download-binaries`：编译时自动从 parcel.pyke.io 下载 ort 预编译二进制（macOS arm64 版本已内置 CoreML 支持）
+- `coreml`：启用 CoreML EP 代码路径，推理自动路由至 M4 的 Neural Engine（ANE）
+- 不需要手动设置 `ORT_DYLIB_PATH`，也不需要 `brew install onnxruntime`
+
+Session builder 注册 CoreML EP（三个模型加载器均使用此模式）：
+
+```rust
+Session::builder()?
+    .with_execution_providers([ort::ep::coreml::CoreML::default().build()])?
+    .commit_from_memory(&bytes)
+```
+
 **1. Session 的 import 路径**
 
 ```rust
@@ -277,6 +295,29 @@ session.run(ort::inputs!["input" => tensor])?
 - 纯函数测试（`iou`、`nms`、`preprocess`、`l2_normalize`、`encode/decode`）无需模型文件，始终在 CI 中运行
 - 需要 ONNX 模型的测试标记 `#[ignore = "requires ... in config_dir/picmanager/models/"]`
 - `execute_job` 标为 `pub(crate)` 供测试同步调用，避免 `tokio::spawn` 导致的竞争条件
+- session loader 中 `if cfg!(test) { return None; }` 的作用：纯单元测试不需要推理，跳过加载避免无谓开销，**不是**对运行时配置问题的掩盖
+
+### ort 推理性能问题诊断
+
+当 ort 推理异常缓慢或卡死时，优先排查 features 配置，而非在代码里绕过：
+
+**症状 → 根因 → 正确修法**
+
+| 症状 | 根因 | 修法 |
+|------|------|------|
+| `Session::builder()` 或 `commit_from_file` 卡住 / 极慢 | `load-dynamic` 找到不兼容的系统 dylib（如 Python venv 中的 1.x API） | 换 `download-binaries`，消除运行时 dylib 查找 |
+| 推理成功但 CPU 使用率 100%、速度极慢 | 未注册 CoreML EP，全部走 CPU 路径 | 加 `coreml` feature，builder 注册 `ep::coreml::CoreML` |
+| 测试挂起 | ort 初始化触发 dylib 查找，在 tokio async 线程中阻塞 | 推理移到 `spawn_blocking`；单元测试用 `cfg!(test)` 跳过加载 |
+
+**正确的 macOS M4 配置（当前项目使用）：**
+```toml
+ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "ndarray"] }
+```
+首次 `cargo build` 时自动下载含 CoreML 的预编译二进制（~60 MB，之后从 Cargo 缓存读取）。
+
+**验证 crate API 的可靠方式：**
+直接读 tagged release 的源码，不依赖 LLM 训练数据或未固定版本的文档。
+例如 ort RC.12 CoreML EP 的实现：`https://github.com/pykeio/ort/blob/v2.0.0-rc.12/src/ep/coreml.rs`
 
 ### DBSCAN 聚类关键细节
 
