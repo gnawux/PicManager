@@ -32,6 +32,7 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 | Map view with GPS markers (Leaflet.js + markercluster) | ✓ |
 | Photo time/timezone editing (DB-only, no EXIF write-back) | ✓ |
 | Fill missing metadata button (face re-analysis + geo re-coding for uncovered photos) | ✓ |
+| CLI `fill-missing` command with per-minute progress and final summary | ✓ |
 
 ## Requirements
 
@@ -124,6 +125,31 @@ picmanager faces analyze --photo-ids 1,2,3
 
 Face data is stored locally in the SQLite database; no cloud service is used.
 
+### Fill missing metadata
+
+After downloading models, run one command to backfill both face analysis and reverse-geocoding for any photos that were imported before the models were available:
+
+```bash
+picmanager fill-missing            # fill both faces and geo
+picmanager fill-missing --faces    # only photos never analysed for faces
+picmanager fill-missing --geo      # only photos with GPS but no cached location
+```
+
+Progress is printed every minute; a summary is shown at the end:
+
+```
+开始补全缺失元数据…
+  待补充人脸分析：75 张
+  待补充地理编码：23 张
+
+[00:01:00] 人脸：12/75 (16%) ｜ 地理：3/23 (13%)
+[00:03:45] 人脸：75/75 (100%) ｜ 地理：20/23 (87%)
+
+补全完成（耗时 3 分 45 秒）：
+  人脸：分析了 75 张照片，库中共 203 个人脸记录
+  地理：编码了 20 个新位置，3 张无城市信息（已跳过），共 23 张待处理
+```
+
 ## Configuration
 
 Create `~/Library/Application Support/picmanager/config.toml` to override any default:
@@ -208,7 +234,7 @@ Original photo files are **never modified**. The database stores only metadata a
 ## Development
 
 ```bash
-cargo nextest run            # run all 182 tests (5 more need ONNX model files, marked #[ignore])
+cargo nextest run            # run all 189 tests (5 more need ONNX model files, marked #[ignore])
 cargo clippy -- -D warnings  # lint
 cargo watch -x build         # rebuild on file changes
 ```

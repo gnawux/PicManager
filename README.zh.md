@@ -32,6 +32,7 @@ English documentation: [README.md](README.md)
 | 地图打点视图（Leaflet.js + markercluster） | ✓ |
 | 照片时间/时区编辑（仅写数据库，不回写 EXIF） | ✓ |
 | 元数据补全按钮（为无人脸记录的照片补人脸分析，为有 GPS 但无地理编码的照片补地理信息） | ✓ |
+| CLI `fill-missing` 命令：每分钟打印进度，结束后输出汇总 | ✓ |
 
 ## 环境要求
 
@@ -125,6 +126,18 @@ picmanager faces analyze --photo-ids 1,2,3
 
 人脸数据仅存储在本地 SQLite 数据库，不调用任何云服务。
 
+### 补全缺失元数据
+
+下载模型后，用一条命令为全库照片一次性补充人脸分析和地理编码：
+
+```bash
+picmanager fill-missing            # 同时补充人脸和地理
+picmanager fill-missing --faces    # 仅补充未分析人脸的照片
+picmanager fill-missing --geo      # 仅对有 GPS 但缺地理编码的照片触发反地理编码
+```
+
+每分钟打印一次当前进度，全部完成后输出汇总信息。
+
 ## 配置
 
 创建 `~/Library/Application Support/picmanager/config.toml` 来覆盖默认值：
@@ -209,7 +222,7 @@ curl -X POST http://localhost:8080/api/albums/merge \
 ## 开发
 
 ```bash
-cargo nextest run            # 运行全部 182 个测试（另有 5 个 #[ignore] 需要 ONNX 模型文件）
+cargo nextest run            # 运行全部 189 个测试（另有 5 个 #[ignore] 需要 ONNX 模型文件）
 cargo clippy -- -D warnings  # 代码检查
 cargo watch -x build         # 文件变更时自动重新编译
 ```

@@ -572,6 +572,8 @@ pub async fn group_by_camera(pool: &SqlitePool) -> Result<()>
 
 ```rust
 pub async fn group_by_location(pool: &SqlitePool) -> Result<()>
+pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64>
+// Returns count of imported GPS photos with no geocache entry.
 ```
 
 **流程**：
@@ -631,6 +633,8 @@ pub fn decode_embedding(bytes: &[u8]) -> Vec<f32>
 
 // job.rs
 pub async fn run_job(pool: &SqlitePool, scope: Option<Vec<i64>>) -> Result<i64>
+pub async fn scope_for_missing(pool: &SqlitePool) -> Result<Vec<i64>>
+// Returns IDs of imported photos that have no entry in the faces table.
 pub(crate) async fn execute_job(pool: &SqlitePool, job_id: i64, scope: Option<Vec<i64>>) -> Result<()>
 ```
 
@@ -1055,7 +1059,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 ## 测试策略
 
-### 单元/集成测试（`cargo nextest run`，共 182 个，另有 5 个 `#[ignore]`）
+### 单元/集成测试（`cargo nextest run`，共 189 个，另有 5 个 `#[ignore]`）
 
 | 模块 | 测试数 | 测试方式 |
 |------|--------|----------|
@@ -1080,7 +1084,8 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | `face::embedder` | 6 | 纯函数（l2_normalize/encode_decode/preprocess）；1 个 `#[ignore]` 需模型 |
 | `face::cluster` | 5 | 纯函数（DBSCAN，无需模型）：明显分离/边界/空输入等场景 |
 | `face` | 1 | 内存 SQLite；1 个 `#[ignore]` 需模型 |
-| `face::job` | 3 | 内存 SQLite，直接调用 `execute_job`（同步，避免 spawn 竞争） |
+| `face::job` | 6 | 内存 SQLite：3 个原有任务测试 + 3 个 `scope_for_missing` 测试 |
+| `album::location` | 10 | 内存 SQLite：6 个原有地点相册测试 + 4 个 `count_missing_geo` 测试 |
 | `animal::detector` | 5 | 纯函数（NMS/preprocess）；1 个 `#[ignore]` 需模型 |
 | `web_api`（集成） | 25 | `tower::ServiceExt::oneshot`，内存 SQLite（含 people/geo/animals 新端点） |
 

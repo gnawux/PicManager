@@ -1,6 +1,6 @@
 # 开发计划
 
-> **状态**：Steps 1–20b 全部已完成（2026-04）。
+> **状态**：Steps 1–21 全部已完成（2026-04）。
 
 目标：以最小可运行增量推进，每步结束后都能编译并有可验证的输出。
 
@@ -908,3 +908,84 @@ GET /api/photos/:id/animals
 - 种类卡片网格：动物图标（emoji 或 SVG）+ 中文种名 + 照片数
 - 点击进入该种类的照片网格（复用已有网格组件）
 - 在照片详情模态框中，有动物检测结果时展示 bounding box overlay（与人脸标注并列）
+
+---
+
+## Step 21 — CLI 元数据补全命令（fill-missing）
+
+**目标**：提供命令行一键补全全库缺失的人脸和地理元数据，支持每分钟进度打印与完成汇总，方便脚本化或首次模型下载后使用。
+
+### 设计
+
+```
+picmanager fill-missing [--faces] [--geo]
+```
+
+- 不带标志时同时补充人脸和地理
+- `--faces`：仅补充从未分析人脸的照片（`faces` 表无记录）
+- `--geo`：仅对有 GPS 坐标但 `geocache` 表无对应条目的照片触发 Nominatim 反地理编码
+
+### 实现步骤（TDD）
+
+**1. 新增库函数（先写测试，再实现）**
+
+在 `src/face/job.rs` 新增：
+
+```rust
+/// 返回所有已导入但从未进行人脸分析的照片 ID。
+pub async fn scope_for_missing(pool: &SqlitePool) -> Result<Vec<i64>>
+```
+
+**测试用例**：
+- 3 张照片，仅 1 张有 faces 记录 → 返回另外 2 张 ID
+- 已删除照片（`import_status='deleted'`）不在结果中
+
+在 `src/album/location.rs` 新增：
+
+```rust
+/// 返回有 GPS 但 geocache 中无对应条目的已导入照片数量。
+pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64>
+```
+
+**测试用例**：
+- 无 GPS 照片 → 返回 0
+- 3 张 GPS 照片，1 张已缓存 → 返回 2
+- 所有 GPS 照片已缓存 → 返回 0
+
+**2. CLI 命令（`src/main.rs`）**
+
+新增 `Command::FillMissing { faces: bool, geo: bool }`：
+
+```
+// Phase 1 — 统计待处理数量，打印提示
+// Phase 2 — 启动任务
+//   人脸：用 scope_for_missing 查到 ID，调用 face::job::run_job(Some(ids))
+//   地理：tokio::spawn(album::group_by_location(pool))
+// Phase 3 — 轮询循环（每 5s 检查，每 60s 或完成时打印进度）
+//   人脸进度：查 face_jobs.processed / total
+//   地理进度：count_missing_geo() 变化量
+// Phase 4 — 完成汇总
+//   人脸：分析张数、新增人脸数
+//   地理：编码成功数、失败数（无城市信息）
+```
+
+**进度输出格式**：
+```
+开始补全缺失元数据…
+  待补充人脸分析：75 张
+  待补充地理编码：23 张
+
+[00:01:00] 人脸：12/75 (16%) ｜ 地理：3/23 (13%)
+[00:02:00] 人脸：36/75 (48%) ｜ 地理：15/23 (65%)
+[00:03:45] 人脸：75/75 (100%) ｜ 地理：20/23 (87%)
+
+补全完成（耗时 3 分 45 秒）：
+  人脸：分析了 75 张照片，新增 203 个人脸记录
+  地理：编码了 20 个新位置，3 张无城市信息（已跳过）
+```
+
+### 验收
+
+- `cargo nextest run` 全部通过（含新增的 `scope_for_missing` 和 `count_missing_geo` 测试）
+- `picmanager fill-missing` 在空库上立即输出"无需补全，退出"
+- 在含未分析照片的库上运行，每分钟打印进度，结束时有汇总

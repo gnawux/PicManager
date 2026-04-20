@@ -94,6 +94,17 @@ pub(crate) async fn execute_job(
     Ok(())
 }
 
+/// Returns the IDs of all imported photos that have no entry in the `faces` table.
+pub async fn scope_for_missing(pool: &SqlitePool) -> Result<Vec<i64>> {
+    let ids = sqlx::query_scalar(
+        "SELECT id FROM photos WHERE import_status = 'imported' \
+         AND NOT EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id)",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -118,6 +129,64 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap()
+    }
+
+    async fn insert_photo(pool: &SqlitePool, id: i64, status: &str) {
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status) \
+             VALUES (?, ?, ?, 'jpeg', ?)",
+        )
+        .bind(id)
+        .bind(format!("p{id}"))
+        .bind(format!("sha{id}"))
+        .bind(status)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn scope_for_missing_excludes_analyzed_photos() {
+        let pool = test_pool().await;
+        insert_photo(&pool, 1, "imported").await;
+        insert_photo(&pool, 2, "imported").await;
+        insert_photo(&pool, 3, "imported").await;
+        // photo 1 has a face entry
+        sqlx::query(
+            "INSERT INTO faces (photo_id, x, y, width, height) VALUES (1, 0, 0, 10, 10)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut missing = scope_for_missing(&pool).await.unwrap();
+        missing.sort();
+        assert_eq!(missing, vec![2, 3]);
+    }
+
+    #[tokio::test]
+    async fn scope_for_missing_ignores_deleted_photos() {
+        let pool = test_pool().await;
+        insert_photo(&pool, 1, "imported").await;
+        insert_photo(&pool, 2, "deleted").await;
+
+        let missing = scope_for_missing(&pool).await.unwrap();
+        assert_eq!(missing, vec![1], "deleted photos must not appear");
+    }
+
+    #[tokio::test]
+    async fn scope_for_missing_empty_when_all_analyzed() {
+        let pool = test_pool().await;
+        insert_photo(&pool, 1, "imported").await;
+        sqlx::query(
+            "INSERT INTO faces (photo_id, x, y, width, height) VALUES (1, 0, 0, 10, 10)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let missing = scope_for_missing(&pool).await.unwrap();
+        assert!(missing.is_empty());
     }
 
     #[tokio::test]

@@ -161,7 +161,7 @@ picmanager/
 
 **自动分组维度：**
 - 时间（`kind='time'`）：按 `taken_at` 年月，形如 `2024-06`
-- 地点（`kind='location'`）：调用 OSM Nominatim 反地理编码将 GPS 坐标解析为城市名；结果缓存到 `geocache` 表，限速 1 req/s；无 GPS 的照片跳过
+- 地点（`kind='location'`）：调用 OSM Nominatim 反地理编码将 GPS 坐标解析为城市名；结果缓存到 `geocache` 表，限速 1 req/s；无 GPS 的照片跳过；`count_missing_geo(pool)` 返回有 GPS 但尚无缓存的照片数，供 CLI `fill-missing` 使用
 - 相机（`kind='camera'`）：按 EXIF Make+Model；无相机信息的照片跳过
 
 一张照片可同时属于多个相册（时间相册 + 地点相册 + 相机相册），通过 `photo_albums` 多对多表关联。
@@ -187,6 +187,7 @@ picmanager/
 
 **批量作业（`job.rs`）**：
 - `run_job(pool, scope)` 在 `tokio::spawn` 中异步执行，立即返回 `job_id`
+- `scope_for_missing(pool)` 返回所有尚无 faces 记录的已导入照片 ID，供 CLI `fill-missing` 使用
 - 每张照片先 DELETE 旧 faces 行再重新检测+嵌入，保证不累积
 
 **人物聚类（`cluster.rs`）**：
@@ -373,6 +374,9 @@ picmanager dedup                            # 命令行增量去重扫描
 picmanager dedup --full                     # 全量重扫（多索引分桶）
 picmanager faces analyze                    # 全库人脸重分析
 picmanager faces analyze --photo-ids 1,2,3  # 指定照片人脸重分析
+picmanager fill-missing                     # 为缺人脸或地理元数据的照片批量补全
+picmanager fill-missing --faces             # 仅补充未分析人脸的照片
+picmanager fill-missing --geo               # 仅补充缺地理编码的照片
 picmanager models fetch                     # 下载 ONNX 模型文件到 config_dir/models/
 picmanager config                           # 显示当前生效配置
 ```

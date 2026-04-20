@@ -10,6 +10,25 @@ fn coord_key(v: f64) -> String {
     format!("{:.prec$}", v, prec = GEO_COORD_PRECISION)
 }
 
+/// Returns the count of imported photos that have GPS coordinates but no matching
+/// entry in the geocache table (i.e., not yet reverse-geocoded).
+pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64> {
+    let n = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos ph
+         WHERE ph.import_status = 'imported'
+           AND ph.gps_lat IS NOT NULL
+           AND ph.gps_lon IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM geocache gc
+             WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+               AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+           )",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
+}
+
 /// Group all imported photos with GPS coordinates into per-city location albums.
 /// Uses OSM Nominatim for reverse geocoding, with a local geocache to avoid
 /// redundant requests and to respect the 1 req/s rate limit.
@@ -190,6 +209,60 @@ mod tests {
         .execute(pool)
         .await
         .unwrap();
+    }
+
+    #[tokio::test]
+    async fn count_missing_geo_ignores_photos_without_gps() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "/no-gps.jpg", None, None).await;
+        assert_eq!(count_missing_geo(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn count_missing_geo_counts_uncached_gps_photos() {
+        let pool = test_pool().await;
+        let coords: &[(f64, f64, &str)] = &[
+            (37.7749, -122.4194, "/sf.jpg"),
+            (35.6762, 139.6503, "/tokyo.jpg"),
+            (51.5074, -0.1278, "/london.jpg"),
+        ];
+        for (lat, lon, path) in coords {
+            insert_photo(&pool, path, Some(*lat), Some(*lon)).await;
+        }
+        // Cache only the first one
+        seed_geocache(&pool, 37.7749, -122.4194, Some("San Francisco")).await;
+
+        assert_eq!(count_missing_geo(&pool).await.unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn count_missing_geo_returns_zero_when_all_cached() {
+        let pool = test_pool().await;
+        let lat = 48.8566;
+        let lon = 2.3522;
+        insert_photo(&pool, "/paris.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon, Some("Paris")).await;
+
+        assert_eq!(count_missing_geo(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn count_missing_geo_ignores_deleted_photos() {
+        let pool = test_pool().await;
+        let lat = 48.8566;
+        let lon = 2.3522;
+        // Insert a deleted photo with GPS but no geocache
+        sqlx::query(
+            "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon) \
+             VALUES ('/del.jpg', 'del', 'jpeg', 'deleted', ?, ?)",
+        )
+        .bind(lat)
+        .bind(lon)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(count_missing_geo(&pool).await.unwrap(), 0);
     }
 
     #[tokio::test]

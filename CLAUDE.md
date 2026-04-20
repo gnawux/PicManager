@@ -138,7 +138,7 @@ docs/
 | 20a | DB: animals 表 + YOLOv8-nano 导入集成（src/animal/） |
 | 20b | 动物 API + 前端动物标签页 |
 
-当前测试数：**182 个**（`cargo nextest run` 全部通过，另有 5 个 `#[ignore]` 需模型文件）
+当前测试数：**189 个**（`cargo nextest run` 全部通过，另有 5 个 `#[ignore]` 需模型文件）
 
 ## 关键实现细节（避免踩坑）
 
