@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use crate::web::AppState;
+use crate::web::handlers::photos::{PhotoRow, Pagination};
 
 #[derive(Debug, Serialize)]
 pub struct PersonRow {
@@ -15,6 +16,26 @@ pub struct PersonRow {
     pub cover_face_id: Option<i64>,
     pub face_count: i64,
     pub photo_count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PersonPhotos {
+    pub photos: Vec<PhotoRow>,
+    pub total: i64,
+    pub page: u32,
+    pub per_page: u32,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PersonNode {
+    id: i64,
+    name: Option<String>,
+    children: Vec<PersonNode>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PeopleTree {
+    pub people: Vec<PersonNode>,
 }
 
 #[derive(Debug, Serialize)]
@@ -31,6 +52,74 @@ pub struct MergeBody {
 #[derive(Debug, Deserialize)]
 pub struct ReparentBody {
     pub new_parent_id: Option<i64>,
+}
+
+pub async fn get_person_photos(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<PersonPhotos>, StatusCode> {
+    let offset = (pag.page.saturating_sub(1)) as i64 * pag.per_page as i64;
+    let limit = pag.per_page as i64;
+
+    let total: (i64,) = sqlx::query_as(
+        "SELECT COUNT(DISTINCT f.photo_id) FROM person_faces pf
+         JOIN faces f ON f.id = pf.face_id WHERE pf.person_id = ?",
+    )
+    .bind(person_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let photos: Vec<PhotoRow> = sqlx::query_as(
+        "SELECT DISTINCT ph.id, ph.path, ph.format, ph.taken_at, ph.camera, ph.import_status
+         FROM person_faces pf
+         JOIN faces f ON f.id = pf.face_id
+         JOIN photos ph ON ph.id = f.photo_id
+         WHERE pf.person_id = ?
+         ORDER BY ph.taken_at DESC NULLS LAST, ph.id DESC
+         LIMIT ? OFFSET ?",
+    )
+    .bind(person_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(PersonPhotos {
+        photos,
+        total: total.0,
+        page: pag.page,
+        per_page: pag.per_page,
+    }))
+}
+
+pub async fn get_people_tree(
+    State(state): State<AppState>,
+) -> Result<Json<PeopleTree>, StatusCode> {
+    let rows: Vec<(i64, Option<String>, Option<i64>)> =
+        sqlx::query_as("SELECT id, name, parent_id FROM people ORDER BY id")
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Build tree from flat list
+    fn build(
+        all: &[(i64, Option<String>, Option<i64>)],
+        parent: Option<i64>,
+    ) -> Vec<PersonNode> {
+        all.iter()
+            .filter(|(_, _, p)| *p == parent)
+            .map(|(id, name, _)| PersonNode {
+                id: *id,
+                name: name.clone(),
+                children: build(all, Some(*id)),
+            })
+            .collect()
+    }
+
+    Ok(Json(PeopleTree { people: build(&rows, None) }))
 }
 
 pub async fn list_people(

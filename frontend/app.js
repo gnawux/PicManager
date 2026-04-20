@@ -11,10 +11,19 @@ const state = {
   selectMode: false,
   selected: new Set(), // selected photo IDs
   currentDetail: null, // full detail object of the open photo
+  currentView: 'photos', // 'photos' | 'people'
+  currentPersonId: null, // person being viewed in detail
+  allPeople: [],    // cached people list for merge dialog
+  mergeTargetId: null,
 };
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+  // Tab navigation
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
+
   loadAlbums();
   loadPhotos();
 
@@ -27,6 +36,17 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Detail edit
+  // People view
+  document.getElementById('recluster-btn').addEventListener('click', triggerRecluster);
+  document.getElementById('person-back-btn').addEventListener('click', () => showPeopleList());
+  document.getElementById('person-name-input').addEventListener('change', savePersonName);
+  document.getElementById('person-merge-btn').addEventListener('click', openMergeDialog);
+  document.getElementById('merge-cancel-btn').addEventListener('click', () => {
+    document.getElementById('merge-modal').classList.add('hidden');
+  });
+  document.getElementById('merge-confirm-btn').addEventListener('click', confirmMerge);
+  document.getElementById('merge-search').addEventListener('input', filterMergeList);
+
   document.getElementById('detail-edit-btn').addEventListener('click', () => {
     openDetailEdit();
   });
@@ -421,10 +441,201 @@ async function openDedupModal() {
   document.getElementById('dedup-modal').classList.remove('hidden');
 }
 
+// ── View switching ────────────────────────────────────────────────────────────
+function switchView(view) {
+  state.currentView = view;
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === view);
+  });
+  document.querySelectorAll('.view-section').forEach(s => s.classList.add('hidden'));
+  document.getElementById(`view-${view}`).classList.remove('hidden');
+
+  const albumsSection = document.getElementById('albums-section');
+  albumsSection.style.display = view === 'photos' ? '' : 'none';
+
+  if (view === 'people') loadPeopleList();
+}
+
+// ── People list ───────────────────────────────────────────────────────────────
+async function loadPeopleList() {
+  const people = await fetchJSON('/api/people');
+  if (!people) return;
+  state.allPeople = people;
+
+  document.getElementById('people-count').textContent = `共 ${people.length} 人`;
+  const grid = document.getElementById('people-grid');
+  grid.innerHTML = '';
+
+  if (people.length === 0) {
+    grid.innerHTML = '<p style="padding:24px;color:#888">尚无人物，请先导入含人脸的照片，再点击"重新聚类"。</p>';
+    return;
+  }
+
+  for (const p of people) {
+    const card = document.createElement('div');
+    card.className = 'person-card';
+    const thumbSrc = p.cover_face_id
+      ? `/api/faces/${p.cover_face_id}/thumb`
+      : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="%23ddd"/></svg>';
+    card.innerHTML = `
+      <img src="${thumbSrc}" loading="lazy" alt="">
+      <div class="person-meta">
+        <div class="person-name">${p.name || '未命名'}</div>
+        <div class="person-count">${p.photo_count} 张照片</div>
+      </div>`;
+    card.addEventListener('click', () => showPersonDetail(p.id));
+    grid.appendChild(card);
+  }
+}
+
+function showPeopleList() {
+  state.currentPersonId = null;
+  document.getElementById('people-list-section').classList.remove('hidden');
+  document.getElementById('person-detail-section').classList.add('hidden');
+  loadPeopleList();
+}
+
+async function showPersonDetail(personId) {
+  state.currentPersonId = personId;
+  document.getElementById('people-list-section').classList.add('hidden');
+  document.getElementById('person-detail-section').classList.remove('hidden');
+
+  // Load person info for the name field
+  const people = state.allPeople;
+  const person = people.find(p => p.id === personId);
+  document.getElementById('person-name-input').value = person ? (person.name || '') : '';
+  document.getElementById('person-name-input').dataset.personId = personId;
+
+  // Load photos for this person
+  const data = await fetchJSON(`/api/people/${personId}/photos?per_page=100`);
+  const photos = data ? (data.photos || data) : [];
+  const grid = document.getElementById('person-photos-grid');
+  grid.innerHTML = '';
+  for (const p of photos) {
+    const card = document.createElement('div');
+    card.className = 'photo-card';
+    const label = p.taken_at ? p.taken_at.slice(0, 10) : '';
+    card.innerHTML = `<img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
+      <div class="meta">${label}</div>`;
+    grid.appendChild(card);
+  }
+
+  // Load sub-persons
+  await loadSubPersons(personId);
+}
+
+async function loadSubPersons(personId) {
+  const tree = await fetchJSON('/api/people/tree');
+  if (!tree) return;
+
+  const findChildren = (nodes, targetId) => {
+    for (const n of nodes) {
+      if (n.id === targetId) return n.children || [];
+      const found = findChildren(n.children || [], targetId);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  const children = findChildren(tree.people || [], personId) || [];
+
+  const list = document.getElementById('subpeople-list');
+  list.innerHTML = '';
+  if (children.length === 0) {
+    list.innerHTML = '<p style="font-size:12px;color:#aaa">无子人物</p>';
+    return;
+  }
+  for (const child of children) {
+    const row = document.createElement('div');
+    row.className = 'subperson-row';
+    row.innerHTML = `<span>${child.name || '未命名'}</span>
+      <button class="btn-ghost" data-cid="${child.id}">移出</button>`;
+    row.querySelector('button').addEventListener('click', async () => {
+      await fetch(`/api/people/${child.id}/reparent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_parent_id: null }),
+      });
+      loadSubPersons(personId);
+    });
+    list.appendChild(row);
+  }
+}
+
+async function savePersonName() {
+  const input = document.getElementById('person-name-input');
+  const personId = +input.dataset.personId;
+  if (!personId) return;
+  // We don't have a PATCH /api/people/:id yet; store in state for now
+  // and will add the endpoint in a later step if needed
+  const p = state.allPeople.find(x => x.id === personId);
+  if (p) p.name = input.value;
+}
+
+async function triggerRecluster() {
+  const btn = document.getElementById('recluster-btn');
+  btn.disabled = true;
+  document.getElementById('recluster-status').textContent = '聚类中…';
+  const result = await fetchJSON('/api/people/cluster', { method: 'POST' });
+  btn.disabled = false;
+  if (result) {
+    document.getElementById('recluster-status').textContent =
+      `完成，生成 ${result.people_created} 个人物`;
+    loadPeopleList();
+  } else {
+    document.getElementById('recluster-status').textContent = '聚类失败';
+  }
+}
+
+async function openMergeDialog() {
+  const people = await fetchJSON('/api/people');
+  if (!people) return;
+  state.allPeople = people;
+  state.mergeTargetId = null;
+  document.getElementById('merge-confirm-btn').disabled = true;
+  document.getElementById('merge-search').value = '';
+  renderMergeList(people.filter(p => p.id !== state.currentPersonId));
+  document.getElementById('merge-modal').classList.remove('hidden');
+}
+
+function renderMergeList(people) {
+  const ul = document.getElementById('merge-target-list');
+  ul.innerHTML = '';
+  for (const p of people) {
+    const li = document.createElement('li');
+    li.style.cssText = 'padding:6px 10px;cursor:pointer;';
+    li.textContent = (p.name || '未命名') + ` (${p.photo_count} 张)`;
+    li.addEventListener('click', () => {
+      ul.querySelectorAll('li').forEach(x => x.style.background = '');
+      li.style.background = '#e8e0ff';
+      state.mergeTargetId = p.id;
+      document.getElementById('merge-confirm-btn').disabled = false;
+    });
+    ul.appendChild(li);
+  }
+}
+
+function filterMergeList() {
+  const q = document.getElementById('merge-search').value.toLowerCase();
+  const filtered = state.allPeople.filter(p =>
+    p.id !== state.currentPersonId &&
+    (p.name || '未命名').toLowerCase().includes(q)
+  );
+  renderMergeList(filtered);
+}
+
+async function confirmMerge() {
+  if (!state.mergeTargetId) return;
+  await fetch('/api/people/merge', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source_id: state.currentPersonId, target_id: state.mergeTargetId }),
+  });
+  document.getElementById('merge-modal').classList.add('hidden');
+  showPersonDetail(state.mergeTargetId);
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
-async function fetchJSON(url) {
+async function fetchJSON(url, options = {}) {
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, options);
     if (!res.ok) return null;
     return res.json();
   } catch {

@@ -24,31 +24,72 @@
         <div id="dedup-count"></div>
       </section>
 
-      <section class="albums-panel">
+      <section id="albums-section" class="albums-panel">
         <h2>相册</h2>
         <ul id="album-list"></ul>
       </section>
     </aside>
 
     <main class="content">
-      <div class="toolbar">
-        <span id="photo-count"></span>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button id="select-toggle-btn" class="btn-ghost">☑ 选择</button>
-          <div class="pagination">
-            <button id="prev-btn">‹</button>
-            <span id="page-info"></span>
-            <button id="next-btn">›</button>
+      <!-- View tabs -->
+      <nav class="view-tabs">
+        <button class="tab-btn active" data-view="photos">照片</button>
+        <button class="tab-btn" data-view="people">人物</button>
+      </nav>
+
+      <!-- ── Photos view ──────────────────────────────────────────── -->
+      <div id="view-photos" class="view-section">
+        <div class="toolbar">
+          <span id="photo-count"></span>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button id="select-toggle-btn" class="btn-ghost">☑ 选择</button>
+            <div class="pagination">
+              <button id="prev-btn">‹</button>
+              <span id="page-info"></span>
+              <button id="next-btn">›</button>
+            </div>
           </div>
         </div>
+        <div id="batch-bar" class="batch-bar hidden">
+          <span id="batch-count">已选 0 张</span>
+          <button id="batch-time-btn">调整时间/时区</button>
+          <button id="batch-deselect-btn" class="btn-ghost">取消选择</button>
+        </div>
+        <div id="photo-grid" class="photo-grid"></div>
       </div>
-      <!-- Batch action bar (visible when items selected) -->
-      <div id="batch-bar" class="batch-bar hidden">
-        <span id="batch-count">已选 0 张</span>
-        <button id="batch-time-btn">调整时间/时区</button>
-        <button id="batch-deselect-btn" class="btn-ghost">取消选择</button>
+
+      <!-- ── People view ──────────────────────────────────────────── -->
+      <div id="view-people" class="view-section hidden">
+
+        <!-- People list -->
+        <div id="people-list-section">
+          <div class="toolbar">
+            <span id="people-count"></span>
+            <button id="recluster-btn">重新聚类</button>
+          </div>
+          <div id="recluster-status" class="status-text" style="padding:0 16px 8px"></div>
+          <div id="people-grid" class="people-grid"></div>
+        </div>
+
+        <!-- Person detail (hidden until a person is clicked) -->
+        <div id="person-detail-section" class="hidden">
+          <div class="toolbar">
+            <button id="person-back-btn" class="btn-ghost">← 人物列表</button>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input id="person-name-input" type="text" class="person-name-input" placeholder="未命名" />
+              <button id="person-merge-btn" class="btn-ghost">合并到…</button>
+            </div>
+          </div>
+          <div id="person-photos-grid" class="photo-grid"></div>
+
+          <!-- Sub-persons panel -->
+          <div id="subpeople-panel" class="subpeople-panel">
+            <h3>子人物</h3>
+            <div id="subpeople-list"></div>
+          </div>
+        </div>
+
       </div>
-      <div id="photo-grid" class="photo-grid"></div>
     </main>
   </div>
 
@@ -66,6 +107,21 @@
       <div style="display:flex;gap:8px">
         <button id="batch-time-save-btn">保存</button>
         <button id="batch-time-cancel-btn" class="btn-ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Merge person dialog -->
+  <div id="merge-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:400px">
+      <h2>合并到…</h2>
+      <p style="font-size:12px;color:#888;margin-bottom:10px">选择目标人物，当前人物的所有照片和人脸将并入目标。</p>
+      <input id="merge-search" type="text" placeholder="搜索姓名…"
+             style="display:block;width:100%;padding:6px;border:1px solid #ccc;border-radius:6px;margin-bottom:8px" />
+      <ul id="merge-target-list" style="list-style:none;max-height:200px;overflow-y:auto;border:1px solid #eee;border-radius:6px"></ul>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button id="merge-confirm-btn" disabled>合并</button>
+        <button id="merge-cancel-btn" class="btn-ghost">取消</button>
       </div>
     </div>
   </div>

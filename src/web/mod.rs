@@ -13,7 +13,7 @@ use handlers::{
     albums::{list_albums, list_album_photos, merge_albums},
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
-    people::{list_people, cluster_people, merge_people, reparent_person, get_face_thumb},
+    people::{list_people, get_person_photos, get_people_tree, cluster_people, merge_people, reparent_person, get_face_thumb},
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb, get_photo, patch_photo, batch_update_photos},
 };
@@ -46,8 +46,10 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/albums/{id}/photos", get(list_album_photos))
         .route("/api/albums/merge", post(merge_albums))
         .route("/api/people", get(list_people))
+        .route("/api/people/tree", get(get_people_tree))
         .route("/api/people/cluster", post(cluster_people))
         .route("/api/people/merge", post(merge_people))
+        .route("/api/people/{id}", get(get_person_photos))
         .route("/api/people/{id}/reparent", post(reparent_person))
         .route("/api/faces/{id}/thumb", get(get_face_thumb))
         .route("/api/faces/analyze", post(start_analyze))
