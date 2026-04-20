@@ -40,6 +40,13 @@ pub async fn group_by_location(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
+struct GeoInfo {
+    city: Option<String>,
+    state: Option<String>,
+    county: Option<String>,
+    country: Option<String>,
+}
+
 /// Returns a city name for the given coordinates.
 /// Checks the geocache first; falls back to the Nominatim API on a cache miss.
 /// `need_rate_limit` is set to true after an actual API call is made so the
@@ -71,33 +78,48 @@ async fn cached_or_fetch(
     if *need_rate_limit {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    let city = nominatim_lookup(client, lat, lon).await;
+    let info = nominatim_lookup(client, lat, lon).await;
     *need_rate_limit = true;
 
+    let city = info.as_ref().and_then(|i| i.city.clone());
+    let state = info.as_ref().and_then(|i| i.state.clone());
+    let county = info.as_ref().and_then(|i| i.county.clone());
+    let country = info.as_ref().and_then(|i| i.country.clone());
+
     let _ = sqlx::query(
-        "INSERT OR IGNORE INTO geocache (lat_key, lon_key, city) VALUES (?, ?, ?)",
+        "INSERT OR IGNORE INTO geocache (lat_key, lon_key, city, state, county, country)
+         VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&lat_key)
     .bind(&lon_key)
     .bind(&city)
+    .bind(&state)
+    .bind(&county)
+    .bind(&country)
     .execute(pool)
     .await;
 
     city
 }
 
-async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<String> {
+async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<GeoInfo> {
     let url = format!(
         "https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10"
     );
     let resp: serde_json::Value = client.get(&url).send().await.ok()?.json().await.ok()?;
     let addr = resp.get("address")?;
-    for field in &["city", "town", "village", "county", "state"] {
-        if let Some(name) = addr.get(*field).and_then(|v| v.as_str()) {
-            return Some(name.to_owned());
-        }
+
+    let city = ["city", "town", "village"]
+        .iter()
+        .find_map(|f| addr.get(*f).and_then(|v| v.as_str()).map(str::to_owned));
+    let county = addr.get("county").and_then(|v| v.as_str()).map(str::to_owned);
+    let state = addr.get("state").and_then(|v| v.as_str()).map(str::to_owned);
+    let country = addr.get("country").and_then(|v| v.as_str()).map(str::to_owned);
+
+    if city.is_none() && state.is_none() && country.is_none() {
+        return None;
     }
-    None
+    Some(GeoInfo { city, state, county, country })
 }
 
 async fn ensure_location_album(pool: &SqlitePool, photo_id: i64, city: &str) -> Result<()> {

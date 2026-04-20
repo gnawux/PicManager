@@ -380,6 +380,61 @@ async fn batch_update_photos_updates_all() {
 }
 
 #[tokio::test]
+async fn geo_hierarchy_groups_by_country_state_city() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Insert photos with GPS
+    let lat1 = 37.7749f64;
+    let lon1 = -122.4194f64;
+    let lat2 = 34.0522f64;
+    let lon2 = -118.2437f64;
+    for (p, lat, lon) in [("/sf.jpg", lat1, lon1), ("/la.jpg", lat2, lon2)] {
+        sqlx::query(
+            "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+             VALUES (?, ?, 'jpeg', 'imported', ?, ?)",
+        )
+        .bind(p).bind(p).bind(lat).bind(lon)
+        .execute(&pool).await.unwrap();
+    }
+
+    // Seed geocache with hierarchy
+    let fmt = |v: f64| format!("{:.4}", v);
+    sqlx::query(
+        "INSERT INTO geocache (lat_key, lon_key, city, state, country)
+         VALUES (?, ?, 'San Francisco', 'California', 'United States')",
+    )
+    .bind(fmt(lat1)).bind(fmt(lon1)).execute(&pool).await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO geocache (lat_key, lon_key, city, state, country)
+         VALUES (?, ?, 'Los Angeles', 'California', 'United States')",
+    )
+    .bind(fmt(lat2)).bind(fmt(lon2)).execute(&pool).await.unwrap();
+
+    let response = app
+        .oneshot(Request::builder().uri("/api/geo/hierarchy").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let countries = json["countries"].as_array().unwrap();
+    assert_eq!(countries.len(), 1);
+    assert_eq!(countries[0]["name"], "United States");
+    assert_eq!(countries[0]["photo_count"], 2);
+
+    let states = countries[0]["states"].as_array().unwrap();
+    assert_eq!(states.len(), 1);
+    assert_eq!(states[0]["name"], "California");
+    assert_eq!(states[0]["photo_count"], 2);
+
+    let cities = states[0]["cities"].as_array().unwrap();
+    assert_eq!(cities.len(), 2);
+}
+
+#[tokio::test]
 async fn get_people_empty() {
     let app = test_app().await;
     let response = app
