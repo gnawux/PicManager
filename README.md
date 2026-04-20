@@ -24,6 +24,13 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 | Face embedding extraction (ArcFace MobileNetV1, 512-D L2-normalised) | ✓ |
 | Batch face re-analysis (all library or specific photos) | ✓ |
 | ONNX model download via CLI (`models fetch`) | ✓ |
+| People view with DBSCAN auto-clustering (ArcFace embeddings) | ✓ |
+| Hierarchical person tree (parent_id, unlimited depth) | ✓ |
+| Animal detection on import (YOLOv8-nano ONNX, 10 COCO species) | ✓ |
+| Animal species browser with bounding-box overlay | ✓ |
+| Geographic hierarchy view (country → state → city drill-down) | ✓ |
+| Map view with GPS markers (Leaflet.js + markercluster) | ✓ |
+| Photo time/timezone editing (DB-only, no EXIF write-back) | ✓ |
 
 ## Requirements
 
@@ -36,7 +43,7 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 brew install libheif
 # Optional — for face detection:
 brew install onnxruntime
-picmanager models fetch   # downloads face_detector.onnx + arcface_mobilenetv1.onnx
+picmanager models fetch   # downloads face_detector.onnx + arcface_mobilenetv1.onnx + yolov8n.onnx
 ```
 
 ## Build
@@ -100,7 +107,7 @@ Download the ONNX model files once:
 picmanager models fetch
 ```
 
-This downloads `face_detector.onnx` (~1 MB) and `arcface_mobilenetv1.onnx` (~10 MB) to `~/Library/Application Support/picmanager/models/`. After that, face detection runs automatically on every imported photo.
+This downloads `face_detector.onnx` (~1 MB), `arcface_mobilenetv1.onnx` (~10 MB), and `yolov8n.onnx` (~6 MB) to `~/Library/Application Support/picmanager/models/`. After that, face detection and animal detection run automatically on every imported photo.
 
 To re-analyse the entire library (e.g. after downloading models for the first time):
 
@@ -134,6 +141,10 @@ Command-line flags (when added) take precedence over the config file, which take
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/photos` | Paginated photo list |
+| GET | `/api/photos/gps-points` | GPS coordinates of all geotagged photos |
+| POST | `/api/photos/batch-update` | Batch-update time / timezone on multiple photos |
+| GET | `/api/photos/:id` | Single photo detail |
+| PATCH | `/api/photos/:id` | Edit taken_at / timezone_offset (DB only) |
 | GET | `/api/photos/:id/thumb` | 300 px JPEG thumbnail |
 | POST | `/api/import` | Trigger a background import |
 | GET | `/api/import/status` | Poll import progress |
@@ -145,6 +156,17 @@ Command-line flags (when added) take precedence over the config file, which take
 | GET | `/api/photos/:id/faces` | Face regions detected in a photo |
 | POST | `/api/faces/analyze` | Trigger face re-analysis (all or given photo IDs) |
 | GET | `/api/faces/jobs/:id` | Poll face job progress |
+| GET | `/api/faces/:id/thumb` | Cropped face thumbnail |
+| GET | `/api/geo/hierarchy` | Nested country → state → city hierarchy with photo counts |
+| GET | `/api/people` | List all people (clustered) |
+| GET | `/api/people/tree` | Nested person tree |
+| POST | `/api/people/cluster` | Trigger DBSCAN re-clustering |
+| POST | `/api/people/merge` | Merge two person records |
+| GET | `/api/people/:id` | Photos belonging to a person |
+| POST | `/api/people/:id/reparent` | Change a person's parent in the tree |
+| GET | `/api/animals/species` | List detected animal species with photo counts |
+| GET | `/api/animals/:species/photos` | Photos containing a given species |
+| GET | `/api/photos/:id/animals` | Animal detections in a photo |
 
 **Example — trigger import:**
 
@@ -183,7 +205,7 @@ Original photo files are **never modified**. The database stores only metadata a
 ## Development
 
 ```bash
-cargo nextest run            # run all 123 tests (4 more need ONNX model files, marked #[ignore])
+cargo nextest run            # run all 182 tests (5 more need ONNX model files, marked #[ignore])
 cargo clippy -- -D warnings  # lint
 cargo watch -x build         # rebuild on file changes
 ```
@@ -199,11 +221,12 @@ src/
   metadata/      Format detection (magic bytes), EXIF/GPS extraction
   dedup/         Perceptual hash, candidate scan, resolve workflow
   album/         Auto-grouping by month, camera & GPS location; manual merge
-  face/          Local face detection (ultraface), embedding (ArcFace), batch jobs
+  face/          Local face detection (ultraface), embedding (ArcFace), DBSCAN clustering, batch jobs
+  animal/        Animal detection on import (YOLOv8-nano ONNX, 10 COCO species)
   storage/       SQLite connection pool, migrations
   web/           Axum server, REST handlers, static file serving
 frontend/        Static HTML + CSS + JS (no build step)
-migrations/      SQLx migration files (0001 schema, 0002 geocache, 0003 faces)
+migrations/      SQLx migration files (0001–0009)
 tests/           Integration tests + real-camera sample images
 docs/            Architecture design and development plan
 ```

@@ -51,15 +51,22 @@ src/
     detector.rs        detect(img) -> Vec<FaceRegion>；OnceLock<Mutex<Session>> 懒加载
     embedder.rs        Embedder::load(path)/extract(img, region) -> Vec<f32> 512D L2归一化
     job.rs             run_job(pool, scope) -> job_id；execute_job() pub(crate) 供测试调用
+    cluster.rs         DBSCAN 聚类（cosine 距离），run_clustering(pool)
+  animal/
+    mod.rs             detect_and_save(pool, photo_id, img)，模型不存在时静默跳过
+    detector.rs        detect(img) -> Vec<AnimalDetection>；YOLOv8-nano，OnceLock<Mutex<Session>>
   web/
     mod.rs             AppState, router(), serve()
     embed.rs           rust-embed 静态文件服务
     handlers/
       import.rs        POST /api/import（body: {dir, copy?}），GET /api/import/status
-      photos.rs        GET /api/photos, GET /api/photos/{id}/thumb
+      photos.rs        GET /api/photos, GET /api/photos/{id}/thumb, GET /api/photos/{id}, PATCH /api/photos/{id}, POST /api/photos/batch-update, GET /api/photos/gps-points
       dedup.rs         GET /api/dedup, POST /api/dedup/{group_id}/resolve
       albums.rs        GET /api/albums, GET /api/albums/{id}/photos, POST /api/albums/merge
       faces.rs         POST /api/faces/analyze, GET /api/faces/jobs/{id}, GET /api/photos/{id}/faces
+      people.rs        GET /api/people, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
+      geo.rs           GET /api/geo/hierarchy
+      animals.rs       GET /api/animals/species, GET /api/animals/{species}/photos, GET /api/photos/{id}/animals
 frontend/              HTML + CSS + JS（编译进二进制，不依赖运行时工作目录）
 migrations/
   0001_initial.sql     photos, albums, photo_albums, dedup_groups, dedup_members, import_sessions
@@ -67,6 +74,10 @@ migrations/
   0003_faces.sql       faces 表（人脸区域 + embedding BLOB）、face_jobs 表
   0004_photo_stats.sql photo_stats 单行计数器表（active_count，避免全表 COUNT(*)）
   0005_dedup_incremental.sql photos.dedup_scanned_at 列（增量 dedup 扫描标记）
+  0006_timezone_offset.sql photos.timezone_offset 列（UTC 偏移分钟数）
+  0007_people.sql      people 表（人物记录）、person_faces 表（人物-人脸多对多）
+  0008_geocache_hierarchy.sql geocache 新增 country/state/county 列
+  0009_animals.sql     animals 表（动物检测结果，photo_id/species/confidence/bbox）
 tests/
   web_api.rs           Web API 集成测试（tower::ServiceExt::oneshot）
   fixtures/            测试 fixture JPEG 文件（由 make_fixtures.py 生成）
@@ -74,7 +85,7 @@ tests/
   make_fixtures.py     生成所有 fixture（Pillow + 原始 EXIF 二进制写入）
 docs/
   REQUIREMENTS.md      需求文档
-  PLAN.md              开发计划（Steps 1–14 已全部完成）
+  PLAN.md              开发计划（Steps 1–20b 已全部完成）
   ARCHITECTURE.md      架构设计
   DESIGN.md            详细设计（模块接口、DB schema、API 参考、测试策略）
 ```
@@ -88,7 +99,7 @@ docs/
 
 ## 开发状态
 
-**已完成：Steps 1–16b（docs/PLAN.md 全部步骤）**
+**已完成：Steps 1–20b（docs/PLAN.md 全部步骤）**
 
 | Step | 内容 |
 |------|------|
@@ -114,8 +125,20 @@ docs/
 | 15b | COUNT(*) 替换为 photo_stats 计数器表 |
 | 16a | dedup 增量扫描（photos.dedup_scanned_at 标记，新照片才比较） |
 | 16b | dedup 全量重扫多索引分桶（4×16bit 段，pigeonhole 保证零漏报） |
+| 17a | DB: photos.timezone_offset 列 |
+| 17b | 照片时间/时区编辑 API（PATCH /api/photos/{id} + 批量更新） |
+| 17c | 前端：照片详情编辑 + 批量时间调整 |
+| 18a | DB: people + person_faces 表 |
+| 18b | 人脸 DBSCAN 聚类（face/cluster.rs，cosine 距离） |
+| 18c | 人物 API（list/tree/cluster/merge/reparent/face-thumb） |
+| 18d | 前端：人物标签页（聚类、详情、子人物树、合并） |
+| 19a | DB: geocache 层级字段 + GET /api/geo/hierarchy |
+| 19b | 前端：地点层级列表（三列钻取） |
+| 19c | 前端：Leaflet 地图打点 + GET /api/photos/gps-points |
+| 20a | DB: animals 表 + YOLOv8-nano 导入集成（src/animal/） |
+| 20b | 动物 API + 前端动物标签页 |
 
-当前测试数：**145 个**（`cargo nextest run` 全部通过，另有 4 个 `#[ignore]` 需模型文件）
+当前测试数：**182 个**（`cargo nextest run` 全部通过，另有 5 个 `#[ignore]` 需模型文件）
 
 ## 关键实现细节（避免踩坑）
 
@@ -254,6 +277,21 @@ session.run(ort::inputs!["input" => tensor])?
 - 纯函数测试（`iou`、`nms`、`preprocess`、`l2_normalize`、`encode/decode`）无需模型文件，始终在 CI 中运行
 - 需要 ONNX 模型的测试标记 `#[ignore = "requires ... in config_dir/picmanager/models/"]`
 - `execute_job` 标为 `pub(crate)` 供测试同步调用，避免 `tokio::spawn` 导致的竞争条件
+
+### DBSCAN 聚类关键细节
+
+- `region_query` 包含点本身（min_samples 按标准 DBSCAN 定义计数自身，如 min_samples=2 意味着至少 1 个其他邻居）
+- 距离 = `1.0 - dot(a, b)`（L2 归一化嵌入，所以等价于余弦距离）
+- 默认参数：`eps = 0.4`，`min_samples = 2`
+- 噪点（未归入任何核心点）各自单独成组，便于用户后续手动合并
+
+### YOLOv8-nano 关键细节
+
+- 输出 `[1, 84, 8400]`，布局为 feature-first：`flat[f * 8400 + i]` 访问第 i 个检测框的第 f 个特征
+- 前 4 行为 cx/cy/w/h（归一化到 640），后 80 行为 COCO 类别分数（无需 sigmoid，已在模型内处理）
+- 动物类索引 14–23（0-based COCO）：bird/cat/dog/horse/sheep/cow/elephant/bear/zebra/giraffe
+- 与 face detector 不同，YOLOv8 输入归一化为 `[0,1]` RGB，face detector 是 `(pixel-127)/128` BGR
+- 模型路径：`{config_dir}/picmanager/models/yolov8n.onnx`（约 6 MB）
 
 ## 常用命令
 
