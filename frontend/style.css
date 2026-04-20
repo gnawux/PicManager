@@ -133,6 +133,18 @@ button:disabled { opacity: .5; cursor: default; }
 }
 .photo-card { position: relative; }
 
+/* Geo view */
+.geo-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+.geo-columns { display: flex; gap: 0; border-bottom: 1px solid #e0e0e0; height: 260px; }
+.geo-col { flex: 1; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
+.geo-col.hidden { display: none; }
+.geo-col-header { padding: 8px 12px; font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: .06em; background: #fafafa; border-bottom: 1px solid #e0e0e0; }
+.geo-list { list-style: none; overflow-y: auto; flex: 1; }
+.geo-list li { padding: 7px 14px; cursor: pointer; display: flex; justify-content: space-between; font-size: 13px; }
+.geo-list li:hover, .geo-list li.active { background: #f0ecff; }
+.geo-list li .geo-count { color: #aaa; font-size: 11px; }
+.geo-breadcrumb { font-size: 13px; color: #555; }
+
 /* People view */
 .people-grid {
   flex: 1; overflow-y: auto; padding: 12px;

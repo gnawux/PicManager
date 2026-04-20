@@ -36,6 +36,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Detail edit
+  // Geo view sub-tabs
+  document.querySelectorAll('[data-geoview]').forEach(btn => {
+    btn.addEventListener('click', () => switchGeoView(btn.dataset.geoview));
+  });
+
   // People view
   document.getElementById('recluster-btn').addEventListener('click', triggerRecluster);
   document.getElementById('person-back-btn').addEventListener('click', () => showPeopleList());
@@ -444,7 +449,7 @@ async function openDedupModal() {
 // ── View switching ────────────────────────────────────────────────────────────
 function switchView(view) {
   state.currentView = view;
-  document.querySelectorAll('.tab-btn').forEach(b => {
+  document.querySelectorAll('.tab-btn[data-view]').forEach(b => {
     b.classList.toggle('active', b.dataset.view === view);
   });
   document.querySelectorAll('.view-section').forEach(s => s.classList.add('hidden'));
@@ -454,6 +459,111 @@ function switchView(view) {
   albumsSection.style.display = view === 'photos' ? '' : 'none';
 
   if (view === 'people') loadPeopleList();
+  if (view === 'locations') loadGeoHierarchy();
+}
+
+// ── Geo view ──────────────────────────────────────────────────────────────────
+let geoData = null; // cached hierarchy
+
+async function loadGeoHierarchy() {
+  geoData = await fetchJSON('/api/geo/hierarchy');
+  if (!geoData) return;
+  renderGeoCountries(geoData.countries);
+  document.getElementById('geo-col-state').classList.add('hidden');
+  document.getElementById('geo-col-city').classList.add('hidden');
+  document.getElementById('geo-photos').style.display = 'none';
+  setBreadcrumb('地理位置');
+}
+
+function renderGeoCountries(countries) {
+  const ul = document.getElementById('geo-country-list');
+  ul.innerHTML = '';
+  for (const c of countries) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${c.name}</span><span class="geo-count">${c.photo_count}</span>`;
+    li.addEventListener('click', () => {
+      ul.querySelectorAll('li').forEach(x => x.classList.remove('active'));
+      li.classList.add('active');
+      renderGeoStates(c);
+      setBreadcrumb(c.name);
+    });
+    ul.appendChild(li);
+  }
+}
+
+function renderGeoStates(country) {
+  const stateCol = document.getElementById('geo-col-state');
+  stateCol.classList.remove('hidden');
+  document.getElementById('geo-col-city').classList.add('hidden');
+  document.getElementById('geo-photos').style.display = 'none';
+
+  const ul = document.getElementById('geo-state-list');
+  ul.innerHTML = '';
+  for (const s of country.states) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${s.name}</span><span class="geo-count">${s.photo_count}</span>`;
+    li.addEventListener('click', () => {
+      ul.querySelectorAll('li').forEach(x => x.classList.remove('active'));
+      li.classList.add('active');
+      renderGeoCities(s, country.name);
+      setBreadcrumb(`${country.name} › ${s.name}`);
+    });
+    ul.appendChild(li);
+  }
+}
+
+function renderGeoCities(st, countryName) {
+  const cityCol = document.getElementById('geo-col-city');
+  cityCol.classList.remove('hidden');
+  document.getElementById('geo-photos').style.display = 'none';
+
+  const ul = document.getElementById('geo-city-list');
+  ul.innerHTML = '';
+  for (const c of st.cities) {
+    const li = document.createElement('li');
+    li.innerHTML = `<span>${c.name}</span><span class="geo-count">${c.photo_count}</span>`;
+    li.addEventListener('click', async () => {
+      ul.querySelectorAll('li').forEach(x => x.classList.remove('active'));
+      li.classList.add('active');
+      setBreadcrumb(`${countryName} › ${st.name} › ${c.name}`);
+      // Show photos for this city (via album if one exists)
+      const albums = await fetchJSON('/api/albums');
+      const album = albums && albums.find(a => a.kind === 'location' && a.name === c.name);
+      if (album) {
+        const data = await fetchJSON(`/api/albums/${album.id}/photos?per_page=100`);
+        const photos = data ? (data.photos || []) : [];
+        renderGeoPhotos(photos);
+      }
+    });
+    ul.appendChild(li);
+  }
+}
+
+function renderGeoPhotos(photos) {
+  const grid = document.getElementById('geo-photos');
+  grid.style.display = '';
+  grid.innerHTML = '';
+  for (const p of photos) {
+    const card = document.createElement('div');
+    card.className = 'photo-card';
+    const label = p.taken_at ? p.taken_at.slice(0, 10) : '';
+    card.innerHTML = `<img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
+      <div class="meta">${label}</div>`;
+    grid.appendChild(card);
+  }
+}
+
+function setBreadcrumb(text) {
+  document.getElementById('geo-breadcrumb').textContent = text;
+}
+
+function switchGeoView(view) {
+  document.querySelectorAll('[data-geoview]').forEach(b => {
+    b.classList.toggle('active', b.dataset.geoview === view);
+  });
+  document.getElementById('geo-list-view').classList.toggle('hidden', view !== 'list');
+  document.getElementById('geo-map-view').classList.toggle('hidden', view !== 'map');
+  if (view === 'map') initMap();
 }
 
 // ── People list ───────────────────────────────────────────────────────────────

@@ -35,6 +35,7 @@
       <nav class="view-tabs">
         <button class="tab-btn active" data-view="photos">照片</button>
         <button class="tab-btn" data-view="people">人物</button>
+        <button class="tab-btn" data-view="locations">地点</button>
       </nav>
 
       <!-- ── Photos view ──────────────────────────────────────────── -->
@@ -56,6 +57,37 @@
           <button id="batch-deselect-btn" class="btn-ghost">取消选择</button>
         </div>
         <div id="photo-grid" class="photo-grid"></div>
+      </div>
+
+      <!-- ── Locations view ──────────────────────────────────────── -->
+      <div id="view-locations" class="view-section hidden">
+        <div class="toolbar">
+          <span id="geo-breadcrumb" class="geo-breadcrumb">地理位置</span>
+          <div style="display:flex;gap:4px">
+            <button id="geo-list-btn" class="tab-btn active" data-geoview="list">列表</button>
+            <button id="geo-map-btn" class="tab-btn" data-geoview="map">地图</button>
+          </div>
+        </div>
+        <div id="geo-list-view" class="geo-container">
+          <div class="geo-columns">
+            <div id="geo-col-country" class="geo-col">
+              <div class="geo-col-header">国家 / 地区</div>
+              <ul id="geo-country-list" class="geo-list"></ul>
+            </div>
+            <div id="geo-col-state" class="geo-col hidden">
+              <div class="geo-col-header">州 / 省</div>
+              <ul id="geo-state-list" class="geo-list"></ul>
+            </div>
+            <div id="geo-col-city" class="geo-col hidden">
+              <div class="geo-col-header">城市</div>
+              <ul id="geo-city-list" class="geo-list"></ul>
+            </div>
+          </div>
+          <div id="geo-photos" class="photo-grid" style="padding:12px;display:none"></div>
+        </div>
+        <div id="geo-map-view" class="hidden" style="flex:1">
+          <div id="leaflet-map" style="width:100%;height:100%;min-height:400px"></div>
+        </div>
       </div>
 
       <!-- ── People view ──────────────────────────────────────────── -->
