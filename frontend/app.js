@@ -6,6 +6,8 @@ const state = {
   total: 0,
   albumId: null,
   importPollId: null,
+  photos: [],       // current page photos for detail navigation
+  detailIdx: -1,    // index into state.photos of currently open detail
 };
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -19,6 +21,20 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('dedup-btn').addEventListener('click', openDedupModal);
   document.getElementById('close-dedup').addEventListener('click', () => {
     document.getElementById('dedup-modal').classList.add('hidden');
+  });
+
+  document.getElementById('detail-close').addEventListener('click', closeDetail);
+  document.getElementById('detail-prev').addEventListener('click', () => navigateDetail(-1));
+  document.getElementById('detail-next').addEventListener('click', () => navigateDetail(1));
+  document.getElementById('detail-modal').addEventListener('click', (e) => {
+    if (e.target === document.getElementById('detail-modal')) closeDetail();
+  });
+  document.addEventListener('keydown', (e) => {
+    const modal = document.getElementById('detail-modal');
+    if (modal.classList.contains('hidden')) return;
+    if (e.key === 'Escape') closeDetail();
+    else if (e.key === 'ArrowLeft') navigateDetail(-1);
+    else if (e.key === 'ArrowRight') navigateDetail(1);
   });
 });
 
@@ -38,17 +54,104 @@ async function loadPhotos() {
 }
 
 function renderGrid(photos) {
+  state.photos = photos;
   const grid = document.getElementById('photo-grid');
   grid.innerHTML = '';
-  for (const p of photos) {
+  photos.forEach((p, idx) => {
     const card = document.createElement('div');
     card.className = 'photo-card';
     const label = p.taken_at ? p.taken_at.slice(0, 10) : p.path.split('/').pop();
     card.innerHTML = `
       <img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
       <div class="meta">${label}</div>`;
+    card.addEventListener('click', () => openDetail(idx));
     grid.appendChild(card);
+  });
+}
+
+// ── Photo detail modal ────────────────────────────────────────────────────────
+async function openDetail(idx) {
+  const photo = state.photos[idx];
+  if (!photo) return;
+  state.detailIdx = idx;
+
+  const modal = document.getElementById('detail-modal');
+  modal.classList.remove('hidden');
+
+  // Show thumb immediately, then swap to original if available
+  const img = document.getElementById('detail-img');
+  img.src = `/api/photos/${photo.id}/thumb`;
+
+  // Fetch full metadata
+  const detail = await fetchJSON(`/api/photos/${photo.id}`);
+  if (detail) renderDetailMeta(detail);
+
+  // Fetch and draw face boxes
+  const faces = await fetchJSON(`/api/photos/${photo.id}/faces`);
+  if (faces) renderFaceOverlay(faces);
+
+  updateDetailNav();
+}
+
+function renderDetailMeta(detail) {
+  document.getElementById('detail-title').textContent =
+    detail.path.split('/').pop();
+
+  const tzLabel = detail.timezone_offset != null
+    ? `UTC${detail.timezone_offset >= 0 ? '+' : ''}${detail.timezone_offset / 60}`
+    : '未知';
+
+  const rows = [
+    ['时间', detail.taken_at ? detail.taken_at.replace('T', ' ') : '—'],
+    ['时区', tzLabel],
+    ['相机', detail.camera || '—'],
+    ['格式', detail.format],
+    ['GPS', detail.gps_lat != null
+      ? `${detail.gps_lat.toFixed(5)}, ${detail.gps_lon.toFixed(5)}`
+      : '—'],
+  ];
+
+  const table = document.getElementById('detail-table');
+  table.innerHTML = rows.map(([k, v]) =>
+    `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+}
+
+function renderFaceOverlay(faces) {
+  const svg = document.getElementById('detail-faces');
+  svg.innerHTML = '';
+  if (!faces.length) return;
+
+  const img = document.getElementById('detail-img');
+  const w = img.naturalWidth || img.width || 1;
+  const h = img.naturalHeight || img.height || 1;
+  svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+  for (const f of faces) {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', f.x);
+    rect.setAttribute('y', f.y);
+    rect.setAttribute('width', f.width);
+    rect.setAttribute('height', f.height);
+    rect.setAttribute('class', 'face-box');
+    svg.appendChild(rect);
   }
+}
+
+function closeDetail() {
+  document.getElementById('detail-modal').classList.add('hidden');
+  document.getElementById('detail-faces').innerHTML = '';
+  state.detailIdx = -1;
+}
+
+function navigateDetail(delta) {
+  const next = state.detailIdx + delta;
+  if (next >= 0 && next < state.photos.length) openDetail(next);
+}
+
+function updateDetailNav() {
+  document.getElementById('detail-prev').disabled = state.detailIdx <= 0;
+  document.getElementById('detail-next').disabled =
+    state.detailIdx >= state.photos.length - 1;
 }
 
 function renderPagination() {

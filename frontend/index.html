@@ -43,6 +43,23 @@
     </main>
   </div>
 
+  <!-- Photo detail modal -->
+  <div id="detail-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <button id="detail-prev" class="detail-nav detail-nav-left" aria-label="上一张">&#8249;</button>
+    <button id="detail-next" class="detail-nav detail-nav-right" aria-label="下一张">&#8250;</button>
+    <div class="detail-inner">
+      <button id="detail-close" class="detail-close" aria-label="关闭">&#x2715;</button>
+      <div class="detail-image-wrap">
+        <img id="detail-img" src="" alt="">
+        <svg id="detail-faces" class="face-overlay" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
+      </div>
+      <div class="detail-meta">
+        <h2 id="detail-title"></h2>
+        <table id="detail-table" class="meta-table"></table>
+      </div>
+    </div>
+  </div>
+
   <div id="dedup-modal" class="modal hidden">
     <div class="modal-inner">
       <h2>重复照片组</h2>

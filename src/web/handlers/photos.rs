@@ -7,6 +7,39 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use crate::web::AppState;
 
+#[derive(Debug, Serialize)]
+pub struct PhotoDetail {
+    pub id: i64,
+    pub path: String,
+    pub format: String,
+    pub taken_at: Option<String>,
+    pub timezone_offset: Option<i64>,
+    pub camera: Option<String>,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub import_status: String,
+}
+
+pub async fn get_photo(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<Json<PhotoDetail>, StatusCode> {
+    let row: Option<(i64, String, String, Option<String>, Option<i64>, Option<String>, Option<f64>, Option<f64>, String)> =
+        sqlx::query_as(
+            "SELECT id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status
+             FROM photos WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let (id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status) =
+        row.ok_or(StatusCode::NOT_FOUND)?;
+
+    Ok(Json(PhotoDetail { id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status }))
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PatchPhotoBody {
     pub taken_at: Option<String>,

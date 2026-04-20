@@ -232,6 +232,48 @@ async fn get_thumb_generates_and_caches() {
 }
 
 #[tokio::test]
+async fn get_photo_detail_returns_full_metadata() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, taken_at, camera, gps_lat, gps_lon, timezone_offset)
+         VALUES ('/tmp/detail.jpg', 'sha_d', 'jpeg', 'imported', '2024-06-15T10:30:00', 'iPhone 15', 37.77, -122.41, 480)
+         RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["id"], id);
+    assert_eq!(json["camera"], "iPhone 15");
+    assert_eq!(json["timezone_offset"], 480);
+    assert!((json["gps_lat"].as_f64().unwrap() - 37.77).abs() < 0.01);
+}
+
+#[tokio::test]
+async fn get_photo_detail_unknown_returns_404() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(Request::builder().uri("/api/photos/9999").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn patch_photo_updates_taken_at_and_timezone() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 
