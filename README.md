@@ -33,6 +33,13 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 | Photo time/timezone editing (DB-only, no EXIF write-back) | ✓ |
 | Fill missing metadata button (face re-analysis + geo re-coding for uncovered photos) | ✓ |
 | CLI `fill-missing` command with per-minute progress and final summary | ✓ |
+| Person status management (active / ignored / not-a-person) | ✓ |
+| Inline person name editing with blur-to-save | ✓ |
+| "…" context menu per person card (ignore / mark not-a-person) | ✓ |
+| Multi-select people + batch bar (name+merge into tree, batch ignore/not-person) | ✓ |
+| Client-side undo stack for all people edits | ✓ |
+| Person detail tree editing (set/change parent, sub-person panel) | ✓ |
+| Duplicate name detection with face thumbnails on rename | ✓ |
 
 ## Requirements
 
@@ -199,10 +206,12 @@ Command-line flags (when added) take precedence over the config file, which take
 | GET | `/api/geo/hierarchy` | Nested country → state → city hierarchy with photo counts |
 | POST | `/api/geo/regeocode` | Trigger background reverse-geocoding for photos with GPS but no cached location |
 | GET | `/api/geo/regeocode/status` | Poll whether the geocoding background task is still running |
-| GET | `/api/people` | List all people (clustered) |
+| GET | `/api/people` | List people (default: active only; `?status=all|ignored|not_a_person`, `?name_exact=`) |
 | GET | `/api/people/tree` | Nested person tree |
 | POST | `/api/people/cluster` | Trigger DBSCAN re-clustering |
 | POST | `/api/people/merge` | Merge two person records |
+| PATCH | `/api/people/:id` | Update person name and/or status |
+| POST | `/api/people/batch-update` | Batch-update status on multiple people |
 | GET | `/api/people/:id` | Photos belonging to a person |
 | POST | `/api/people/:id/reparent` | Change a person's parent in the tree |
 | GET | `/api/animals/species` | List detected animal species with photo counts |
@@ -246,7 +255,7 @@ Original photo files are **never modified**. The database stores only metadata a
 ## Development
 
 ```bash
-cargo nextest run            # run all 189 tests (5 more need ONNX model files, marked #[ignore])
+cargo nextest run            # run all 202 tests (5 more need ONNX model files, marked #[ignore])
 cargo clippy -- -D warnings  # lint
 cargo watch -x build         # rebuild on file changes
 ```
@@ -267,7 +276,7 @@ src/
   storage/       SQLite connection pool, migrations
   web/           Axum server, REST handlers, static file serving
 frontend/        Static HTML + CSS + JS (no build step)
-migrations/      SQLx migration files (0001–0009)
+migrations/      SQLx migration files (0001–0010)
 tests/           Integration tests + real-camera sample images
 docs/            Architecture design and development plan
 ```

@@ -64,7 +64,7 @@ src/
       dedup.rs         GET /api/dedup, POST /api/dedup/{group_id}/resolve
       albums.rs        GET /api/albums, GET /api/albums/{id}/photos, POST /api/albums/merge
       faces.rs         POST /api/faces/analyze, GET /api/faces/jobs/{id}, GET /api/photos/{id}/faces
-      people.rs        GET /api/people, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
+      people.rs        GET /api/people（含 status/name_exact 过滤）, PATCH /api/people/{id}, POST /api/people/batch-update, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
       geo.rs           GET /api/geo/hierarchy
       animals.rs       GET /api/animals/species, GET /api/animals/{species}/photos, GET /api/photos/{id}/animals
 frontend/              HTML + CSS + JS（编译进二进制，不依赖运行时工作目录）
@@ -78,6 +78,7 @@ migrations/
   0007_people.sql      people 表（人物记录）、person_faces 表（人物-人脸多对多）
   0008_geocache_hierarchy.sql geocache 新增 country/state/county 列
   0009_animals.sql     animals 表（动物检测结果，photo_id/species/confidence/bbox）
+  0010_people_status.sql  people.status 列（active / ignored / not_a_person）
 tests/
   web_api.rs           Web API 集成测试（tower::ServiceExt::oneshot）
   fixtures/            测试 fixture JPEG 文件（由 make_fixtures.py 生成）
@@ -85,7 +86,7 @@ tests/
   make_fixtures.py     生成所有 fixture（Pillow + 原始 EXIF 二进制写入）
 docs/
   REQUIREMENTS.md      需求文档
-  PLAN.md              开发计划（Steps 1–20b 已全部完成）
+  PLAN.md              开发计划（Steps 1–22 已全部完成）
   ARCHITECTURE.md      架构设计
   DESIGN.md            详细设计（模块接口、DB schema、API 参考、测试策略）
 ```
@@ -99,7 +100,7 @@ docs/
 
 ## 开发状态
 
-**已完成：Steps 1–20b（docs/PLAN.md 全部步骤）**
+**已完成：Steps 1–22（docs/PLAN.md 全部步骤）**
 
 | Step | 内容 |
 |------|------|
@@ -137,8 +138,14 @@ docs/
 | 19c | 前端：Leaflet 地图打点 + GET /api/photos/gps-points |
 | 20a | DB: animals 表 + YOLOv8-nano 导入集成（src/animal/） |
 | 20b | 动物 API + 前端动物标签页 |
+| 22a | DB: people.status 列（0010 迁移）+ PATCH /api/people/{id} + POST /api/people/batch-update + GET /api/people 支持 status/name_exact 过滤 |
+| 22b | 前端：内联姓名编辑 + "…" 右键菜单（忽略 / 标记非人物） |
+| 22c | 前端：多选人物 + 批量操作栏（命名合并 / 批量忽略 / 批量标记非人物） |
+| 22d | 前端：客户端撤销栈（↩ 撤销按钮，patch 逆操作） |
+| 22e | 前端：人物详情页树状编辑（更改父节点 / 子人物面板） |
+| 22f | 前端：重复姓名检测弹窗（面孔缩略图对比，选择合并或保留重名） |
 
-当前测试数：**195 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**202 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 

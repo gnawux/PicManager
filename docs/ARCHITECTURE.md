@@ -83,11 +83,11 @@ picmanager/
 │           ├── dedup.rs     # GET /api/dedup、POST /api/dedup/:id/resolve
 │           ├── albums.rs    # GET /api/albums、GET /api/albums/:id/photos、POST /api/albums/merge
 │           ├── faces.rs     # POST /api/faces/analyze（支持 missing_only）、GET /api/faces/jobs/:id、GET /api/photos/:id/faces
-│           ├── people.rs    # GET /api/people、GET /api/people/tree、POST /api/people/cluster/merge、GET /api/people/:id、POST /api/people/:id/reparent、GET /api/faces/:id/thumb
+│           ├── people.rs    # GET /api/people（含 status 过滤）、GET /api/people/tree、POST /api/people/cluster/merge、PATCH /api/people/:id、POST /api/people/batch-update、GET /api/people/:id、POST /api/people/:id/reparent、GET /api/faces/:id/thumb
 │           ├── geo.rs       # GET /api/geo/hierarchy、POST /api/geo/regeocode、GET /api/geo/regeocode/status
 │           └── animals.rs   # GET /api/animals/species、GET /api/animals/:species/photos、GET /api/photos/:id/animals
 ├── frontend/                # 静态 HTML + CSS + JS（编译时嵌入二进制）
-├── migrations/              # SQLx 数据库迁移文件（0001–0009）
+├── migrations/              # SQLx 数据库迁移文件（0001–0010）
 ├── tests/                   # 集成测试与测试 fixture
 └── docs/                    # 架构设计与开发计划
 ```
@@ -230,7 +230,7 @@ geocache        -- GPS 坐标 → 城市名缓存（lat_key、lon_key、city、c
 faces           -- 人脸区域（photo_id、bbox、confidence、embedding BLOB、embed_model）
 face_jobs       -- 人脸批量分析任务（status、scope、total/processed 进度）
 photo_stats     -- 单行计数器（active_count），替代全表 COUNT(*) 查询
-people          -- 人物记录（name、parent_id 支持树状层级、cover_face_id）
+people          -- 人物记录（name、status active/ignored/not_a_person、parent_id 支持树状层级、cover_face_id）
 person_faces    -- 人物-人脸多对多关联
 animals         -- 动物检测结果（photo_id、species、confidence、bbox、detected_at）
 ```
@@ -265,10 +265,12 @@ GET    /api/faces/:id/thumb               # 人脸裁剪缩略图（磁盘缓存
 GET    /api/geo/hierarchy                 # 地理层级（country→state→city 含照片数）
 POST   /api/geo/regeocode                 # 为有 GPS 但缺 geocache 的照片触发后台反地理编码
 GET    /api/geo/regeocode/status          # 查询反地理编码后台任务是否在运行
-GET    /api/people                        # 人物列表
+GET    /api/people                        # 人物列表（支持 ?status=active|ignored|not_a_person|all 和 ?name_exact=xxx）
 GET    /api/people/tree                   # 人物树（嵌套 JSON）
 POST   /api/people/cluster                # 触发 DBSCAN 重聚类
 POST   /api/people/merge                  # 合并两个人物
+PATCH  /api/people/:id                    # 修改人物姓名或状态
+POST   /api/people/batch-update           # 批量修改人物状态
 GET    /api/people/:id                    # 人物照片列表
 POST   /api/people/:id/reparent           # 变更人物父节点
 GET    /api/animals/species               # 动物种类列表（含照片数）
