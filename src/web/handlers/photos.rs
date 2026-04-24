@@ -255,7 +255,7 @@ fn generate_thumb(path: &str, size: u32) -> anyhow::Result<Vec<u8>> {
     use std::io::Cursor;
 
     let img = ImageReader::open(path)?.decode()?;
-    let thumb = img.thumbnail(size, size);
+    let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
 
     let mut buf = Vec::new();
     thumb.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;

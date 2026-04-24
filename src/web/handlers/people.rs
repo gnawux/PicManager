@@ -372,7 +372,7 @@ fn crop_face(path: &str, x: i64, y: i64, w: i64, h: i64) -> anyhow::Result<Vec<u
     let ch = (h.min(ih - y)).max(1) as u32;
 
     let cropped = img.crop_imm(cx, cy, cw, ch);
-    let thumb = cropped.thumbnail(160, 160);
+    let thumb = cropped.resize_to_fill(160, 160, image::imageops::FilterType::Triangle);
     let mut buf = Vec::new();
     thumb.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;
     Ok(buf)
