@@ -153,16 +153,41 @@ button:disabled { opacity: .5; cursor: default; }
   gap: 10px; align-content: start;
 }
 .person-card {
+  position: relative;
   background: #fff; border-radius: 10px; overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0,0,0,.1); cursor: pointer; text-align: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,.1); cursor: default; text-align: center;
 }
 .person-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,.18); }
 .person-card img {
   width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #eee;
+  cursor: pointer;
 }
 .person-card .person-meta { padding: 6px 8px; font-size: 12px; color: #444; }
-.person-card .person-name { font-weight: 600; }
-.person-card .person-count { font-size: 11px; color: #888; }
+.person-name-cell { font-weight: 600; cursor: text; border-radius: 4px; padding: 1px 2px; }
+.person-name-cell:hover { background: #f0f0ff; color: #6c7af4; }
+.person-card .person-count { font-size: 11px; color: #888; cursor: pointer; }
+.person-menu-btn {
+  position: absolute; top: 4px; right: 4px;
+  background: rgba(255,255,255,.85); color: #555; border: none;
+  font-size: 15px; line-height: 1; padding: 2px 7px; border-radius: 5px;
+  opacity: 0; transition: opacity .15s; cursor: pointer;
+}
+.person-card:hover .person-menu-btn { opacity: 1; }
+.person-context-menu {
+  position: fixed; z-index: 9999;
+  background: #fff; border: 1px solid #ddd; border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0,0,0,.15); padding: 4px 0; min-width: 148px;
+}
+.person-context-menu button {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 14px; background: none; color: #333;
+  border-radius: 0; font-weight: normal; font-size: 13px;
+}
+.person-context-menu button:hover { background: #f5f5f5; color: #e74c3c; }
+.person-name-inline-input {
+  font-size: 12px; font-weight: 600; width: 100%; padding: 2px 4px;
+  border: 1px solid #a0a0f0; border-radius: 4px; outline: none;
+}
 .person-name-input {
   padding: 5px 8px; border-radius: 6px; border: 1px solid #ddd;
   font-size: 14px; min-width: 160px;

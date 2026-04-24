@@ -58,6 +58,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('merge-confirm-btn').addEventListener('click', confirmMerge);
   document.getElementById('merge-search').addEventListener('input', filterMergeList);
 
+  // Close floating context menus when clicking outside
+  document.addEventListener('click', () => closePersonMenu());
+
   document.getElementById('detail-edit-btn').addEventListener('click', () => {
     openDetailEdit();
   });
@@ -655,10 +658,26 @@ async function loadPeopleList() {
     card.innerHTML = `
       <img src="${thumbSrc}" loading="lazy" alt="">
       <div class="person-meta">
-        <div class="person-name">${p.name || '未命名'}</div>
+        <div class="person-name-cell" data-pid="${p.id}" data-name="${escHtml(p.name || '')}">${escHtml(p.name || '未命名')}</div>
         <div class="person-count">${p.photo_count} 张照片</div>
-      </div>`;
-    card.addEventListener('click', () => showPersonDetail(p.id));
+      </div>
+      <button class="person-menu-btn" aria-label="更多操作">⋯</button>`;
+
+    card.querySelector('img').addEventListener('click', () => showPersonDetail(p.id));
+    card.querySelector('.person-count').addEventListener('click', () => showPersonDetail(p.id));
+
+    const nameCell = card.querySelector('.person-name-cell');
+    nameCell.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startInlineNameEdit(nameCell, p.id);
+    });
+
+    const menuBtn = card.querySelector('.person-menu-btn');
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      showPersonMenu(menuBtn, p.id, card);
+    });
+
     grid.appendChild(card);
   }
 }
@@ -739,10 +758,112 @@ async function savePersonName() {
   const input = document.getElementById('person-name-input');
   const personId = +input.dataset.personId;
   if (!personId) return;
-  // We don't have a PATCH /api/people/:id yet; store in state for now
-  // and will add the endpoint in a later step if needed
+  const newName = input.value.trim();
+  await patchPerson(personId, { name: newName });
   const p = state.allPeople.find(x => x.id === personId);
-  if (p) p.name = input.value;
+  if (p) p.name = newName;
+}
+
+// ── People inline edit & context menu ────────────────────────────────────────
+
+function escHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function patchPerson(personId, fields) {
+  const resp = await fetch(`/api/people/${personId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(fields),
+  });
+  return resp.ok;
+}
+
+function startInlineNameEdit(cell, personId) {
+  if (cell.querySelector('input')) return; // already editing
+  const currentName = cell.dataset.name;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'person-name-inline-input';
+  input.value = currentName;
+  cell.innerHTML = '';
+  cell.appendChild(input);
+  input.focus();
+  input.select();
+
+  let saved = false;
+  const commit = async () => {
+    if (saved) return;
+    saved = true;
+    const newName = input.value.trim();
+    if (newName !== currentName) {
+      const ok = await patchPerson(personId, { name: newName });
+      if (ok) {
+        cell.dataset.name = newName;
+        cell.innerHTML = escHtml(newName || '未命名');
+        const p = state.allPeople.find(x => x.id === personId);
+        if (p) p.name = newName;
+        return;
+      }
+    }
+    cell.innerHTML = escHtml(currentName || '未命名');
+  };
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { input.blur(); }
+    if (e.key === 'Escape') {
+      saved = true;
+      cell.innerHTML = escHtml(currentName || '未命名');
+    }
+  });
+}
+
+let _activePersonMenu = null;
+
+function closePersonMenu() {
+  if (_activePersonMenu) {
+    _activePersonMenu.remove();
+    _activePersonMenu = null;
+  }
+}
+
+function showPersonMenu(btn, personId, card) {
+  closePersonMenu();
+  const menu = document.createElement('div');
+  menu.className = 'person-context-menu';
+  menu.innerHTML = `
+    <button data-action="ignore">忽略此人</button>
+    <button data-action="not-person">标记为非人物</button>`;
+  document.body.appendChild(menu);
+  _activePersonMenu = menu;
+
+  const rect = btn.getBoundingClientRect();
+  menu.style.top = `${rect.bottom + 4}px`;
+  menu.style.left = `${rect.left}px`;
+
+  menu.querySelector('[data-action="ignore"]').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    closePersonMenu();
+    if (!confirm('确定要忽略此人？操作完成后可在"已忽略"筛选中恢复。')) return;
+    const ok = await patchPerson(personId, { status: 'ignored' });
+    if (ok) removePersonCard(personId, card);
+  });
+  menu.querySelector('[data-action="not-person"]').addEventListener('click', async (e) => {
+    e.stopPropagation();
+    closePersonMenu();
+    if (!confirm('确定要标记为非人物？这将从人物列表中移除该聚类。')) return;
+    const ok = await patchPerson(personId, { status: 'not_a_person' });
+    if (ok) removePersonCard(personId, card);
+  });
+}
+
+function removePersonCard(personId, card) {
+  state.allPeople = state.allPeople.filter(p => p.id !== personId);
+  document.getElementById('people-count').textContent = `共 ${state.allPeople.length} 人`;
+  card.style.transition = 'opacity 0.25s';
+  card.style.opacity = '0';
+  setTimeout(() => card.remove(), 250);
 }
 
 async function fillMissingMeta() {
