@@ -15,6 +15,7 @@ const state = {
   currentPersonId: null, // person being viewed in detail
   allPeople: [],    // cached people list for merge dialog
   mergeTargetId: null,
+  selectedPeople: new Set(), // selected person IDs for batch ops
   // Animals
   animalSpecies: null,  // current species being browsed
   animalPage: 1,
@@ -57,6 +58,16 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('merge-confirm-btn').addEventListener('click', confirmMerge);
   document.getElementById('merge-search').addEventListener('input', filterMergeList);
+
+  // People batch bar
+  document.getElementById('people-batch-merge-btn').addEventListener('click', openPeopleNameMergeDialog);
+  document.getElementById('people-batch-ignore-btn').addEventListener('click', () => batchUpdatePeopleStatus('ignored'));
+  document.getElementById('people-batch-notperson-btn').addEventListener('click', () => batchUpdatePeopleStatus('not_a_person'));
+  document.getElementById('people-batch-cancel-btn').addEventListener('click', clearPeopleSelection);
+  document.getElementById('people-merge-name-confirm').addEventListener('click', confirmPeopleNameMerge);
+  document.getElementById('people-merge-name-cancel').addEventListener('click', () => {
+    document.getElementById('people-name-merge-modal').classList.add('hidden');
+  });
 
   // Close floating context menus when clicking outside
   document.addEventListener('click', () => closePersonMenu());
@@ -655,7 +666,9 @@ async function loadPeopleList() {
     const thumbSrc = p.cover_face_id
       ? `/api/faces/${p.cover_face_id}/thumb`
       : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="%23ddd"/></svg>';
+    if (state.selectedPeople.has(p.id)) card.classList.add('selected');
     card.innerHTML = `
+      <div class="person-card-check"></div>
       <img src="${thumbSrc}" loading="lazy" alt="">
       <div class="person-meta">
         <div class="person-name-cell" data-pid="${p.id}" data-name="${escHtml(p.name || '')}">${escHtml(p.name || '未命名')}</div>
@@ -663,8 +676,25 @@ async function loadPeopleList() {
       </div>
       <button class="person-menu-btn" aria-label="更多操作">⋯</button>`;
 
-    card.querySelector('img').addEventListener('click', () => showPersonDetail(p.id));
-    card.querySelector('.person-count').addEventListener('click', () => showPersonDetail(p.id));
+    // In select mode, clicking the card (not name or menu) toggles selection
+    card.querySelector('img').addEventListener('click', () => {
+      if (state.selectedPeople.size > 0 || document.getElementById('people-grid').classList.contains('people-select-mode')) {
+        togglePersonSelect(p.id, card);
+      } else {
+        showPersonDetail(p.id);
+      }
+    });
+    card.querySelector('.person-count').addEventListener('click', () => {
+      if (state.selectedPeople.size > 0) {
+        togglePersonSelect(p.id, card);
+      } else {
+        showPersonDetail(p.id);
+      }
+    });
+    card.querySelector('.person-card-check').addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePersonSelect(p.id, card);
+    });
 
     const nameCell = card.querySelector('.person-name-cell');
     nameCell.addEventListener('click', (e) => {
@@ -684,8 +714,103 @@ async function loadPeopleList() {
 
 function showPeopleList() {
   state.currentPersonId = null;
+  clearPeopleSelection();
   document.getElementById('people-list-section').classList.remove('hidden');
   document.getElementById('person-detail-section').classList.add('hidden');
+  loadPeopleList();
+}
+
+// ── People multi-select & batch operations ────────────────────────────────────
+
+function togglePersonSelect(personId, card) {
+  if (state.selectedPeople.has(personId)) {
+    state.selectedPeople.delete(personId);
+    card.classList.remove('selected');
+  } else {
+    state.selectedPeople.add(personId);
+    card.classList.add('selected');
+  }
+  updatePeopleBatchBar();
+}
+
+function clearPeopleSelection() {
+  state.selectedPeople.clear();
+  document.querySelectorAll('#people-grid .person-card.selected')
+    .forEach(c => c.classList.remove('selected'));
+  updatePeopleBatchBar();
+}
+
+function updatePeopleBatchBar() {
+  const bar = document.getElementById('people-batch-bar');
+  const n = state.selectedPeople.size;
+  if (n > 0) {
+    bar.classList.remove('hidden');
+    document.getElementById('people-batch-count').textContent = `已选 ${n} 人`;
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+async function batchUpdatePeopleStatus(status) {
+  const ids = [...state.selectedPeople];
+  if (ids.length === 0) return;
+  const label = status === 'ignored' ? '忽略' : '标记为非人物';
+  if (!confirm(`确定要${label}选中的 ${ids.length} 位人物？`)) return;
+
+  const resp = await fetch('/api/people/batch-update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, status }),
+  });
+  if (!resp.ok) return;
+
+  // Remove affected cards from grid
+  for (const pid of ids) {
+    const card = document.querySelector(`#people-grid .person-card.selected[data-card-pid="${pid}"]`)
+      || [...document.querySelectorAll('#people-grid .person-card.selected')]
+          .find(c => +c.querySelector('.person-name-cell')?.dataset.pid === pid);
+    if (card) card.remove();
+  }
+  state.allPeople = state.allPeople.filter(p => !ids.includes(p.id));
+  clearPeopleSelection();
+  document.getElementById('people-count').textContent = `共 ${state.allPeople.length} 人`;
+}
+
+function openPeopleNameMergeDialog() {
+  if (state.selectedPeople.size < 1) return;
+  document.getElementById('people-merge-name-input').value = '';
+  document.getElementById('people-name-merge-modal').classList.remove('hidden');
+  document.getElementById('people-merge-name-input').focus();
+}
+
+async function confirmPeopleNameMerge() {
+  const ids = [...state.selectedPeople];
+  if (ids.length === 0) return;
+  const name = document.getElementById('people-merge-name-input').value.trim();
+  document.getElementById('people-name-merge-modal').classList.add('hidden');
+
+  // Pick primary: the person with the most photos; fall back to first id
+  const primary = state.allPeople
+    .filter(p => ids.includes(p.id))
+    .sort((a, b) => b.photo_count - a.photo_count)[0];
+  const primaryId = primary ? primary.id : ids[0];
+  const others = ids.filter(id => id !== primaryId);
+
+  // Merge others into primary (sequential; each merge can fail independently)
+  for (const srcId of others) {
+    await fetch('/api/people/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_id: srcId, target_id: primaryId }),
+    });
+  }
+
+  // Rename primary if a name was provided
+  if (name) {
+    await patchPerson(primaryId, { name });
+  }
+
+  clearPeopleSelection();
   loadPeopleList();
 }
 

@@ -132,6 +132,14 @@
             <span id="people-count"></span>
             <button id="recluster-btn">重新聚类</button>
           </div>
+          <!-- Batch action bar (shown when ≥1 person is selected) -->
+          <div id="people-batch-bar" class="batch-bar hidden">
+            <span id="people-batch-count">已选 0 人</span>
+            <button id="people-batch-merge-btn">命名并合并</button>
+            <button id="people-batch-ignore-btn" class="btn-ghost">忽略全部</button>
+            <button id="people-batch-notperson-btn" class="btn-ghost">标记为非人物</button>
+            <button id="people-batch-cancel-btn" class="btn-ghost">✕ 取消</button>
+          </div>
           <div id="recluster-status" class="status-text" style="padding:0 16px 8px"></div>
           <div id="people-grid" class="people-grid"></div>
         </div>
@@ -172,6 +180,21 @@
       <div style="display:flex;gap:8px">
         <button id="batch-time-save-btn">保存</button>
         <button id="batch-time-cancel-btn" class="btn-ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- People: name-and-merge dialog -->
+  <div id="people-name-merge-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:380px">
+      <h2>命名并合并</h2>
+      <p style="font-size:12px;color:#888;margin-bottom:12px">为合并后的人物输入姓名（留空则保留已有名称）：</p>
+      <input id="people-merge-name-input" type="text" placeholder="输入姓名…"
+             style="display:block;width:100%;padding:6px;border:1px solid #ccc;border-radius:6px;margin-bottom:16px" />
+      <div style="display:flex;gap:8px;align-items:center">
+        <button id="people-merge-name-confirm">合并</button>
+        <button id="people-merge-name-cancel" class="btn-ghost">取消</button>
+        <span style="font-size:11px;color:#e74c3c;margin-left:auto">合并不可撤销</span>
       </div>
     </div>
   </div>
