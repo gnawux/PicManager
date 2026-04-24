@@ -1,6 +1,6 @@
 # 开发计划
 
-> **状态**：Steps 1–21 全部已完成（2026-04）。
+> **状态**：Steps 1–22 全部已完成（2026-04）。
 
 目标：以最小可运行增量推进，每步结束后都能编译并有可验证的输出。
 
@@ -989,3 +989,154 @@ pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64>
 - `cargo nextest run` 全部通过（含新增的 `scope_for_missing` 和 `count_missing_geo` 测试）
 - `picmanager fill-missing` 在空库上立即输出"无需补全，退出"
 - 在含未分析照片的库上运行，每分钟打印进度，结束时有汇总
+
+---
+
+## Step 22 — 人物页编辑增强
+
+**目标**：在已有人物列表和详情页基础上，补全单人物编辑、多选批量操作、操作撤销、树状结构深度编辑、以及重复姓名保护，形成完整的人物管理工作流。
+
+---
+
+### 22a — DB Schema 扩展 + 后端 API 补全
+
+**目标**：在数据库中记录人物状态，并补齐前端所需的全部 REST 接口。
+
+**DB 迁移**（`migrations/0010_people_status.sql`）：
+
+```sql
+ALTER TABLE people ADD COLUMN status TEXT NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'ignored', 'not_a_person'));
+```
+
+**新增 / 变更接口**（`web/handlers/people.rs`）：
+
+```
+PATCH /api/people/:id
+    body: { "name": "张三", "status": "ignored" }   -- 字段均可选，只更新出现的字段
+    resp: 200 OK | 404
+
+POST /api/people/batch-update
+    body: { "ids": [1,2,3], "status": "not_a_person" }
+    resp: { "updated": 3 }
+
+GET  /api/people
+    新增可选查询参数 status=active|ignored|not_a_person|all
+    默认只返回 status='active' 的人物（保持向后兼容）
+
+GET  /api/people?name_exact=张三
+    精确名称查找，返回同名人物列表（含 cover_face_id），供重复检测使用
+```
+
+**单元测试**：
+- `PATCH /api/people/:id` 更新 `name` 后 DB 字段已变更
+- `PATCH /api/people/:id` 更新 `status` 为 `ignored` 后 `GET /api/people`（默认）不再返回该人物
+- `POST /api/people/batch-update` 批量改状态，返回 `updated = N`
+- `GET /api/people?status=all` 返回全部人物（含 ignored / not_a_person）
+- `GET /api/people?name_exact=张三` 返回同名列表
+
+**验收**：`cargo nextest run` 全部通过；DB 中 `people` 表含 `status` 列。
+
+---
+
+### 22b — 前端：内联改名 + 单人物操作菜单
+
+**目标**：在人物网格的每张卡片上，实现点击改名和"…"扩展菜单。
+
+**人物卡片改动（`frontend/app.js`）**：
+
+- 姓名区域改为可点击：点击后替换为 `<input>` 文本框，失焦或回车调用 `PATCH /api/people/:id`（name 字段）后还原为文字
+- 卡片右上角增加"…"按钮，点击弹出浮层菜单：
+  - 忽略此人 → `PATCH /api/people/:id { status: 'ignored' }`
+  - 标记为非人物 → `PATCH /api/people/:id { status: 'not_a_person' }`
+  - 确认对话框：`"确定要忽略/标记？此操作可撤销。"`
+
+**人物列表刷新**：操作成功后从列表中移除该卡片（因为默认只显示 active）。
+
+**验收**：点击人物名称进入编辑态，输入后保存显示新名称；"…" 菜单忽略某人后该卡片从列表消失；`?status=ignored` 筛选可见被忽略的人物。
+
+---
+
+### 22c — 前端：多选 + 批量操作
+
+**目标**：支持在人物网格中框选多个聚类，统一命名合并或批量改状态。
+
+**多选模式**：
+
+- 每张人物卡片 hover 时显示勾选框；点击勾选框进入多选模式，其余卡片也显示勾选框
+- 顶部浮出批量操作栏，显示已选人数，提供：
+  1. **命名并合并**：输入姓名，从已选中的聚类里选定"主体"（默认照片数最多的一个），其余并入主体；可选择设置合并后的父节点（搜索框），留空为顶级；调用 `POST /api/people/merge`（多次，把其他 source 依次并入 target）+ `PATCH /api/people/:id { name: ... }`
+  2. **批量忽略** → `POST /api/people/batch-update { ids, status: 'ignored' }`
+  3. **批量标记非人物** → `POST /api/people/batch-update { ids, status: 'not_a_person' }`
+  4. **取消选择**
+
+**操作完成**后清空选中状态，刷新人物列表。
+
+**验收**：选中 3 个聚类，命名合并后人物列表只剩 1 张该人的卡片，名称正确；批量忽略后所有选中卡片消失。
+
+---
+
+### 22d — 前端：操作撤销
+
+**目标**：为所有人物编辑提供"撤销"按钮，防止误操作。
+
+**设计**：
+
+撤销完全在前端实现，维护一个操作历史栈（数组），每次操作成功后压入一条撤销记录：
+
+| 原操作 | 撤销操作 |
+|--------|----------|
+| PATCH name | PATCH 回旧 name |
+| PATCH status → ignored/not_a_person | PATCH status → active |
+| 批量 status 变更 | 批量 status 变回原值（需在操作前记录每条旧状态）|
+| merge A+B→B | reparent 已删除的 A 无法恢复 → 特殊处理：改为"撤销合并"需调用 `POST /api/people/cluster` 重新聚类，风险较高，改为**仅在确认对话框提示"合并不可撤销"**，不进入撤销栈 |
+| reparent | reparent 回旧 parent_id |
+
+页面右上角显示"撤销"按钮（有历史时高亮），点击执行栈顶逆操作，并从栈中弹出。页面刷新后历史栈清空。
+
+**注意**：合并操作（人脸从 source 并入 target）在数据库层面不可精确逆转，故在确认时单独提示"合并操作无法撤销，确认？"，不加入撤销栈。其余所有操作均可撤销。
+
+**验收**：改名后点击"撤销"恢复旧名；忽略一个人物后点击"撤销"该人物重新出现；合并时出现不可撤销提示。
+
+---
+
+### 22e — 前端：人物详情页树状结构编辑
+
+**目标**：点击人物缩略图进入详情页，支持在页面内直接调整树状结构和移出操作。
+
+**详情页改动（路由 `#/people/:id`，已有骨架，本步深化）**：
+
+- **设置父节点**：详情页顶部显示当前所在路径（`顶级 > 父节点名` 面包屑）；点击"更改父节点"弹出搜索框，输入人名后从 `GET /api/people` 中实时过滤，选定后调用 `POST /api/people/:id/reparent { new_parent_id }`；选"顶级"则传 `null`
+- **子节点面板**（侧边栏或折叠区）：列出该人物的所有直接子节点（姓名 + 代表性头像），每项提供：
+  - "移至顶级" → `POST /api/people/:id/reparent { new_parent_id: null }`
+  - "移至其他人物" → 同"设置父节点"弹窗，但操作对象为子节点
+- **操作均进入撤销栈**（同 22d）
+
+**验收**：进入人物详情后，面包屑显示正确层级；更改父节点后面包屑更新；子节点"移至顶级"后该子节点在父节点面板消失，刷新人物列表后出现在顶级。
+
+---
+
+### 22f — 重复姓名检测
+
+**目标**：命名或改名时，若与已有人物同名，弹对话框展示双方缩略图，由用户决定是否合并。
+
+**触发场景**：
+1. 内联改名（22b）失焦/回车时
+2. 多选命名合并输入名称时（22c）
+
+**流程**：
+
+1. 即将保存名称时，先调用 `GET /api/people?name_exact=<名称>` 查重
+2. 若返回空列表 → 直接保存，流程结束
+3. 若返回一个或多个同名人物 → 弹出确认对话框：
+   - 对话框标题："已存在同名人物"
+   - 并排展示：当前待命名人物的代表性人脸缩略图（`GET /api/faces/:id/thumb`） + 已有同名人物的缩略图（多个时逐行展示）
+   - 每行操作按钮："是同一人（合并）" → `POST /api/people/merge { source: 当前, target: 已有 }` + 合并不可撤销提示；"不同人（保留重名）" → 直接保存名称
+4. 用户关闭对话框（不选）等同于"不同人（保留重名）"
+
+**单元测试**（`GET /api/people?name_exact=`）：
+- 精确匹配返回同名人物列表
+- 大小写严格匹配（张三 ≠ 张 三，前后无空格处理由前端 `trim()` 保证）
+- 空名称时不触发查重（前端校验）
+
+**验收**：将已有"张三"聚类再命名一个聚类为"张三"，弹出对话框并展示双方缩略图；选"是同一人"后两者合并；选"不同人"后人物列表中出现两个"张三"。
