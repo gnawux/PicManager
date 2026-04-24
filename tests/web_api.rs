@@ -917,3 +917,162 @@ async fn get_photo_animals_returns_detections() {
     assert_eq!(arr[0]["width"], 200);
     assert_eq!(arr[0]["height"], 300);
 }
+
+// ── Step 22a: people status management ──────────────────────────────────────
+
+fn make_app_with_pool(
+    pool: SqlitePool,
+    tmp: &tempfile::TempDir,
+) -> axum::Router {
+    let mut config = picmanager::config::Config::default();
+    config.thumb_cache_dir = tmp.path().to_path_buf();
+    picmanager::web::router(pool, config)
+}
+
+#[tokio::test]
+async fn patch_person_name_updates() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+    let pid: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('Old') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let app = make_app_with_pool(pool.clone(), &tmp);
+
+    let body = serde_json::json!({ "name": "New Name" });
+    let resp = app.oneshot(
+        Request::builder()
+            .uri(&format!("/api/people/{pid}"))
+            .method("PATCH")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string())).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM people WHERE id = ?")
+        .bind(pid).fetch_one(&pool).await.unwrap();
+    assert_eq!(name.as_deref(), Some("New Name"));
+}
+
+#[tokio::test]
+async fn patch_person_unknown_returns_404() {
+    let app = test_app().await;
+    let body = serde_json::json!({ "name": "X" });
+    let resp = app.oneshot(
+        Request::builder()
+            .uri("/api/people/9999")
+            .method("PATCH")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string())).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn list_people_default_active_only() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+    sqlx::query("INSERT INTO people (name, status) VALUES ('Active', 'active')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO people (name, status) VALUES ('Ignored', 'ignored')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO people (name, status) VALUES ('NotPerson', 'not_a_person')")
+        .execute(&pool).await.unwrap();
+    let app = make_app_with_pool(pool.clone(), &tmp);
+
+    let resp = app.oneshot(
+        Request::builder().uri("/api/people").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["name"], "Active");
+}
+
+#[tokio::test]
+async fn list_people_status_all_includes_all() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+    sqlx::query("INSERT INTO people (name, status) VALUES ('A', 'active')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO people (name, status) VALUES ('B', 'ignored')")
+        .execute(&pool).await.unwrap();
+    let app = make_app_with_pool(pool.clone(), &tmp);
+
+    let resp = app.oneshot(
+        Request::builder().uri("/api/people?status=all").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn patch_person_status_ignored_hides_from_list() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+    let pid: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('Alice') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let app = make_app_with_pool(pool.clone(), &tmp);
+
+    let body = serde_json::json!({ "status": "ignored" });
+    let resp = app.clone().oneshot(
+        Request::builder()
+            .uri(&format!("/api/people/{pid}"))
+            .method("PATCH")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string())).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let resp2 = app.oneshot(
+        Request::builder().uri("/api/people").body(Body::empty()).unwrap()
+    ).await.unwrap();
+    let bytes = axum::body::to_bytes(resp2.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn batch_update_people_status() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+    let pid1: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('P1') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let pid2: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('P2') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let _pid3: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('P3') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let app = make_app_with_pool(pool.clone(), &tmp);
+
+    let body = serde_json::json!({ "ids": [pid1, pid2], "status": "not_a_person" });
+    let resp = app.oneshot(
+        Request::builder()
+            .uri("/api/people/batch-update")
+            .method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string())).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["updated"], 2);
+
+    let active: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM people WHERE status='active'")
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(active, 1);
+}
+
+#[tokio::test]
+async fn people_name_exact_search() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+    sqlx::query("INSERT INTO people (name) VALUES ('Zhang San')").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO people (name) VALUES ('Zhang San')").execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO people (name) VALUES ('Li Si')").execute(&pool).await.unwrap();
+    let app = make_app_with_pool(pool.clone(), &tmp);
+
+    let resp = app.oneshot(
+        Request::builder()
+            .uri("/api/people?name_exact=Zhang+San")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 2);
+}

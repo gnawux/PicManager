@@ -16,6 +16,30 @@ pub struct PersonRow {
     pub cover_face_id: Option<i64>,
     pub face_count: i64,
     pub photo_count: i64,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PeopleQuery {
+    pub status: Option<String>,
+    pub name_exact: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PatchPersonBody {
+    pub name: Option<String>,
+    pub status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BatchUpdatePeopleBody {
+    pub ids: Vec<i64>,
+    pub status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BatchUpdateResponse {
+    pub updated: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -124,10 +148,9 @@ pub async fn get_people_tree(
 
 pub async fn list_people(
     State(state): State<AppState>,
+    Query(params): Query<PeopleQuery>,
 ) -> Result<Json<Vec<PersonRow>>, StatusCode> {
-    let rows: Vec<(i64, Option<String>, Option<i64>, Option<i64>, i64, i64)> =
-        sqlx::query_as(
-            "SELECT p.id, p.name, p.parent_id,
+    const BASE: &str = "SELECT p.id, p.name, p.parent_id, p.status,
                     COALESCE(p.cover_face_id,
                         (SELECT pf2.face_id FROM person_faces pf2
                          WHERE pf2.person_id = p.id
@@ -136,20 +159,99 @@ pub async fn list_people(
                     COUNT(DISTINCT f.photo_id)       AS photo_count
              FROM people p
              LEFT JOIN person_faces pf ON pf.person_id = p.id
-             LEFT JOIN faces f ON f.id = pf.face_id
-             GROUP BY p.id",
-        )
-        .fetch_all(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+             LEFT JOIN faces f ON f.id = pf.face_id";
+
+    type Row = (i64, Option<String>, Option<i64>, String, Option<i64>, i64, i64);
+
+    let rows: Vec<Row> = if let Some(name) = &params.name_exact {
+        sqlx::query_as(&format!("{BASE} WHERE p.name = ? GROUP BY p.id"))
+            .bind(name)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        let status_filter = params.status.as_deref().unwrap_or("active");
+        if status_filter == "all" {
+            sqlx::query_as(&format!("{BASE} GROUP BY p.id"))
+                .fetch_all(&state.pool)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        } else {
+            sqlx::query_as(&format!("{BASE} WHERE p.status = ? GROUP BY p.id"))
+                .bind(status_filter)
+                .fetch_all(&state.pool)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        }
+    };
 
     let people = rows
         .into_iter()
-        .map(|(id, name, parent_id, cover_face_id, face_count, photo_count)| PersonRow {
-            id, name, parent_id, cover_face_id, face_count, photo_count,
+        .map(|(id, name, parent_id, status, cover_face_id, face_count, photo_count)| PersonRow {
+            id, name, parent_id, status, cover_face_id, face_count, photo_count,
         })
         .collect();
     Ok(Json(people))
+}
+
+pub async fn patch_person(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<PatchPersonBody>,
+) -> Result<StatusCode, StatusCode> {
+    if body.name.is_none() && body.status.is_none() {
+        return Ok(StatusCode::OK);
+    }
+
+    let mut affected: u64 = 0;
+
+    if let Some(name) = &body.name {
+        let r = sqlx::query("UPDATE people SET name = ? WHERE id = ?")
+            .bind(name)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        affected = r.rows_affected();
+    }
+
+    if let Some(status) = &body.status {
+        let r = sqlx::query("UPDATE people SET status = ? WHERE id = ?")
+            .bind(status)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        affected = r.rows_affected();
+    }
+
+    if affected == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(StatusCode::OK)
+    }
+}
+
+pub async fn batch_update_people(
+    State(state): State<AppState>,
+    Json(body): Json<BatchUpdatePeopleBody>,
+) -> Result<Json<BatchUpdateResponse>, StatusCode> {
+    if body.ids.is_empty() {
+        return Ok(Json(BatchUpdateResponse { updated: 0 }));
+    }
+
+    let placeholders = body.ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("UPDATE people SET status = ? WHERE id IN ({placeholders})");
+    let mut q = sqlx::query(&sql).bind(&body.status);
+    for id in &body.ids {
+        q = q.bind(id);
+    }
+    let result = q
+        .execute(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(BatchUpdateResponse { updated: result.rows_affected() }))
 }
 
 pub async fn cluster_people(
