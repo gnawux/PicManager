@@ -74,6 +74,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Undo
   document.getElementById('people-undo-btn').addEventListener('click', undoPeopleOp);
 
+  // Duplicate name dialog
+  document.getElementById('dup-name-merge-btn').addEventListener('click', confirmDupNameMerge);
+  document.getElementById('dup-name-keep-btn').addEventListener('click', () => {
+    document.getElementById('dup-name-modal').classList.add('hidden');
+    if (_dupNameResolve) { _dupNameResolve('keep'); _dupNameResolve = null; }
+  });
+
   // Close floating context menus when clicking outside
   document.addEventListener('click', () => closePersonMenu());
 
@@ -809,7 +816,16 @@ async function confirmPeopleNameMerge() {
   const primaryId = primary ? primary.id : ids[0];
   const others = ids.filter(id => id !== primaryId);
 
-  // Merge others into primary (sequential; each merge can fail independently)
+  // Check for duplicate name before proceeding (use primaryId as own)
+  if (name) {
+    const decision = await checkDuplicateName(name, primaryId);
+    if (decision === 'merged') {
+      clearPeopleSelection();
+      return;  // confirmDupNameMerge already reloaded the list
+    }
+  }
+
+  // Merge others into primary
   for (const srcId of others) {
     await fetch('/api/people/merge', {
       method: 'POST',
@@ -1021,6 +1037,73 @@ async function savePersonName() {
   }
 }
 
+// ── Duplicate name detection ─────────────────────────────────────────────────
+
+let _dupNameResolve = null;
+let _dupNameContext = null;  // { newPersonId, matchedPeople }
+
+async function checkDuplicateName(name, ownPersonId) {
+  if (!name.trim()) return 'keep';
+  const matches = await fetchJSON(`/api/people?name_exact=${encodeURIComponent(name.trim())}`);
+  if (!matches || matches.length === 0) return 'keep';
+  const others = matches.filter(p => p.id !== ownPersonId);
+  if (others.length === 0) return 'keep';
+
+  _dupNameContext = { ownPersonId, matchedPeople: others };
+  return new Promise(resolve => {
+    _dupNameResolve = resolve;
+    showDupNameDialog(name, ownPersonId, others);
+  });
+}
+
+function showDupNameDialog(name, ownPersonId, matches) {
+  document.getElementById('dup-name-desc').textContent =
+    `姓名"${name}"已有 ${matches.length} 位同名人物，是否为同一人？`;
+
+  const pairs = document.getElementById('dup-name-pairs');
+  pairs.innerHTML = '';
+
+  // Show own person thumb on the left
+  const ownPerson = state.allPeople.find(p => p.id === ownPersonId);
+  if (ownPerson) {
+    const d = document.createElement('div');
+    d.className = 'dup-name-face';
+    const src = ownPerson.cover_face_id ? `/api/faces/${ownPerson.cover_face_id}/thumb` : '';
+    d.innerHTML = `<img src="${src}" alt=""><span>当前（待命名）</span>`;
+    pairs.appendChild(d);
+  }
+
+  for (const m of matches) {
+    const d = document.createElement('div');
+    d.className = 'dup-name-face';
+    const src = m.cover_face_id ? `/api/faces/${m.cover_face_id}/thumb` : '';
+    d.innerHTML = `<img src="${src}" alt=""><span>${escHtml(m.name || '未命名')} (#${m.id})</span>`;
+    pairs.appendChild(d);
+  }
+
+  document.getElementById('dup-name-modal').classList.remove('hidden');
+}
+
+async function confirmDupNameMerge() {
+  document.getElementById('dup-name-modal').classList.add('hidden');
+  if (!_dupNameContext) return;
+  const { ownPersonId, matchedPeople } = _dupNameContext;
+  _dupNameContext = null;
+
+  // Merge ownPerson into the first matched (existing) person
+  const targetId = matchedPeople[0].id;
+  if (ownPersonId && ownPersonId !== targetId) {
+    await fetch('/api/people/merge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_id: ownPersonId, target_id: targetId }),
+    });
+  }
+
+  if (_dupNameResolve) { _dupNameResolve('merged'); _dupNameResolve = null; }
+  loadPeopleList();
+}
+
 // ── People undo stack ─────────────────────────────────────────────────────────
 
 const _peopleUndoStack = [];  // [{label, undo: async fn}]
@@ -1081,6 +1164,12 @@ function startInlineNameEdit(cell, personId) {
     saved = true;
     const newName = input.value.trim();
     if (newName !== currentName) {
+      const decision = await checkDuplicateName(newName, personId);
+      if (decision === 'merged') {
+        // Person was merged away; reload list and stop
+        loadPeopleList();
+        return;
+      }
       const ok = await patchPerson(personId, { name: newName });
       if (ok) {
         cell.dataset.name = newName;

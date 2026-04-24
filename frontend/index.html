@@ -195,6 +195,20 @@
     </div>
   </div>
 
+  <!-- People: duplicate name dialog -->
+  <div id="dup-name-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:480px">
+      <h2>已存在同名人物</h2>
+      <p id="dup-name-desc" style="font-size:13px;color:#666;margin-bottom:14px"></p>
+      <div id="dup-name-pairs" style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:18px;justify-content:center"></div>
+      <div style="display:flex;gap:8px">
+        <button id="dup-name-merge-btn">是同一人（合并）</button>
+        <button id="dup-name-keep-btn" class="btn-ghost">不同人（保留重名）</button>
+      </div>
+      <p style="font-size:11px;color:#e74c3c;margin-top:8px">合并不可撤销</p>
+    </div>
+  </div>
+
   <!-- People: name-and-merge dialog -->
   <div id="people-name-merge-modal" class="modal hidden">
     <div class="modal-inner" style="max-width:380px">

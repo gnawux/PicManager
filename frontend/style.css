@@ -205,6 +205,9 @@ button:disabled { opacity: .5; cursor: default; }
   padding: 5px 8px; border-radius: 6px; border: 1px solid #ddd;
   font-size: 14px; min-width: 160px;
 }
+.dup-name-face { text-align: center; font-size: 11px; color: #666; }
+.dup-name-face img { width: 80px; height: 80px; border-radius: 8px; object-fit: cover; display: block; background: #eee; }
+.dup-name-face span { display: block; margin-top: 4px; }
 .person-breadcrumb-bar {
   display: flex; align-items: center; gap: 10px;
   padding: 5px 16px; background: #f8f8f8; border-bottom: 1px solid #eee;
