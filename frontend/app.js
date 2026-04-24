@@ -69,6 +69,9 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('people-name-merge-modal').classList.add('hidden');
   });
 
+  // Undo
+  document.getElementById('people-undo-btn').addEventListener('click', undoPeopleOp);
+
   // Close floating context menus when clicking outside
   document.addEventListener('click', () => closePersonMenu());
 
@@ -755,7 +758,7 @@ async function batchUpdatePeopleStatus(status) {
   const ids = [...state.selectedPeople];
   if (ids.length === 0) return;
   const label = status === 'ignored' ? '忽略' : '标记为非人物';
-  if (!confirm(`确定要${label}选中的 ${ids.length} 位人物？`)) return;
+  if (!confirm(`确定要${label}选中的 ${ids.length} 位人物？此操作可撤销。`)) return;
 
   const resp = await fetch('/api/people/batch-update', {
     method: 'POST',
@@ -766,14 +769,22 @@ async function batchUpdatePeopleStatus(status) {
 
   // Remove affected cards from grid
   for (const pid of ids) {
-    const card = document.querySelector(`#people-grid .person-card.selected[data-card-pid="${pid}"]`)
-      || [...document.querySelectorAll('#people-grid .person-card.selected')]
-          .find(c => +c.querySelector('.person-name-cell')?.dataset.pid === pid);
+    const card = [...document.querySelectorAll('#people-grid .person-card.selected')]
+      .find(c => +c.querySelector('.person-name-cell')?.dataset.pid === pid);
     if (card) card.remove();
   }
   state.allPeople = state.allPeople.filter(p => !ids.includes(p.id));
   clearPeopleSelection();
   document.getElementById('people-count').textContent = `共 ${state.allPeople.length} 人`;
+
+  const capturedIds = [...ids];
+  pushUndo(`批量${label} ${capturedIds.length} 人`, async () => {
+    await fetch('/api/people/batch-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: capturedIds, status: 'active' }),
+    });
+  });
 }
 
 function openPeopleNameMergeDialog() {
@@ -869,10 +880,18 @@ async function loadSubPersons(personId) {
     row.innerHTML = `<span>${child.name || '未命名'}</span>
       <button class="btn-ghost" data-cid="${child.id}">移出</button>`;
     row.querySelector('button').addEventListener('click', async () => {
-      await fetch(`/api/people/${child.id}/reparent`, {
+      const resp = await fetch(`/api/people/${child.id}/reparent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ new_parent_id: null }),
       });
+      if (resp.ok) {
+        pushUndo(`移出子人物"${child.name || '未命名'}"`, async () => {
+          await fetch(`/api/people/${child.id}/reparent`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ new_parent_id: personId }),
+          });
+        });
+      }
       loadSubPersons(personId);
     });
     list.appendChild(row);
@@ -884,9 +903,44 @@ async function savePersonName() {
   const personId = +input.dataset.personId;
   if (!personId) return;
   const newName = input.value.trim();
-  await patchPerson(personId, { name: newName });
-  const p = state.allPeople.find(x => x.id === personId);
-  if (p) p.name = newName;
+  const oldPerson = state.allPeople.find(x => x.id === personId);
+  const oldName = oldPerson ? (oldPerson.name || '') : '';
+  if (newName === oldName) return;
+  const ok = await patchPerson(personId, { name: newName });
+  if (ok) {
+    if (oldPerson) oldPerson.name = newName;
+    pushUndo(`改名"${newName || '（空）'}"`, async () => {
+      await patchPerson(personId, { name: oldName });
+      document.getElementById('person-name-input').value = oldName;
+    });
+  }
+}
+
+// ── People undo stack ─────────────────────────────────────────────────────────
+
+const _peopleUndoStack = [];  // [{label, undo: async fn}]
+
+function pushUndo(label, undoFn) {
+  _peopleUndoStack.push({ label, undo: undoFn });
+  const btn = document.getElementById('people-undo-btn');
+  if (btn) {
+    btn.disabled = false;
+    btn.title = `撤销：${label}`;
+  }
+}
+
+async function undoPeopleOp() {
+  const op = _peopleUndoStack.pop();
+  if (!op) return;
+  await op.undo();
+  loadPeopleList();
+  const btn = document.getElementById('people-undo-btn');
+  if (btn) {
+    btn.disabled = _peopleUndoStack.length === 0;
+    btn.title = _peopleUndoStack.length > 0
+      ? `撤销：${_peopleUndoStack[_peopleUndoStack.length - 1].label}`
+      : '撤销上一步操作';
+  }
 }
 
 // ── People inline edit & context menu ────────────────────────────────────────
@@ -928,6 +982,9 @@ function startInlineNameEdit(cell, personId) {
         cell.innerHTML = escHtml(newName || '未命名');
         const p = state.allPeople.find(x => x.id === personId);
         if (p) p.name = newName;
+        pushUndo(`改名"${newName || '（空）'}"`, async () => {
+          await patchPerson(personId, { name: currentName });
+        });
         return;
       }
     }
@@ -970,16 +1027,22 @@ function showPersonMenu(btn, personId, card) {
   menu.querySelector('[data-action="ignore"]').addEventListener('click', async (e) => {
     e.stopPropagation();
     closePersonMenu();
-    if (!confirm('确定要忽略此人？操作完成后可在"已忽略"筛选中恢复。')) return;
+    if (!confirm('确定要忽略此人？此操作可撤销。')) return;
     const ok = await patchPerson(personId, { status: 'ignored' });
-    if (ok) removePersonCard(personId, card);
+    if (ok) {
+      removePersonCard(personId, card);
+      pushUndo('忽略此人', async () => { await patchPerson(personId, { status: 'active' }); });
+    }
   });
   menu.querySelector('[data-action="not-person"]').addEventListener('click', async (e) => {
     e.stopPropagation();
     closePersonMenu();
-    if (!confirm('确定要标记为非人物？这将从人物列表中移除该聚类。')) return;
+    if (!confirm('确定要标记为非人物？此操作可撤销。')) return;
     const ok = await patchPerson(personId, { status: 'not_a_person' });
-    if (ok) removePersonCard(personId, card);
+    if (ok) {
+      removePersonCard(personId, card);
+      pushUndo('标记为非人物', async () => { await patchPerson(personId, { status: 'active' }); });
+    }
   });
 }
 
