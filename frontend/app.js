@@ -855,7 +855,7 @@ async function showPersonDetail(personId) {
   document.getElementById('person-name-input').dataset.personId = personId;
 
   // Load photos for this person
-  const data = await fetchJSON(`/api/people/${personId}/photos?per_page=100`);
+  const data = await fetchJSON(`/api/people/${personId}?per_page=100`);
   const photos = data ? (data.photos || data) : [];
   const grid = document.getElementById('person-photos-grid');
   grid.innerHTML = '';
