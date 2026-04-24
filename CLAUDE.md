@@ -97,6 +97,7 @@ docs/
 - 导入默认 **移动** 文件到库目录；`--copy` 保留源文件
 - 数据库 `photos.path` 存储库内最终路径，不是源路径
 - 单文件导入失败只记录 `tracing::warn`，不中断整批次
+- **文档同步**：每次功能性调整（行为变更、新增、删除）完成后，必须确认 `docs/REQUIREMENTS.md`、`docs/DESIGN.md`、`docs/ARCHITECTURE.md`、`README.md`、`CLAUDE.md` 是否需要更新，需要的必须同步修改后再提交
 
 ## 开发状态
 
