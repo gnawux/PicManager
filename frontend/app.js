@@ -53,6 +53,8 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('person-back-btn').addEventListener('click', () => showPeopleList());
   document.getElementById('person-name-input').addEventListener('change', savePersonName);
   document.getElementById('person-merge-btn').addEventListener('click', openMergeDialog);
+  document.getElementById('person-reparent-btn').addEventListener('click', openReparentPanel);
+  document.getElementById('person-reparent-search').addEventListener('input', filterReparentList);
   document.getElementById('merge-cancel-btn').addEventListener('click', () => {
     document.getElementById('merge-modal').classList.add('hidden');
   });
@@ -850,6 +852,10 @@ async function showPersonDetail(personId) {
     grid.appendChild(card);
   }
 
+  // Breadcrumb and reparent panel
+  document.getElementById('person-reparent-panel').classList.add('hidden');
+  await updatePersonBreadcrumb(personId);
+
   // Load sub-persons
   await loadSubPersons(personId);
 }
@@ -877,9 +883,10 @@ async function loadSubPersons(personId) {
   for (const child of children) {
     const row = document.createElement('div');
     row.className = 'subperson-row';
-    row.innerHTML = `<span>${child.name || '未命名'}</span>
-      <button class="btn-ghost" data-cid="${child.id}">移出</button>`;
-    row.querySelector('button').addEventListener('click', async () => {
+    row.innerHTML = `<span>${escHtml(child.name || '未命名')}</span>
+      <button class="btn-ghost" data-action="top">移至顶级</button>
+      <button class="btn-ghost" data-action="pick">移至…</button>`;
+    row.querySelector('[data-action="top"]').addEventListener('click', async () => {
       const resp = await fetch(`/api/people/${child.id}/reparent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ new_parent_id: null }),
@@ -894,8 +901,106 @@ async function loadSubPersons(personId) {
       }
       loadSubPersons(personId);
     });
+    row.querySelector('[data-action="pick"]').addEventListener('click', () => {
+      openReparentPickerForChild(child.id, child.name || '未命名', personId);
+    });
     list.appendChild(row);
   }
+}
+
+// ── Person detail: breadcrumb & reparent ──────────────────────────────────────
+
+async function updatePersonBreadcrumb(personId) {
+  const el = document.getElementById('person-breadcrumb');
+  if (!el) return;
+  const tree = await fetchJSON('/api/people/tree');
+  if (!tree) { el.textContent = '顶级'; return; }
+
+  const path = [];
+  function findPath(nodes, targetId) {
+    for (const n of nodes) {
+      if (n.id === targetId) { path.push(n.name || '未命名'); return true; }
+      if (findPath(n.children || [], targetId)) { path.unshift(n.name || '未命名'); return true; }
+    }
+    return false;
+  }
+  findPath(tree.people || [], personId);
+  // Remove the last element (the person itself) – show ancestors only
+  path.pop();
+  el.textContent = path.length ? path.join(' > ') : '顶级';
+}
+
+let _reparentTargetPersonId = null;
+
+async function openReparentPanel() {
+  _reparentTargetPersonId = state.currentPersonId;
+  const panel = document.getElementById('person-reparent-panel');
+  panel.classList.toggle('hidden');
+  if (!panel.classList.contains('hidden')) {
+    document.getElementById('person-reparent-search').value = '';
+    await buildReparentList(_reparentTargetPersonId, state.currentPersonId);
+    document.getElementById('person-reparent-search').focus();
+  }
+}
+
+async function filterReparentList() {
+  await buildReparentList(_reparentTargetPersonId, state.currentPersonId);
+}
+
+async function buildReparentList(targetId, excludeId) {
+  const q = document.getElementById('person-reparent-search').value.toLowerCase();
+  const container = document.getElementById('person-reparent-list');
+  container.innerHTML = '';
+
+  // "Set as top-level" option
+  const topItem = document.createElement('div');
+  topItem.className = 'reparent-item top-level';
+  topItem.textContent = '设为顶级（无父节点）';
+  topItem.addEventListener('click', () => doReparent(targetId, null, excludeId));
+  container.appendChild(topItem);
+
+  const people = await fetchJSON('/api/people?status=all') || [];
+  for (const p of people) {
+    if (p.id === excludeId) continue;  // can't be own parent
+    const name = (p.name || '未命名').toLowerCase();
+    if (q && !name.includes(q)) continue;
+    const item = document.createElement('div');
+    item.className = 'reparent-item';
+    item.textContent = p.name || '未命名';
+    item.addEventListener('click', () => doReparent(targetId, p.id, excludeId));
+    container.appendChild(item);
+  }
+}
+
+async function doReparent(targetPersonId, newParentId, currentParentId) {
+  document.getElementById('person-reparent-panel').classList.add('hidden');
+  const resp = await fetch(`/api/people/${targetPersonId}/reparent`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_parent_id: newParentId }),
+  });
+  if (resp.ok) {
+    pushUndo('更改父节点', async () => {
+      await fetch(`/api/people/${targetPersonId}/reparent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_parent_id: currentParentId }),
+      });
+    });
+    await updatePersonBreadcrumb(targetPersonId);
+    if (targetPersonId !== state.currentPersonId) {
+      await loadSubPersons(state.currentPersonId);
+    }
+  }
+}
+
+async function openReparentPickerForChild(childId, childName, currentParentId) {
+  // Temporarily redirect the reparent panel to act on this child
+  _reparentTargetPersonId = childId;
+  const panel = document.getElementById('person-reparent-panel');
+  panel.classList.remove('hidden');
+  document.getElementById('person-reparent-search').value = '';
+  // exclude both the child and its current parent from options
+  await buildReparentList(childId, childId);
+  document.getElementById('person-reparent-search').focus();
 }
 
 async function savePersonName() {

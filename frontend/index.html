@@ -154,6 +154,16 @@
               <button id="person-merge-btn" class="btn-ghost">合并到…</button>
             </div>
           </div>
+          <!-- Breadcrumb + reparent -->
+          <div class="person-breadcrumb-bar">
+            <span id="person-breadcrumb">顶级</span>
+            <button id="person-reparent-btn" class="btn-ghost" style="font-size:11px;padding:2px 8px">更改父节点</button>
+          </div>
+          <div id="person-reparent-panel" class="person-reparent-panel hidden">
+            <input id="person-reparent-search" type="text" placeholder="输入姓名筛选，或选"设为顶级"…"
+                   style="display:block;width:100%;padding:6px;border:1px solid #ccc;border-radius:6px;margin-bottom:6px" />
+            <div id="person-reparent-list" class="person-reparent-list"></div>
+          </div>
           <div id="person-photos-grid" class="photo-grid"></div>
 
           <!-- Sub-persons panel -->
