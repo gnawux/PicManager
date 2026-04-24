@@ -869,7 +869,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 **`GET /api/photos/{id}/thumb`**：
 - 查 `photos.path`，不存在返回 404
 - 检查 `{thumb_cache_dir}/{id}.jpg`：存在则 `spawn_blocking { fs::read }` 直接返回
-- 未命中：`spawn_blocking { decode → thumbnail(thumb_size) → encode JPEG → write cache → return bytes }`
+- 未命中：`spawn_blocking { decode → resize_to_fill(thumb_size, thumb_size) 正方形中心裁剪 → encode JPEG → write cache → return bytes }`
 - `Content-Type: image/jpeg`；任何错误返回 500
 
 `GET /api/photos`：`total` 字段读自 `photo_stats.active_count`（不执行 `COUNT(*)`）
@@ -940,7 +940,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 **`POST /api/people/{id}/reparent`**：`{ "new_parent_id": 3 }` — `new_parent_id` 为 null 时提升为顶级。
 
-**`GET /api/faces/{id}/thumb`**：按 faces 表中 bbox 裁剪原图，`spawn_blocking` 生成 JPEG，磁盘缓存至 `.thumbs/face_{id}.jpg`。
+**`GET /api/faces/{id}/thumb`**：按 faces 表中 bbox 裁剪原图，再 `resize_to_fill(160, 160)` 正方形中心裁剪，`spawn_blocking` 生成 JPEG，磁盘缓存至 `.thumbs/face_{id}.jpg`。
 
 ### geo.rs
 
@@ -1061,7 +1061,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | `patchPhoto(id, data)` | PATCH `/api/photos/{id}`，保存时间/时区修改 |
 | `batchUpdatePhotos(ids, data)` | POST `/api/photos/batch-update`，批量时间/时区调整 |
 | `fillMissingMeta()` | 并行 POST `/api/faces/analyze`（`missing_only:true`）+ POST `/api/geo/regeocode`；每 2s 轮询人脸 job 状态和 geo 运行状态，状态栏显示"人脸：X/Y \| 地理：处理中/完成"；完成后刷新当前视图 |
-| `loadPeople()` | GET `/api/people`，渲染人物卡片网格 |
+| `loadPeopleList()` | GET `/api/people`，渲染人物卡片网格；选中的卡片（`.person-card.selected`）始终显示紫色勾选指示符（不依赖鼠标悬停） |
 | `clusterPeople()` | POST `/api/people/cluster`，触发重聚类，轮询进度 |
 | `loadPeopleTree()` | GET `/api/people/tree`，渲染层级树 |
 | `loadGeoHierarchy()` | GET `/api/geo/hierarchy`，渲染三列钻取面板 |
