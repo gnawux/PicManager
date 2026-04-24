@@ -362,6 +362,24 @@ ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "nd
 - 与 face detector 不同，YOLOv8 输入归一化为 `[0,1]` RGB，face detector 是 `(pixel-127)/128` BGR
 - 模型路径：`{config_dir}/picmanager/models/yolov8n.onnx`（约 6 MB）
 
+### sqlx 动态 IN 子句
+
+sqlx 宏（`sqlx::query!`）不支持把 `Vec` 直接绑定为 IN 参数。需要动态 IN 时（如 batch-update），必须手工构造占位符字符串并逐一 bind：
+
+```rust
+// ✗ 错误：sqlx 宏不支持数组绑定
+sqlx::query!("UPDATE people SET status = ? WHERE id IN (?)", status, ids)
+
+// ✓ 正确：拼占位符 + 链式 bind
+let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+let sql = format!("UPDATE people SET status = ? WHERE id IN ({placeholders})");
+let mut q = sqlx::query(&sql).bind(&status);
+for id in &ids { q = q.bind(id); }
+let result = q.execute(&pool).await?;
+```
+
+注意用 `sqlx::query`（非宏版本），且 `rows_affected()` 是 `u64`，与 `ids.len()` 比较时需转型。
+
 ### NMS 结果收集不能用 Vec::remove
 
 `Vec::remove(i)` 会把后续元素前移，对 NMS 返回的原始索引集合逐一调用会导致越界 panic（移除第一个元素后，后续原始索引全部偏移）。
