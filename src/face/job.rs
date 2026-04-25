@@ -74,7 +74,7 @@ pub(crate) async fn execute_job(
             .ok();
 
         match image::open(&path) {
-            Ok(img) => crate::face::analyze_one(pool, photo_id, &img).await,
+            Ok(img) => { crate::face::analyze_one(pool, photo_id, &img).await; }
             Err(_) => tracing::warn!("could not open {path} for face re-analysis"),
         }
 

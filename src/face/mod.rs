@@ -12,9 +12,8 @@ use sqlx::SqlitePool;
 /// Detect faces in `img`, persist them to the `faces` table, and (if the
 /// embedding model is available) fill in 512-D embeddings.  All failures
 /// are warned — never propagated.
-pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) {
-    // Detection and embedding are CPU-bound (ONNX inference).  Run them on a
-    // blocking thread so the tokio executor is not starved.
+/// Returns the number of faces detected and persisted.
+pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) -> usize {
     let img_owned = img.clone();
     let (faces, embeddings): (Vec<FaceRegion>, Vec<Option<Vec<f32>>>) =
         tokio::task::spawn_blocking(move || {
@@ -36,12 +35,11 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) {
         });
 
     if faces.is_empty() {
-        return;
+        return 0;
     }
 
     let face_ids = save_faces(pool, photo_id, &faces).await;
 
-    // ── persist embeddings ───────────────────────────────────────────────────
     for (i, maybe_emb) in embeddings.into_iter().enumerate() {
         let Some(&face_id) = face_ids.get(i) else { continue };
         let Some(emb_vec) = maybe_emb else { continue };
@@ -58,6 +56,8 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) {
             tracing::warn!("failed to store embedding for face {face_id}: {e}");
         }
     }
+
+    face_ids.len()
 }
 
 pub(crate) async fn save_faces(pool: &SqlitePool, photo_id: i64, faces: &[FaceRegion]) -> Vec<i64> {
@@ -111,7 +111,8 @@ mod tests {
         .unwrap();
 
         let img = DynamicImage::new_rgb8(640, 480);
-        analyze_one(&pool, 1, &img).await;
+        let n = analyze_one(&pool, 1, &img).await;
+        assert_eq!(n, 0, "blank image → analyze_one should return 0 faces");
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE photo_id = 1")
             .fetch_one(&pool)

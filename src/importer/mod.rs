@@ -27,6 +27,9 @@ pub struct ImportProgress {
     pub imported: AtomicUsize,
     pub skipped: AtomicUsize,
     pub errors: AtomicUsize,
+    pub faces_found: AtomicUsize,
+    pub geo_total: AtomicUsize,
+    pub geo_done: AtomicUsize,
 }
 
 pub type SharedImportProgress = Arc<ImportProgress>;
@@ -63,17 +66,20 @@ async fn import_dir_inner(
         p.total.store(total, Relaxed);
     }
     let mut summary = ImportSummary { total, ..Default::default() };
+    let mut newly_imported_ids: Vec<i64> = Vec::new();
 
     for path in &paths {
         match import_one(pool, path, library_path, copy_only).await {
-            Ok(true) => {
+            Ok(Some((photo_id, face_count))) => {
                 summary.imported += 1;
+                newly_imported_ids.push(photo_id);
                 if let Some(p) = &progress {
                     p.imported.fetch_add(1, Relaxed);
                     p.processed.fetch_add(1, Relaxed);
+                    p.faces_found.fetch_add(face_count, Relaxed);
                 }
             }
-            Ok(false) => {
+            Ok(None) => {
                 summary.skipped += 1;
                 if let Some(p) = &progress {
                     p.skipped.fetch_add(1, Relaxed);
@@ -90,25 +96,35 @@ async fn import_dir_inner(
             }
         }
     }
+
     album::group_by_month(pool).await?;
     album::group_by_camera(pool).await?;
-    album::group_by_location(pool).await?;
+
+    // Only geocode photos imported in this run, not the whole library.
+    if !newly_imported_ids.is_empty() {
+        let dummy_total = AtomicUsize::new(0);
+        let dummy_done = AtomicUsize::new(0);
+        let (geo_total, geo_done) = progress.as_ref()
+            .map(|p| (&p.geo_total, &p.geo_done))
+            .unwrap_or((&dummy_total, &dummy_done));
+        album::group_by_location_scoped(pool, &newly_imported_ids, geo_total, geo_done).await?;
+    }
 
     Ok(summary)
 }
 
-/// Returns true = newly imported, false = skipped.
+/// Returns `Some((photo_id, face_count))` if newly imported, `None` if skipped.
 async fn import_one(
     pool: &SqlitePool,
     path: &Path,
     library_path: &Path,
     copy_only: bool,
-) -> Result<bool> {
+) -> Result<Option<(i64, usize)>> {
     let sha256 = compute_sha256(path)?;
     let decision = decide(pool, &sha256).await?;
 
     if matches!(decision, ImportDecision::AlreadyImported) {
-        return Ok(false);
+        return Ok(None);
     }
 
     let meta = metadata::extract_from_file(path)?;
@@ -124,7 +140,6 @@ async fn import_one(
         });
 
     let final_path = placer::place(path, library_path, date, copy_only)?;
-
     let phash = compute_phash(&final_path).ok();
 
     let result = sqlx::query(
@@ -142,19 +157,22 @@ async fn import_one(
     .execute(pool)
     .await?;
 
-    if result.rows_affected() > 0 {
-        sqlx::query("UPDATE photo_stats SET active_count = active_count + 1 WHERE id = 1")
-            .execute(pool)
-            .await?;
+    if result.rows_affected() == 0 {
+        return Ok(None);
     }
 
+    sqlx::query("UPDATE photo_stats SET active_count = active_count + 1 WHERE id = 1")
+        .execute(pool)
+        .await?;
+
     let photo_id = result.last_insert_rowid();
+    let mut face_count = 0usize;
     if let Ok(img) = image::open(&final_path) {
-        crate::face::analyze_one(pool, photo_id, &img).await;
+        face_count = crate::face::analyze_one(pool, photo_id, &img).await;
         crate::animal::detect_and_save(pool, photo_id, &img).await;
     }
 
-    Ok(true)
+    Ok(Some((photo_id, face_count)))
 }
 
 #[cfg(test)]
@@ -206,6 +224,20 @@ mod tests {
             &pool, &fixtures_dir(), lib.path(), true, progress.clone(),
         ).await.unwrap();
         assert!(progress.total.load(Relaxed) > 0);
+    }
+
+    #[tokio::test]
+    async fn test_faces_found_is_zero_for_fixture_images() {
+        // fixtures are tiny synthetic JPEGs with no real faces
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let progress = SharedImportProgress::default();
+        import_dir_with_progress(
+            &pool, &fixtures_dir(), lib.path(), true, progress.clone(),
+        ).await.unwrap();
+        // Face detector is disabled in test mode (cfg!(test) guard in detector),
+        // so faces_found should be 0 regardless.
+        assert_eq!(progress.faces_found.load(Relaxed), 0);
     }
 
     #[tokio::test]

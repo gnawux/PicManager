@@ -1,5 +1,6 @@
 use reqwest::Client;
 use sqlx::SqlitePool;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
 
 use crate::error::Result;
@@ -139,6 +140,54 @@ async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<GeoInfo
         return None;
     }
     Some(GeoInfo { city, state, county, country })
+}
+
+/// Like `group_by_location` but restricted to the given photo IDs.
+/// Sets `geo_total` before starting and increments `geo_done` after each photo.
+/// GPS photos that already have a geocache hit don't count as API calls but
+/// still contribute to `geo_done`.
+pub async fn group_by_location_scoped(
+    pool: &SqlitePool,
+    photo_ids: &[i64],
+    geo_total: &AtomicUsize,
+    geo_done: &AtomicUsize,
+) -> Result<()> {
+    if photo_ids.is_empty() {
+        return Ok(());
+    }
+
+    let placeholders = photo_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id, gps_lat, gps_lon FROM photos \
+         WHERE id IN ({placeholders}) AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL"
+    );
+    let mut q = sqlx::query_as::<_, (i64, f64, f64)>(&sql);
+    for id in photo_ids {
+        q = q.bind(id);
+    }
+    let photos = q.fetch_all(pool).await?;
+
+    geo_total.store(photos.len(), Relaxed);
+
+    if photos.is_empty() {
+        return Ok(());
+    }
+
+    let client = Client::builder()
+        .user_agent("PicManager/0.1 (family photo manager)")
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap_or_else(|_| Client::new());
+
+    let mut need_rate_limit = false;
+    for (photo_id, lat, lon) in photos {
+        let city = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit).await;
+        if let Some(city) = city {
+            ensure_location_album(pool, photo_id, &city).await?;
+        }
+        geo_done.fetch_add(1, Relaxed);
+    }
+    Ok(())
 }
 
 async fn ensure_location_album(pool: &SqlitePool, photo_id: i64, city: &str) -> Result<()> {
@@ -368,6 +417,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(albums.0, 1, "idempotent: no duplicate albums");
+    }
+
+    #[tokio::test]
+    async fn scoped_geo_only_touches_given_ids() {
+        let pool = test_pool().await;
+        let id1 = insert_photo(&pool, "/a.jpg", Some(35.6762), Some(139.6503)).await;
+        let id2 = insert_photo(&pool, "/b.jpg", Some(48.8566), Some(2.3522)).await;
+        seed_geocache(&pool, 35.6762, 139.6503, Some("Tokyo")).await;
+        seed_geocache(&pool, 48.8566, 2.3522, Some("Paris")).await;
+
+        let total = AtomicUsize::new(0);
+        let done = AtomicUsize::new(0);
+        // Only pass id1 — id2 should not get an album.
+        group_by_location_scoped(&pool, &[id1], &total, &done).await.unwrap();
+
+        assert_eq!(total.load(Relaxed), 1);
+        assert_eq!(done.load(Relaxed), 1);
+
+        let albums: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM albums WHERE kind = 'location' ORDER BY name",
+        ).fetch_all(&pool).await.unwrap();
+        assert_eq!(albums.len(), 1, "only Tokyo should be created");
+        assert_eq!(albums[0].0, "Tokyo");
+
+        // id2 (Paris) must have no album link.
+        let links: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM photo_albums WHERE photo_id = ?")
+            .bind(id2).fetch_one(&pool).await.unwrap();
+        assert_eq!(links, 0);
+    }
+
+    #[tokio::test]
+    async fn scoped_geo_skips_photos_without_gps() {
+        let pool = test_pool().await;
+        let id = insert_photo(&pool, "/no-gps.jpg", None, None).await;
+        let total = AtomicUsize::new(0);
+        let done = AtomicUsize::new(0);
+        group_by_location_scoped(&pool, &[id], &total, &done).await.unwrap();
+        assert_eq!(total.load(Relaxed), 0);
+        assert_eq!(done.load(Relaxed), 0);
     }
 
     #[tokio::test]
