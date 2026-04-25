@@ -130,7 +130,8 @@
         <div id="people-list-section">
           <div class="toolbar">
             <span id="people-count"></span>
-            <button id="recluster-btn">重新聚类</button>
+            <button id="integrate-faces-btn">整合新面孔</button>
+            <button id="recluster-btn" class="btn-ghost">⚠️ 全量重建</button>
             <button id="people-undo-btn" class="btn-ghost" disabled title="撤销上一步操作">↩ 撤销</button>
           </div>
           <!-- Batch action bar (shown when ≥1 person is selected) -->
@@ -314,6 +315,15 @@
       <button id="close-dedup">关闭</button>
     </div>
   </div>
+
+  <!-- Full-recluster confirmation dialog -->
+  <dialog id="recluster-confirm-dialog">
+    <p>此操作将删除所有已命名人物记录（包括手动合并与命名），根据人脸特征重新分组。<b>不可撤销</b>，确认继续？</p>
+    <div class="dialog-actions">
+      <button id="recluster-confirm-cancel" class="btn-ghost">取消</button>
+      <button id="recluster-confirm-ok" class="btn-danger">确认重建</button>
+    </div>
+  </dialog>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>

@@ -149,8 +149,11 @@ docs/
 | 23b | CLI import 进度循环：每 5 秒检查、每 60 秒打印进度 + 耗时汇总 |
 | 24a/b | import_one → Option<(photo_id, face_count)>；faces_found/geo_total/geo_done 进度追踪；group_by_location_scoped 限定新导入照片范围 |
 | 24c | CLI 三段式进度格式：导入 / 人脸 / 地理分开显示 |
+| 25a | face/cluster: run_incremental_clustering（非破坏性增量聚类，TDD） |
+| 25b | web: POST /api/people/cluster/incremental；import 完成后自动触发增量聚类 |
+| 25c | 前端：工具栏改为「整合新面孔」主按钮 + 「⚠️ 全量重建」次要按钮（带确认对话框） |
 
-当前测试数：**207 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**210 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 

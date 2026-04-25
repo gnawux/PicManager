@@ -109,6 +109,14 @@ button:disabled { opacity: .5; cursor: default; }
   color: #555; padding: 5px 10px;
 }
 .btn-ghost:hover { background: rgba(0,0,0,.06); }
+.btn-danger {
+  background: #e74c3c; color: #fff; border: none; padding: 5px 14px;
+  cursor: pointer; border-radius: 4px;
+}
+.btn-danger:hover { background: #c0392b; }
+dialog { border-radius: 8px; border: 1px solid #45475a; padding: 24px; max-width: 420px; }
+dialog p { margin: 0 0 16px; line-height: 1.5; }
+dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* Batch selection */
 .batch-bar {

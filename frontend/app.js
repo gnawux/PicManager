@@ -53,7 +53,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // People view
   document.getElementById('fill-meta-btn').addEventListener('click', fillMissingMeta);
-  document.getElementById('recluster-btn').addEventListener('click', triggerRecluster);
+  document.getElementById('integrate-faces-btn').addEventListener('click', triggerIntegrate);
+  document.getElementById('recluster-btn').addEventListener('click', () => {
+    document.getElementById('recluster-confirm-dialog').showModal();
+  });
+  document.getElementById('recluster-confirm-cancel').addEventListener('click', () => {
+    document.getElementById('recluster-confirm-dialog').close();
+  });
+  document.getElementById('recluster-confirm-ok').addEventListener('click', () => {
+    document.getElementById('recluster-confirm-dialog').close();
+    triggerRecluster();
+  });
   document.getElementById('person-back-btn').addEventListener('click', () => showPeopleList());
   document.getElementById('person-name-input').addEventListener('change', savePersonName);
   document.getElementById('person-merge-btn').addEventListener('click', openMergeDialog);
@@ -685,7 +695,7 @@ async function loadPeopleList() {
   grid.innerHTML = '';
 
   if (people.length === 0) {
-    grid.innerHTML = '<p style="padding:24px;color:#888">尚无人物，请先导入含人脸的照片，再点击"重新聚类"。</p>';
+    grid.innerHTML = '<p style="padding:24px;color:#888">尚无人物。导入含人脸的照片后，点击"整合新面孔"。</p>';
     return;
   }
 
@@ -1638,18 +1648,33 @@ async function fillMissingMeta() {
   }, 2000);
 }
 
+async function triggerIntegrate() {
+  const btn = document.getElementById('integrate-faces-btn');
+  btn.disabled = true;
+  document.getElementById('recluster-status').textContent = '整合中…';
+  const result = await fetchJSON('/api/people/cluster/incremental', { method: 'POST' });
+  btn.disabled = false;
+  if (result) {
+    document.getElementById('recluster-status').textContent =
+      `整合完成，新增 ${result.people_created} 个人物`;
+    loadPeopleList();
+  } else {
+    document.getElementById('recluster-status').textContent = '整合失败';
+  }
+}
+
 async function triggerRecluster() {
   const btn = document.getElementById('recluster-btn');
   btn.disabled = true;
-  document.getElementById('recluster-status').textContent = '聚类中…';
+  document.getElementById('recluster-status').textContent = '全量重建中…';
   const result = await fetchJSON('/api/people/cluster', { method: 'POST' });
   btn.disabled = false;
   if (result) {
     document.getElementById('recluster-status').textContent =
-      `完成，生成 ${result.people_created} 个人物`;
+      `重建完成，生成 ${result.people_created} 个人物`;
     loadPeopleList();
   } else {
-    document.getElementById('recluster-status').textContent = '聚类失败';
+    document.getElementById('recluster-status').textContent = '重建失败';
   }
 }
 
