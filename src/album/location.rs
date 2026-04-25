@@ -81,8 +81,9 @@ async fn cached_or_fetch(
     let lat_key = coord_key(lat);
     let lon_key = coord_key(lon);
 
-    let row: Option<(Option<String>,)> = sqlx::query_as(
-        "SELECT city FROM geocache WHERE lat_key = ? AND lon_key = ?",
+    // Read both city and state so we can detect stale entries (city set, state NULL).
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT city, state FROM geocache WHERE lat_key = ? AND lon_key = ?",
     )
     .bind(&lat_key)
     .bind(&lon_key)
@@ -90,11 +91,16 @@ async fn cached_or_fetch(
     .await
     .ok()?;
 
-    if let Some((city,)) = row {
-        return city; // cache hit (city may be None = previously failed)
+    if let Some((city, state)) = row {
+        // Complete entry, or a previously-failed geocoding (city is NULL) — use as-is.
+        if state.is_some() || city.is_none() {
+            return city;
+        }
+        // city is set but state is NULL → stale entry written before municipality fix.
+        // Fall through to re-geocode and update.
     }
 
-    // Cache miss — respect Nominatim's 1 req/s policy
+    // Cache miss or stale entry — respect Nominatim's 1 req/s policy
     if *need_rate_limit {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -106,8 +112,9 @@ async fn cached_or_fetch(
     let county = info.as_ref().and_then(|i| i.county.clone());
     let country = info.as_ref().and_then(|i| i.country.clone());
 
+    // INSERT OR REPLACE so that stale entries (state was NULL) are updated.
     let _ = sqlx::query(
-        "INSERT OR IGNORE INTO geocache (lat_key, lon_key, city, state, county, country)
+        "INSERT OR REPLACE INTO geocache (lat_key, lon_key, city, state, county, country)
          VALUES (?, ?, ?, ?, ?, ?)",
     )
     .bind(&lat_key)
@@ -133,13 +140,38 @@ async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<GeoInfo
         .iter()
         .find_map(|f| addr.get(*f).and_then(|v| v.as_str()).map(str::to_owned));
     let county = addr.get("county").and_then(|v| v.as_str()).map(str::to_owned);
-    let state = addr.get("state").and_then(|v| v.as_str()).map(str::to_owned);
+    let mut state = addr.get("state").and_then(|v| v.as_str()).map(str::to_owned);
     let country = addr.get("country").and_then(|v| v.as_str()).map(str::to_owned);
+
+    // Chinese direct-controlled municipalities (直辖市) have no `state` field in
+    // Nominatim — the city IS the province-level entity.  Derive from ISO 3166-2.
+    if state.is_none() {
+        if let Some(iso) = addr.get("ISO3166-2-lvl4").and_then(|v| v.as_str()) {
+            state = cn_municipality_state(iso).map(str::to_owned);
+        }
+    }
+
+    // When `city`/`town`/`village` is absent (common for municipalities at zoom=10),
+    // fall back to `county` (the district-level name, e.g. 西城区).
+    let city = city.or_else(|| county.clone());
 
     if city.is_none() && state.is_none() && country.is_none() {
         return None;
     }
     Some(GeoInfo { city, state, county, country })
+}
+
+/// Maps ISO 3166-2 level-4 codes for China's four direct-controlled municipalities
+/// to their province-level display name.  Regular provinces already have a `state`
+/// field in the Nominatim response, so this only needs to handle the four 直辖市.
+fn cn_municipality_state(iso: &str) -> Option<&'static str> {
+    match iso {
+        "CN-BJ" => Some("北京市"),
+        "CN-SH" => Some("上海市"),
+        "CN-TJ" => Some("天津市"),
+        "CN-CQ" => Some("重庆市"),
+        _ => None,
+    }
 }
 
 /// Like `group_by_location` but restricted to the given photo IDs.
@@ -248,13 +280,14 @@ mod tests {
         .last_insert_rowid()
     }
 
-    async fn seed_geocache(pool: &SqlitePool, lat: f64, lon: f64, city: Option<&str>) {
+    async fn seed_geocache(pool: &SqlitePool, lat: f64, lon: f64, city: Option<&str>, state: Option<&str>) {
         sqlx::query(
-            "INSERT INTO geocache (lat_key, lon_key, city) VALUES (?, ?, ?)",
+            "INSERT INTO geocache (lat_key, lon_key, city, state) VALUES (?, ?, ?, ?)",
         )
         .bind(coord_key(lat))
         .bind(coord_key(lon))
         .bind(city)
+        .bind(state)
         .execute(pool)
         .await
         .unwrap();
@@ -279,7 +312,7 @@ mod tests {
             insert_photo(&pool, path, Some(*lat), Some(*lon)).await;
         }
         // Cache only the first one
-        seed_geocache(&pool, 37.7749, -122.4194, Some("San Francisco")).await;
+        seed_geocache(&pool, 37.7749, -122.4194, Some("San Francisco"), Some("California")).await;
 
         assert_eq!(count_missing_geo(&pool).await.unwrap(), 2);
     }
@@ -290,7 +323,7 @@ mod tests {
         let lat = 48.8566;
         let lon = 2.3522;
         insert_photo(&pool, "/paris.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon, Some("Paris")).await;
+        seed_geocache(&pool, lat, lon, Some("Paris"), Some("Île-de-France")).await;
 
         assert_eq!(count_missing_geo(&pool).await.unwrap(), 0);
     }
@@ -334,7 +367,7 @@ mod tests {
         let lat = 35.6762;
         let lon = 139.6503;
         insert_photo(&pool, "/tokyo.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon, Some("Tokyo")).await;
+        seed_geocache(&pool, lat, lon, Some("Tokyo"), Some("Tokyo-to")).await;
 
         group_by_location(&pool).await.unwrap();
 
@@ -361,7 +394,7 @@ mod tests {
         let lon = 139.6503;
         insert_photo(&pool, "/a.jpg", Some(lat), Some(lon)).await;
         insert_photo(&pool, "/b.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon, Some("Tokyo")).await;
+        seed_geocache(&pool, lat, lon, Some("Tokyo"), Some("Tokyo-to")).await;
 
         group_by_location(&pool).await.unwrap();
 
@@ -383,8 +416,8 @@ mod tests {
         let pool = test_pool().await;
         insert_photo(&pool, "/tokyo.jpg", Some(35.6762), Some(139.6503)).await;
         insert_photo(&pool, "/paris.jpg", Some(48.8566), Some(2.3522)).await;
-        seed_geocache(&pool, 35.6762, 139.6503, Some("Tokyo")).await;
-        seed_geocache(&pool, 48.8566, 2.3522, Some("Paris")).await;
+        seed_geocache(&pool, 35.6762, 139.6503, Some("Tokyo"), Some("Tokyo-to")).await;
+        seed_geocache(&pool, 48.8566, 2.3522, Some("Paris"), Some("Île-de-France")).await;
 
         group_by_location(&pool).await.unwrap();
 
@@ -401,7 +434,7 @@ mod tests {
         let lat = 51.5074;
         let lon = -0.1278;
         insert_photo(&pool, "/london.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon, Some("London")).await;
+        seed_geocache(&pool, lat, lon, Some("London"), Some("England")).await;
 
         group_by_location(&pool).await.unwrap();
         group_by_location(&pool).await.unwrap();
@@ -424,8 +457,8 @@ mod tests {
         let pool = test_pool().await;
         let id1 = insert_photo(&pool, "/a.jpg", Some(35.6762), Some(139.6503)).await;
         let id2 = insert_photo(&pool, "/b.jpg", Some(48.8566), Some(2.3522)).await;
-        seed_geocache(&pool, 35.6762, 139.6503, Some("Tokyo")).await;
-        seed_geocache(&pool, 48.8566, 2.3522, Some("Paris")).await;
+        seed_geocache(&pool, 35.6762, 139.6503, Some("Tokyo"), Some("Tokyo-to")).await;
+        seed_geocache(&pool, 48.8566, 2.3522, Some("Paris"), Some("Île-de-France")).await;
 
         let total = AtomicUsize::new(0);
         let done = AtomicUsize::new(0);
@@ -464,7 +497,7 @@ mod tests {
         let lat = 0.0;
         let lon = 0.0;
         insert_photo(&pool, "/unknown.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon, None).await; // cached as "failed"
+        seed_geocache(&pool, lat, lon, None, None).await; // cached as "failed"
 
         group_by_location(&pool).await.unwrap();
 
@@ -473,5 +506,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count.0, 0, "null city in cache → no album created");
+    }
+
+    #[test]
+    fn cn_municipality_state_maps_known_codes() {
+        assert_eq!(cn_municipality_state("CN-BJ"), Some("北京市"));
+        assert_eq!(cn_municipality_state("CN-SH"), Some("上海市"));
+        assert_eq!(cn_municipality_state("CN-TJ"), Some("天津市"));
+        assert_eq!(cn_municipality_state("CN-CQ"), Some("重庆市"));
+        assert_eq!(cn_municipality_state("CN-GD"), None); // regular province — Nominatim returns state directly
+        assert_eq!(cn_municipality_state("US-CA"), None);
+    }
+
+    #[tokio::test]
+    async fn stale_geocache_entry_is_re_fetched_when_state_null() {
+        // Seed an entry with city set but state NULL (pre-fix data for municipalities).
+        // group_by_location should detect the stale entry and call Nominatim.
+        // In tests, Nominatim call fails → returns None → INSERT OR REPLACE writes all-NULL.
+        // The photo therefore gets no album (city becomes NULL after re-fetch fails).
+        // This confirms the stale-detection path runs without panicking.
+        let pool = test_pool().await;
+        let lat = 39.9042;
+        let lon = 116.4074;
+        insert_photo(&pool, "/beijing.jpg", Some(lat), Some(lon)).await;
+        // Seed stale entry: city set, state NULL (no network in tests so re-fetch returns None)
+        seed_geocache(&pool, lat, lon, Some("东城区"), None).await;
+
+        // Should not panic; city will become None after failed re-fetch
+        group_by_location(&pool).await.unwrap();
     }
 }

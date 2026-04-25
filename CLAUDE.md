@@ -153,7 +153,7 @@ docs/
 | 25b | web: POST /api/people/cluster/incremental；import 完成后自动触发增量聚类 |
 | 25c | 前端：工具栏改为「整合新面孔」主按钮 + 「⚠️ 全量重建」次要按钮（带确认对话框） |
 
-当前测试数：**210 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**212 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
