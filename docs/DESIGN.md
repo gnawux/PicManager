@@ -940,6 +940,14 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 **`POST /api/people/{id}/reparent`**：`{ "new_parent_id": 3 }` — `new_parent_id` 为 null 时提升为顶级。
 
+**`POST /api/people`**：新建人物，`{ "name": "张三", "parent_id": 5 }`（两字段均可选）。返回 `{ "id": N }`。重名检测由前端负责，后端不做校验。
+
+**`DELETE /api/people/{id}`**：删除人物节点。若该人物在 `person_faces` 中仍有人脸记录，返回 409 Conflict；人物不存在返回 404；成功返回 200。设计用于撤销操作中删除空容器节点。
+
+**`POST /api/people/{id}/transfer`**：`{ "target_person_id": T, "photo_ids": [p1, p2] }` — 将当前人物中属于指定照片的人脸（通过 `faces.photo_id` 匹配）转移给目标人物；若目标人物 `cover_face_id` 为 null 则自动填充。返回 `{ "faces_moved": N }`。
+
+**`POST /api/people/{id}/lift`**：`{ "name": "父节点名" }` — 在当前人物上方插入一个新父节点：新人物继承当前人物原 `parent_id`，当前人物的 `parent_id` 改为新人物。在同一事务中执行。返回 `{ "new_person_id": N }`。
+
 **`GET /api/faces/{id}/thumb`**：按 faces 表中 bbox 裁剪原图，再 `resize_to_fill(160, 160)` 正方形中心裁剪，`spawn_blocking` 生成 JPEG，磁盘缓存至 `.thumbs/face_{id}.jpg`。
 
 ### geo.rs

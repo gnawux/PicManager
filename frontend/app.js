@@ -13,9 +13,13 @@ const state = {
   currentDetail: null, // full detail object of the open photo
   currentView: 'photos', // 'photos' | 'people' | 'locations' | 'animals'
   currentPersonId: null, // person being viewed in detail
+  currentPersonParentId: null, // parent_id of person in detail
   allPeople: [],    // cached people list for merge dialog
   mergeTargetId: null,
   selectedPeople: new Set(), // selected person IDs for batch ops
+  personDetailSelectMode: false,
+  personDetailSelection: new Set(), // photo IDs selected in person detail
+  personDetailPhotos: [], // photos shown in person detail (for undo)
   // Animals
   animalSpecies: null,  // current species being browsed
   animalPage: 1,
@@ -54,7 +58,19 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('person-name-input').addEventListener('change', savePersonName);
   document.getElementById('person-merge-btn').addEventListener('click', openMergeDialog);
   document.getElementById('person-reparent-btn').addEventListener('click', openReparentPanel);
+  document.getElementById('person-lift-btn').addEventListener('click', startCreateParent);
   document.getElementById('person-reparent-search').addEventListener('input', filterReparentList);
+  document.getElementById('person-select-toggle-btn').addEventListener('click', togglePersonDetailSelectMode);
+  document.getElementById('person-detail-create-child-btn').addEventListener('click', () => createSubPerson([...state.personDetailSelection]));
+  document.getElementById('person-detail-transfer-sibling-btn').addEventListener('click', () => startTransferToSibling([...state.personDetailSelection]));
+  document.getElementById('person-detail-cancel-select-btn').addEventListener('click', clearPersonDetailSelection);
+  document.getElementById('sibling-picker-cancel').addEventListener('click', () => {
+    document.getElementById('sibling-picker-modal').classList.add('hidden');
+  });
+  document.getElementById('person-detail-name-cancel').addEventListener('click', () => {
+    document.getElementById('person-detail-name-modal').classList.add('hidden');
+    if (_personDetailNameResolve) { _personDetailNameResolve(null); _personDetailNameResolve = null; }
+  });
   document.getElementById('merge-cancel-btn').addEventListener('click', () => {
     document.getElementById('merge-modal').classList.add('hidden');
   });
@@ -75,10 +91,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('people-undo-btn').addEventListener('click', undoPeopleOp);
 
   // Duplicate name dialog
-  document.getElementById('dup-name-merge-btn').addEventListener('click', confirmDupNameMerge);
+  document.getElementById('dup-name-merge-btn').addEventListener('click', confirmDupNameSame);
   document.getElementById('dup-name-keep-btn').addEventListener('click', () => {
     document.getElementById('dup-name-modal').classList.add('hidden');
-    if (_dupNameResolve) { _dupNameResolve('keep'); _dupNameResolve = null; }
+    _dupNameContext = null;
+    if (_dupNameResolve) { _dupNameResolve({ action: 'different' }); _dupNameResolve = null; }
   });
 
   // Close floating context menus when clicking outside
@@ -726,7 +743,9 @@ async function loadPeopleList() {
 
 function showPeopleList() {
   state.currentPersonId = null;
+  state.currentPersonParentId = null;
   clearPeopleSelection();
+  clearPersonDetailSelection();
   document.getElementById('people-list-section').classList.remove('hidden');
   document.getElementById('person-detail-section').classList.add('hidden');
   loadPeopleList();
@@ -819,9 +838,20 @@ async function confirmPeopleNameMerge() {
   // Check for duplicate name before proceeding (use primaryId as own)
   if (name) {
     const decision = await checkDuplicateName(name, primaryId);
-    if (decision === 'merged') {
+    if (decision.action === 'same') {
+      // Merge selected people into the existing matched person instead of primaryId
+      const realTargetId = decision.targetId;
+      const toMerge = ids.filter(id => id !== realTargetId);
+      for (const srcId of toMerge) {
+        await fetch('/api/people/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_id: srcId, target_id: realTargetId }),
+        });
+      }
       clearPeopleSelection();
-      return;  // confirmDupNameMerge already reloaded the list
+      loadPeopleList();
+      return;
     }
   }
 
@@ -845,35 +875,63 @@ async function confirmPeopleNameMerge() {
 
 async function showPersonDetail(personId) {
   state.currentPersonId = personId;
+  clearPersonDetailSelection();
   document.getElementById('people-list-section').classList.add('hidden');
   document.getElementById('person-detail-section').classList.remove('hidden');
 
-  // Load person info for the name field
+  // Load person info
   const people = state.allPeople;
   const person = people.find(p => p.id === personId);
+  state.currentPersonParentId = person ? (person.parent_id ?? null) : null;
   document.getElementById('person-name-input').value = person ? (person.name || '') : '';
   document.getElementById('person-name-input').dataset.personId = personId;
 
   // Load photos for this person
   const data = await fetchJSON(`/api/people/${personId}?per_page=100`);
   const photos = data ? (data.photos || data) : [];
-  const grid = document.getElementById('person-photos-grid');
-  grid.innerHTML = '';
-  for (const p of photos) {
-    const card = document.createElement('div');
-    card.className = 'photo-card';
-    const label = p.taken_at ? p.taken_at.slice(0, 10) : '';
-    card.innerHTML = `<img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
-      <div class="meta">${label}</div>`;
-    grid.appendChild(card);
-  }
+  state.personDetailPhotos = photos;
+  renderPersonDetailPhotos(photos);
 
   // Breadcrumb and reparent panel
   document.getElementById('person-reparent-panel').classList.add('hidden');
   await updatePersonBreadcrumb(personId);
 
+  // Show/hide "转移至兄弟" based on whether person has a parent
+  updatePersonDetailSiblingBtn();
+
   // Load sub-persons
   await loadSubPersons(personId);
+}
+
+function renderPersonDetailPhotos(photos) {
+  const grid = document.getElementById('person-photos-grid');
+  grid.innerHTML = '';
+  for (const p of photos) {
+    const card = document.createElement('div');
+    card.className = 'photo-card';
+    if (state.personDetailSelectMode) card.classList.add('select-mode');
+    if (state.personDetailSelection.has(p.id)) card.classList.add('selected');
+    card.dataset.photoId = p.id;
+    const label = p.taken_at ? p.taken_at.slice(0, 10) : '';
+    card.innerHTML = `<div class="card-check"></div>
+      <img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
+      <div class="meta">${label}</div>`;
+    card.addEventListener('click', () => {
+      if (state.personDetailSelectMode) {
+        togglePersonDetailPhoto(p.id, card);
+      }
+    });
+    grid.appendChild(card);
+  }
+}
+
+function updatePersonDetailSiblingBtn() {
+  const btn = document.getElementById('person-detail-transfer-sibling-btn');
+  if (state.currentPersonParentId !== null) {
+    btn.classList.remove('hidden');
+  } else {
+    btn.classList.add('hidden');
+  }
 }
 
 async function loadSubPersons(personId) {
@@ -921,6 +979,289 @@ async function loadSubPersons(personId) {
       openReparentPickerForChild(child.id, child.name || '未命名', personId);
     });
     list.appendChild(row);
+  }
+}
+
+// ── Person detail: photo selection mode ──────────────────────────────────────
+
+function togglePersonDetailSelectMode() {
+  state.personDetailSelectMode = !state.personDetailSelectMode;
+  document.getElementById('person-select-toggle-btn').textContent =
+    state.personDetailSelectMode ? '退出选择' : '选择照片';
+  renderPersonDetailPhotos(state.personDetailPhotos);
+  updatePersonDetailBatchBar();
+}
+
+function togglePersonDetailPhoto(photoId, card) {
+  if (state.personDetailSelection.has(photoId)) {
+    state.personDetailSelection.delete(photoId);
+    card.classList.remove('selected');
+  } else {
+    state.personDetailSelection.add(photoId);
+    card.classList.add('selected');
+  }
+  updatePersonDetailBatchBar();
+}
+
+function clearPersonDetailSelection() {
+  state.personDetailSelectMode = false;
+  state.personDetailSelection.clear();
+  const btn = document.getElementById('person-select-toggle-btn');
+  if (btn) btn.textContent = '选择照片';
+  updatePersonDetailBatchBar();
+}
+
+function updatePersonDetailBatchBar() {
+  const bar = document.getElementById('person-detail-batch-bar');
+  const n = state.personDetailSelection.size;
+  if (n > 0) {
+    bar.classList.remove('hidden');
+    document.getElementById('person-detail-batch-count').textContent = `已选 ${n} 张`;
+  } else {
+    bar.classList.add('hidden');
+  }
+}
+
+// ── Person detail: name input dialog ─────────────────────────────────────────
+
+let _personDetailNameResolve = null;
+
+function showPersonDetailNameDialog(title, desc = '') {
+  document.getElementById('person-detail-name-title').textContent = title;
+  document.getElementById('person-detail-name-desc').textContent = desc;
+  document.getElementById('person-detail-name-input').value = '';
+  document.getElementById('person-detail-name-modal').classList.remove('hidden');
+  document.getElementById('person-detail-name-input').focus();
+
+  return new Promise(resolve => {
+    _personDetailNameResolve = resolve;
+    document.getElementById('person-detail-name-confirm').onclick = () => {
+      const name = document.getElementById('person-detail-name-input').value.trim();
+      document.getElementById('person-detail-name-modal').classList.add('hidden');
+      if (_personDetailNameResolve) { _personDetailNameResolve(name); _personDetailNameResolve = null; }
+    };
+    document.getElementById('person-detail-name-input').onkeydown = (e) => {
+      if (e.key === 'Enter') document.getElementById('person-detail-name-confirm').click();
+      if (e.key === 'Escape') {
+        document.getElementById('person-detail-name-modal').classList.add('hidden');
+        if (_personDetailNameResolve) { _personDetailNameResolve(null); _personDetailNameResolve = null; }
+      }
+    };
+  });
+}
+
+// ── Person detail: create sub-person ─────────────────────────────────────────
+
+async function createSubPerson(photoIds) {
+  if (photoIds.length === 0) return;
+  const currentPersonId = state.currentPersonId;
+
+  const name = await showPersonDetailNameDialog('创建子人物', `将 ${photoIds.length} 张照片中的人脸创建为子人物`);
+  if (name === null) return; // cancelled
+
+  const decision = name ? await checkDuplicateName(name, null) : { action: 'different' };
+
+  if (decision.action === 'same') {
+    const targetId = decision.targetId;
+    // Reparent existing person as child of current, then transfer faces
+    await fetch(`/api/people/${targetId}/reparent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_parent_id: currentPersonId }),
+    });
+    const resp = await fetch(`/api/people/${currentPersonId}/transfer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_person_id: targetId, photo_ids: photoIds }),
+    });
+    if (resp.ok) {
+      const { faces_moved } = await resp.json();
+      const matchedPerson = state.allPeople.find(p => p.id === targetId);
+      const originalParentId = matchedPerson ? (matchedPerson.parent_id ?? null) : null;
+      pushUndo(`子人物（已有人物 #${targetId}）`, async () => {
+        await fetch(`/api/people/${currentPersonId}/transfer`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_person_id: currentPersonId, photo_ids: photoIds }),
+        });
+        await fetch(`/api/people/${targetId}/reparent`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_parent_id: originalParentId }),
+        });
+      });
+    }
+  } else {
+    // Create new child person
+    const createResp = await fetch('/api/people', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || null, parent_id: currentPersonId }),
+    });
+    if (!createResp.ok) return;
+    const { id: newId } = await createResp.json();
+
+    const transferResp = await fetch(`/api/people/${currentPersonId}/transfer`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_person_id: newId, photo_ids: photoIds }),
+    });
+    if (transferResp.ok) {
+      pushUndo(`创建子人物"${name || '未命名'}"`, async () => {
+        // Transfer faces back, then delete empty new person
+        await fetch(`/api/people/${newId}/transfer`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_person_id: currentPersonId, photo_ids: photoIds }),
+        });
+        await fetch(`/api/people/${newId}`, { method: 'DELETE' });
+      });
+    }
+  }
+
+  clearPersonDetailSelection();
+  await refreshPersonDetail();
+}
+
+// ── Person detail: create parent node ────────────────────────────────────────
+
+async function startCreateParent() {
+  const currentPersonId = state.currentPersonId;
+  const originalParentId = state.currentPersonParentId;
+
+  const name = await showPersonDetailNameDialog('创建父节点', '在当前人物上方插入新的父节点');
+  if (name === null) return; // cancelled
+
+  const decision = name ? await checkDuplicateName(name, null) : { action: 'different' };
+
+  if (decision.action === 'same') {
+    // Use existing person as parent (just reparent)
+    const resp = await fetch(`/api/people/${currentPersonId}/reparent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ new_parent_id: decision.targetId }),
+    });
+    if (resp.ok) {
+      state.currentPersonParentId = decision.targetId;
+      pushUndo('创建父节点（已有人物）', async () => {
+        await fetch(`/api/people/${currentPersonId}/reparent`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_parent_id: originalParentId }),
+        });
+        state.currentPersonParentId = originalParentId;
+        await updatePersonBreadcrumb(currentPersonId);
+        updatePersonDetailSiblingBtn();
+      });
+      await updatePersonBreadcrumb(currentPersonId);
+      updatePersonDetailSiblingBtn();
+    }
+  } else {
+    // Create new parent via lift endpoint
+    const resp = await fetch(`/api/people/${currentPersonId}/lift`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || '' }),
+    });
+    if (!resp.ok) return;
+    const { new_person_id: newParentId } = await resp.json();
+    state.currentPersonParentId = newParentId;
+    pushUndo(`创建父节点"${name || '未命名'}"`, async () => {
+      await fetch(`/api/people/${currentPersonId}/reparent`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_parent_id: originalParentId }),
+      });
+      await fetch(`/api/people/${newParentId}`, { method: 'DELETE' });
+      state.currentPersonParentId = originalParentId;
+      await updatePersonBreadcrumb(currentPersonId);
+      updatePersonDetailSiblingBtn();
+    });
+    await updatePersonBreadcrumb(currentPersonId);
+    updatePersonDetailSiblingBtn();
+  }
+}
+
+// ── Person detail: transfer to sibling ───────────────────────────────────────
+
+async function startTransferToSibling(photoIds) {
+  if (photoIds.length === 0 || state.currentPersonParentId === null) return;
+  const currentPersonId = state.currentPersonId;
+  const parentId = state.currentPersonParentId;
+
+  // Load siblings (same parent, exclude self)
+  const allPeople = await fetchJSON('/api/people?status=all') || [];
+  const siblings = allPeople.filter(p => p.parent_id === parentId && p.id !== currentPersonId);
+
+  const list = document.getElementById('sibling-picker-list');
+  list.innerHTML = '';
+
+  // "New sibling" option
+  const newItem = document.createElement('div');
+  newItem.className = 'reparent-item';
+  newItem.textContent = '＋ 新建兄弟人物';
+  newItem.style.fontWeight = '600';
+  newItem.addEventListener('click', async () => {
+    document.getElementById('sibling-picker-modal').classList.add('hidden');
+    await createNewSiblingAndTransfer(currentPersonId, parentId, photoIds);
+  });
+  list.appendChild(newItem);
+
+  for (const sib of siblings.sort((a, b) => (a.name || '').localeCompare(b.name || ''))) {
+    const item = document.createElement('div');
+    item.className = 'reparent-item';
+    item.textContent = sib.name || '未命名';
+    item.addEventListener('click', async () => {
+      document.getElementById('sibling-picker-modal').classList.add('hidden');
+      await doTransferToSibling(currentPersonId, sib.id, photoIds, false);
+    });
+    list.appendChild(item);
+  }
+
+  document.getElementById('sibling-picker-modal').classList.remove('hidden');
+}
+
+async function createNewSiblingAndTransfer(currentPersonId, parentId, photoIds) {
+  const name = await showPersonDetailNameDialog('新建兄弟人物', `与当前人物同级，接收 ${photoIds.length} 张照片中的人脸`);
+  if (name === null) return;
+
+  const decision = name ? await checkDuplicateName(name, null) : { action: 'different' };
+
+  let targetId;
+  let isNew = false;
+  if (decision.action === 'same') {
+    targetId = decision.targetId;
+  } else {
+    const resp = await fetch('/api/people', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || null, parent_id: parentId }),
+    });
+    if (!resp.ok) return;
+    const { id } = await resp.json();
+    targetId = id;
+    isNew = true;
+  }
+
+  await doTransferToSibling(currentPersonId, targetId, photoIds, isNew);
+}
+
+async function doTransferToSibling(currentPersonId, targetId, photoIds, isNewPerson) {
+  const resp = await fetch(`/api/people/${currentPersonId}/transfer`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ target_person_id: targetId, photo_ids: photoIds }),
+  });
+  if (resp.ok) {
+    const label = isNewPerson ? '新建兄弟并转移' : `转移至兄弟 #${targetId}`;
+    pushUndo(label, async () => {
+      await fetch(`/api/people/${targetId}/transfer`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ target_person_id: currentPersonId, photo_ids: photoIds }),
+      });
+      if (isNewPerson) {
+        await fetch(`/api/people/${targetId}`, { method: 'DELETE' });
+      }
+    });
+  }
+  clearPersonDetailSelection();
+  await refreshPersonDetail();
+}
+
+async function refreshPersonDetail() {
+  if (state.currentPersonId) {
+    const data = await fetchJSON(`/api/people/${state.currentPersonId}?per_page=100`);
+    const photos = data ? (data.photos || data) : [];
+    state.personDetailPhotos = photos;
+    renderPersonDetailPhotos(photos);
+    await loadSubPersons(state.currentPersonId);
   }
 }
 
@@ -1084,24 +1425,13 @@ function showDupNameDialog(name, ownPersonId, matches) {
   document.getElementById('dup-name-modal').classList.remove('hidden');
 }
 
-async function confirmDupNameMerge() {
+function confirmDupNameSame() {
   document.getElementById('dup-name-modal').classList.add('hidden');
   if (!_dupNameContext) return;
-  const { ownPersonId, matchedPeople } = _dupNameContext;
-  _dupNameContext = null;
-
-  // Merge ownPerson into the first matched (existing) person
+  const { matchedPeople } = _dupNameContext;
   const targetId = matchedPeople[0].id;
-  if (ownPersonId && ownPersonId !== targetId) {
-    await fetch('/api/people/merge', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_id: ownPersonId, target_id: targetId }),
-    });
-  }
-
-  if (_dupNameResolve) { _dupNameResolve('merged'); _dupNameResolve = null; }
-  loadPeopleList();
+  _dupNameContext = null;
+  if (_dupNameResolve) { _dupNameResolve({ action: 'same', targetId }); _dupNameResolve = null; }
 }
 
 // ── People undo stack ─────────────────────────────────────────────────────────
@@ -1165,8 +1495,13 @@ function startInlineNameEdit(cell, personId) {
     const newName = input.value.trim();
     if (newName !== currentName) {
       const decision = await checkDuplicateName(newName, personId);
-      if (decision === 'merged') {
-        // Person was merged away; reload list and stop
+      if (decision.action === 'same') {
+        // Merge current person into the matched existing person
+        await fetch('/api/people/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_id: personId, target_id: decision.targetId }),
+        });
         loadPeopleList();
         return;
       }

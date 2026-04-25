@@ -78,6 +78,38 @@ pub struct ReparentBody {
     pub new_parent_id: Option<i64>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct CreatePersonBody {
+    pub name: Option<String>,
+    pub parent_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreatePersonResponse {
+    pub id: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferFacesBody {
+    pub target_person_id: i64,
+    pub photo_ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TransferFacesResponse {
+    pub faces_moved: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LiftPersonBody {
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LiftPersonResponse {
+    pub new_person_id: i64,
+}
+
 pub async fn get_person_photos(
     State(state): State<AppState>,
     Path(person_id): Path<i64>,
@@ -376,4 +408,129 @@ fn crop_face(path: &str, x: i64, y: i64, w: i64, h: i64) -> anyhow::Result<Vec<u
     let mut buf = Vec::new();
     thumb.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;
     Ok(buf)
+}
+
+pub async fn create_person(
+    State(state): State<AppState>,
+    Json(body): Json<CreatePersonBody>,
+) -> Result<Json<CreatePersonResponse>, StatusCode> {
+    let result = sqlx::query(
+        "INSERT INTO people (name, parent_id, status) VALUES (?, ?, 'active')",
+    )
+    .bind(&body.name)
+    .bind(body.parent_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(CreatePersonResponse { id: result.last_insert_rowid() }))
+}
+
+pub async fn transfer_faces(
+    State(state): State<AppState>,
+    Path(source_id): Path<i64>,
+    Json(body): Json<TransferFacesBody>,
+) -> Result<Json<TransferFacesResponse>, StatusCode> {
+    if body.photo_ids.is_empty() {
+        return Ok(Json(TransferFacesResponse { faces_moved: 0 }));
+    }
+
+    let placeholders = body.photo_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+
+    // Copy matching face records to target person
+    let insert_sql = format!(
+        "INSERT OR IGNORE INTO person_faces (person_id, face_id)
+         SELECT ?, f.id FROM faces f
+         JOIN person_faces pf ON pf.face_id = f.id
+         WHERE pf.person_id = ? AND f.photo_id IN ({placeholders})"
+    );
+    let mut q = sqlx::query(&insert_sql).bind(body.target_person_id).bind(source_id);
+    for id in &body.photo_ids { q = q.bind(id); }
+    q.execute(&state.pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Remove from source person
+    let delete_sql = format!(
+        "DELETE FROM person_faces WHERE person_id = ? AND face_id IN (
+           SELECT f.id FROM faces f WHERE f.photo_id IN ({placeholders})
+         )"
+    );
+    let mut q = sqlx::query(&delete_sql).bind(source_id);
+    for id in &body.photo_ids { q = q.bind(id); }
+    let result = q.execute(&state.pool).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Set cover_face_id for target if currently null
+    sqlx::query(
+        "UPDATE people SET cover_face_id = (
+           SELECT pf.face_id FROM person_faces pf WHERE pf.person_id = ? ORDER BY pf.face_id LIMIT 1
+         ) WHERE id = ? AND cover_face_id IS NULL",
+    )
+    .bind(body.target_person_id)
+    .bind(body.target_person_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(TransferFacesResponse { faces_moved: result.rows_affected() }))
+}
+
+pub async fn delete_person(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, StatusCode> {
+    let face_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM person_faces WHERE person_id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if face_count.0 > 0 {
+        return Err(StatusCode::CONFLICT);
+    }
+
+    let result = sqlx::query("DELETE FROM people WHERE id = ?")
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if result.rows_affected() == 0 {
+        Err(StatusCode::NOT_FOUND)
+    } else {
+        Ok(StatusCode::OK)
+    }
+}
+
+pub async fn lift_person(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Json(body): Json<LiftPersonBody>,
+) -> Result<Json<LiftPersonResponse>, StatusCode> {
+    let mut tx = state.pool.begin().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Create new parent inheriting current person's parent_id
+    let insert = sqlx::query(
+        "INSERT INTO people (name, parent_id, status)
+         VALUES (?, (SELECT parent_id FROM people WHERE id = ?), 'active')",
+    )
+    .bind(&body.name)
+    .bind(id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let new_parent_id = insert.last_insert_rowid();
+
+    // Reparent current person to new parent
+    sqlx::query("UPDATE people SET parent_id = ? WHERE id = ?")
+        .bind(new_parent_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tx.commit().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(LiftPersonResponse { new_person_id: new_parent_id }))
 }

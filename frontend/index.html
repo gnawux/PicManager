@@ -152,12 +152,14 @@
             <div style="display:flex;gap:8px;align-items:center;">
               <input id="person-name-input" type="text" class="person-name-input" placeholder="未命名" />
               <button id="person-merge-btn" class="btn-ghost">合并到…</button>
+              <button id="person-select-toggle-btn" class="btn-ghost">选择照片</button>
             </div>
           </div>
           <!-- Breadcrumb + reparent -->
           <div class="person-breadcrumb-bar">
             <span id="person-breadcrumb">顶级</span>
             <button id="person-reparent-btn" class="btn-ghost" style="font-size:11px;padding:2px 8px">更改父节点</button>
+            <button id="person-lift-btn" class="btn-ghost" style="font-size:11px;padding:2px 8px">创建父节点</button>
           </div>
           <div id="person-reparent-panel" class="person-reparent-panel hidden">
             <input id="person-reparent-search" type="text" placeholder="输入姓名筛选，或选"设为顶级"…"
@@ -165,6 +167,13 @@
             <div id="person-reparent-list" class="person-reparent-list"></div>
           </div>
           <div id="person-photos-grid" class="photo-grid"></div>
+          <!-- Photo selection action bar -->
+          <div id="person-detail-batch-bar" class="batch-bar hidden">
+            <span id="person-detail-batch-count" style="flex:1;font-size:13px"></span>
+            <button id="person-detail-create-child-btn">创建子人物</button>
+            <button id="person-detail-transfer-sibling-btn">转移至兄弟</button>
+            <button id="person-detail-cancel-select-btn" class="btn-ghost">取消</button>
+          </div>
 
           <!-- Sub-persons panel -->
           <div id="subpeople-panel" class="subpeople-panel">
@@ -235,6 +244,32 @@
       <div style="display:flex;gap:8px;margin-top:12px">
         <button id="merge-confirm-btn" disabled>合并</button>
         <button id="merge-cancel-btn" class="btn-ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Person detail: sibling picker -->
+  <div id="sibling-picker-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:420px">
+      <h2>选择目标兄弟人物</h2>
+      <p style="font-size:12px;color:#888;margin-bottom:10px">选择接收照片人脸的兄弟人物，或新建一个：</p>
+      <div id="sibling-picker-list" class="person-reparent-list"></div>
+      <div style="margin-top:12px">
+        <button id="sibling-picker-cancel" class="btn-ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Person detail: name input for sub-person / parent / new sibling -->
+  <div id="person-detail-name-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:360px">
+      <h2 id="person-detail-name-title">创建子人物</h2>
+      <p style="font-size:12px;color:#888;margin-bottom:8px" id="person-detail-name-desc"></p>
+      <input id="person-detail-name-input" type="text" class="person-name-input"
+             style="width:100%;margin:4px 0 16px" placeholder="输入姓名（可留空）" />
+      <div style="display:flex;gap:8px">
+        <button id="person-detail-name-confirm">确认</button>
+        <button id="person-detail-name-cancel" class="btn-ghost">取消</button>
       </div>
     </div>
   </div>
