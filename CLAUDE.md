@@ -478,6 +478,23 @@ let result: Vec<_> = kept.into_iter().map(|i| candidates[i].0.clone()).collect()
 #view-people:not(.hidden) { display: flex; flex-direction: row; }
 ```
 
+### CSS grid + overflow:hidden 行高为 0：照片全堆在顶部互相重叠
+
+**症状：** 照片缩略图比例正确（不再压扁），但全部叠在一起，y 坐标相同，看起来只有一张。
+
+**根因：** `photo-card` 设有 `overflow: hidden`，CSS grid 计算行高时以 **min-content** 为基准（`grid-auto-rows: auto` 的默认行为）。`overflow: hidden` 的元素 min-content 高度为 0（内容不撑开行高），导致每行高度为 0，所有卡片都被放置在 y=0 处，相互重叠。
+
+**修法：** 改用 `grid-auto-rows: max-content`，让行高由元素的 **max-content**（实际渲染高度）决定，而非 min-content：
+
+```css
+.photo-grid {
+  grid-auto-rows: max-content;  /* ← 必须显式指定；auto 对 overflow:hidden 卡片无效 */
+  align-items: start;           /* 同时需要，避免 stretch 循环依赖 */
+}
+```
+
+**检查清单：** 每当新增带 `overflow: hidden` 的 grid item 时，确认其 grid 容器已设置 `grid-auto-rows: max-content`。
+
 ### 测试样本照片（tests/samples/）
 
 **选用原则：根据内容选正确的文件，不要混用。**
