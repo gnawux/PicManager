@@ -108,6 +108,11 @@ async fn import_dir_inner(
             .map(|p| (&p.geo_total, &p.geo_done))
             .unwrap_or((&dummy_total, &dummy_done));
         album::group_by_location_scoped(pool, &newly_imported_ids, geo_total, geo_done).await?;
+
+        // Assign newly detected faces to existing people or create new person clusters.
+        if let Err(e) = crate::face::cluster::run_incremental_clustering(pool).await {
+            tracing::warn!("incremental clustering failed: {e}");
+        }
     }
 
     Ok(summary)

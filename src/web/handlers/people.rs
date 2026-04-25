@@ -295,6 +295,15 @@ pub async fn cluster_people(
     Ok(Json(ClusterResponse { people_created: count }))
 }
 
+pub async fn incremental_cluster_people(
+    State(state): State<AppState>,
+) -> Result<Json<ClusterResponse>, StatusCode> {
+    let count = crate::face::cluster::run_incremental_clustering(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(ClusterResponse { people_created: count }))
+}
+
 pub async fn merge_people(
     State(state): State<AppState>,
     Json(body): Json<MergeBody>,

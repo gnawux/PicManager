@@ -15,7 +15,7 @@ use handlers::{
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
     geo::{get_geo_hierarchy, start_regeocode, get_regeocode_status},
-    people::{list_people, get_person_photos, get_people_tree, cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person},
+    people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person},
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb, get_photo, get_gps_points, patch_photo, batch_update_photos},
 };
@@ -56,6 +56,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/people", get(list_people).post(create_person))
         .route("/api/people/tree", get(get_people_tree))
         .route("/api/people/cluster", post(cluster_people))
+        .route("/api/people/cluster/incremental", post(incremental_cluster_people))
         .route("/api/people/merge", post(merge_people))
         .route("/api/people/batch-update", post(batch_update_people))
         .route("/api/people/{id}", get(get_person_photos).patch(patch_person).delete(delete_person))
