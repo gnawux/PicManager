@@ -6,8 +6,9 @@ const state = {
   total: 0,
   albumId: null,
   importPollId: null,
-  photos: [],       // current page photos for detail navigation
-  detailIdx: -1,    // index into state.photos of currently open detail
+  photos: [],       // current page photos for the Photos tab
+  detailPhotos: [], // photos used for prev/next navigation in the open detail modal
+  detailIdx: -1,    // index into detailPhotos of the currently open detail
   selectMode: false,
   selected: new Set(), // selected photo IDs
   currentDetail: null, // full detail object of the open photo
@@ -247,9 +248,13 @@ async function saveBatchTime() {
 }
 
 // ── Photo detail modal ────────────────────────────────────────────────────────
-async function openDetail(idx) {
-  const photo = state.photos[idx];
+// context: optional photos array for this session's prev/next navigation.
+//   If omitted, falls back to state.photos (the Photos tab's current page).
+async function openDetail(idx, context) {
+  const photos = context || state.photos;
+  const photo = photos[idx];
   if (!photo) return;
+  state.detailPhotos = photos;
   state.detailIdx = idx;
 
   const modal = document.getElementById('detail-modal');
@@ -366,13 +371,13 @@ function closeDetail() {
 
 function navigateDetail(delta) {
   const next = state.detailIdx + delta;
-  if (next >= 0 && next < state.photos.length) openDetail(next);
+  if (next >= 0 && next < state.detailPhotos.length) openDetail(next, state.detailPhotos);
 }
 
 function updateDetailNav() {
   document.getElementById('detail-prev').disabled = state.detailIdx <= 0;
   document.getElementById('detail-next').disabled =
-    state.detailIdx >= state.photos.length - 1;
+    state.detailIdx >= state.detailPhotos.length - 1;
 }
 
 function renderPagination() {
@@ -644,14 +649,15 @@ function renderGeoPhotos(photos, total) {
   grid.scrollTop = 0;
   grid.innerHTML = '';
 
-  for (const p of photos) {
+  photos.forEach((p, idx) => {
     const card = document.createElement('div');
     card.className = 'photo-card';
     const label = p.taken_at ? p.taken_at.slice(0, 10) : '';
     card.innerHTML = `<img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
       <div class="meta">${label}</div>`;
+    card.addEventListener('click', () => openDetail(idx, photos));
     grid.appendChild(card);
-  }
+  });
 
   const totalPages = Math.ceil(total / GEO_PER_PAGE);
   if (totalPages > 1) {
@@ -961,7 +967,7 @@ async function showPersonDetail(personId) {
 function renderPersonDetailPhotos(photos) {
   const grid = document.getElementById('person-photos-grid');
   grid.innerHTML = '';
-  for (const p of photos) {
+  photos.forEach((p, idx) => {
     const card = document.createElement('div');
     card.className = 'photo-card';
     if (state.personDetailSelectMode) card.classList.add('select-mode');
@@ -974,10 +980,12 @@ function renderPersonDetailPhotos(photos) {
     card.addEventListener('click', () => {
       if (state.personDetailSelectMode) {
         togglePersonDetailPhoto(p.id, card);
+      } else {
+        openDetail(idx, photos);
       }
     });
     grid.appendChild(card);
-  }
+  });
 }
 
 function updatePersonDetailSiblingBtn() {
@@ -1830,7 +1838,7 @@ async function loadAnimalPhotos() {
     card.innerHTML = `
       <img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
       <div class="meta">${label}</div>`;
-    card.addEventListener('click', () => openAnimalPhotoDetail(idx));
+    card.addEventListener('click', () => openDetail(idx, state.animalPhotos));
     grid.appendChild(card);
   });
 
@@ -1847,13 +1855,6 @@ function changeAnimalPage(delta) {
   loadAnimalPhotos();
 }
 
-async function openAnimalPhotoDetail(idx) {
-  // Temporarily swap state.photos so the detail navigator works within this species view
-  const saved = state.photos;
-  state.photos = state.animalPhotos;
-  await openDetail(idx);
-  state.photos = saved;
-}
 
 function renderAnimalOverlay(animals) {
   const svg = document.getElementById('detail-animals');
