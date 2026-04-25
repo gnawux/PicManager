@@ -4,6 +4,8 @@ pub mod state;
 
 use sqlx::SqlitePool;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use crate::album;
 use crate::dedup::hash::compute_phash;
 use crate::error::Result;
@@ -18,22 +20,73 @@ pub struct ImportSummary {
     pub errors: usize,
 }
 
+#[derive(Default)]
+pub struct ImportProgress {
+    pub total: AtomicUsize,
+    pub processed: AtomicUsize,
+    pub imported: AtomicUsize,
+    pub skipped: AtomicUsize,
+    pub errors: AtomicUsize,
+}
+
+pub type SharedImportProgress = Arc<ImportProgress>;
+
 pub async fn import_dir(
     pool: &SqlitePool,
     source_dir: &Path,
     library_path: &Path,
     copy_only: bool,
 ) -> Result<ImportSummary> {
+    import_dir_inner(pool, source_dir, library_path, copy_only, None).await
+}
+
+pub async fn import_dir_with_progress(
+    pool: &SqlitePool,
+    source_dir: &Path,
+    library_path: &Path,
+    copy_only: bool,
+    progress: SharedImportProgress,
+) -> Result<ImportSummary> {
+    import_dir_inner(pool, source_dir, library_path, copy_only, Some(progress)).await
+}
+
+async fn import_dir_inner(
+    pool: &SqlitePool,
+    source_dir: &Path,
+    library_path: &Path,
+    copy_only: bool,
+    progress: Option<SharedImportProgress>,
+) -> Result<ImportSummary> {
     let paths = scanner::scan_dir(source_dir);
-    let mut summary = ImportSummary { total: paths.len(), ..Default::default() };
+    let total = paths.len();
+    if let Some(p) = &progress {
+        p.total.store(total, Relaxed);
+    }
+    let mut summary = ImportSummary { total, ..Default::default() };
 
     for path in &paths {
         match import_one(pool, path, library_path, copy_only).await {
-            Ok(true)  => summary.imported += 1,
-            Ok(false) => summary.skipped += 1,
+            Ok(true) => {
+                summary.imported += 1;
+                if let Some(p) = &progress {
+                    p.imported.fetch_add(1, Relaxed);
+                    p.processed.fetch_add(1, Relaxed);
+                }
+            }
+            Ok(false) => {
+                summary.skipped += 1;
+                if let Some(p) = &progress {
+                    p.skipped.fetch_add(1, Relaxed);
+                    p.processed.fetch_add(1, Relaxed);
+                }
+            }
             Err(e) => {
                 tracing::warn!("failed to import {}: {e}", path.display());
                 summary.errors += 1;
+                if let Some(p) = &progress {
+                    p.errors.fetch_add(1, Relaxed);
+                    p.processed.fetch_add(1, Relaxed);
+                }
             }
         }
     }
@@ -109,6 +162,7 @@ mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
     use std::fs;
+    use std::sync::atomic::Ordering::Relaxed;
     use tempfile::tempdir;
 
     async fn test_pool() -> SqlitePool {
@@ -123,6 +177,35 @@ mod tests {
 
     fn fixtures_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
+    }
+
+    #[tokio::test]
+    async fn test_progress_counters_match_summary() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let progress = SharedImportProgress::default();
+        let summary = import_dir_with_progress(
+            &pool, &fixtures_dir(), lib.path(), true, progress.clone(),
+        ).await.unwrap();
+        assert_eq!(progress.total.load(Relaxed), summary.total);
+        assert_eq!(progress.imported.load(Relaxed), summary.imported);
+        assert_eq!(progress.skipped.load(Relaxed), summary.skipped);
+        assert_eq!(progress.errors.load(Relaxed), summary.errors);
+        assert_eq!(
+            progress.processed.load(Relaxed),
+            summary.imported + summary.skipped + summary.errors,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_progress_total_is_nonzero_for_nonempty_dir() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let progress = SharedImportProgress::default();
+        import_dir_with_progress(
+            &pool, &fixtures_dir(), lib.path(), true, progress.clone(),
+        ).await.unwrap();
+        assert!(progress.total.load(Relaxed) > 0);
     }
 
     #[tokio::test]
