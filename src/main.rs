@@ -202,17 +202,31 @@ async fn import_with_progress(
             last_print = now;
             let total = progress.total.load(Relaxed);
             let processed = progress.processed.load(Relaxed);
-            let imported = progress.imported.load(Relaxed);
-            let skipped = progress.skipped.load(Relaxed);
-            let errors = progress.errors.load(Relaxed);
+            let faces = progress.faces_found.load(Relaxed);
+            let geo_total = progress.geo_total.load(Relaxed);
+            let geo_done = progress.geo_done.load(Relaxed);
+
             if total > 0 {
                 let elapsed = start.elapsed();
                 let mins = elapsed.as_secs() / 60;
                 let secs = elapsed.as_secs() % 60;
-                let pct = processed * 100 / total;
+                let import_pct = processed * 100 / total;
+
+                // geo status: waiting while import loop runs; then count or "无 GPS"
+                let geo_str = if processed < total {
+                    "等待中".to_string()
+                } else if geo_total == 0 {
+                    "无 GPS".to_string()
+                } else {
+                    format!("{}/{} ({}%)", geo_done, geo_total, geo_done * 100 / geo_total)
+                };
+
                 println!(
-                    "[{:02}:{:02}:{:02}] 共 {} 张 ｜ 已处理：{}/{} ({}%) ｜ 导入：{} ｜ 跳过：{} ｜ 失败：{}",
-                    mins / 60, mins % 60, secs, total, processed, total, pct, imported, skipped, errors,
+                    "[{:02}:{:02}:{:02}] 导入：{}/{} ({}%) ｜ 人脸：{} 张 ｜ 地理：{}",
+                    mins / 60, mins % 60, secs,
+                    processed, total, import_pct,
+                    faces,
+                    geo_str,
                 );
             }
         }

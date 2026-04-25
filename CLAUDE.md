@@ -147,8 +147,10 @@ docs/
 | 22f | 前端：重复姓名检测弹窗（面孔缩略图对比，选择合并或保留重名） |
 | 23a | importer: SharedImportProgress + import_dir_with_progress（原子计数器，per-file 更新） |
 | 23b | CLI import 进度循环：每 5 秒检查、每 60 秒打印进度 + 耗时汇总 |
+| 24a/b | import_one → Option<(photo_id, face_count)>；faces_found/geo_total/geo_done 进度追踪；group_by_location_scoped 限定新导入照片范围 |
+| 24c | CLI 三段式进度格式：导入 / 人脸 / 地理分开显示 |
 
-当前测试数：**204 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**207 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
