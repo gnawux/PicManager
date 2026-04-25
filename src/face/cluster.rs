@@ -88,6 +88,133 @@ fn cosine_distance(a: &[f32], b: &[f32]) -> f32 {
     1.0 - dot
 }
 
+/// Assign unassigned faces to existing people or form new person clusters,
+/// without touching any existing `people` / `person_faces` rows.
+///
+/// Algorithm:
+/// 1. Find faces with non-NULL embedding that have no `person_faces` entry.
+/// 2. For each, find the nearest existing person (minimum cosine distance over
+///    all that person's faces); assign if distance < eps (0.4).
+/// 3. Run DBSCAN on remaining unassigned faces → create new person records.
+///
+/// Returns the number of *new* people created.
+pub async fn run_incremental_clustering(pool: &SqlitePool) -> Result<usize> {
+    // ── 1. Unassigned faces ────────────────────────────────────────────────
+    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT f.id, f.embedding FROM faces f
+         WHERE f.embedding IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM person_faces pf WHERE pf.face_id = f.id)",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    if rows.is_empty() {
+        return Ok(0);
+    }
+
+    let unassigned: Vec<(i64, Vec<f32>)> = rows
+        .into_iter()
+        .filter_map(|(id, blob)| {
+            let emb = decode_embedding(&blob);
+            if emb.is_empty() { None } else { Some((id, emb)) }
+        })
+        .collect();
+
+    // ── 2. Existing people's embeddings ────────────────────────────────────
+    let existing_rows: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT pf.person_id, f.id, f.embedding
+         FROM person_faces pf JOIN faces f ON f.id = pf.face_id
+         WHERE f.embedding IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // person_id → list of (face_id, embedding)
+    let mut person_map: std::collections::HashMap<i64, Vec<(i64, Vec<f32>)>> =
+        std::collections::HashMap::new();
+    for (pid, fid, blob) in existing_rows {
+        let emb = decode_embedding(&blob);
+        if !emb.is_empty() {
+            person_map.entry(pid).or_default().push((fid, emb));
+        }
+    }
+
+    const EPS: f32 = 0.4;
+    let mut still_unassigned: Vec<(i64, Vec<f32>)> = Vec::new();
+
+    for (face_id, emb) in unassigned {
+        let best = person_map.iter().filter_map(|(&pid, pfaces)| {
+            pfaces
+                .iter()
+                .map(|(_, pe)| cosine_distance(&emb, pe))
+                .reduce(f32::min)
+                .map(|d| (d, pid))
+        }).min_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        if let Some((dist, pid)) = best {
+            if dist < EPS {
+                sqlx::query(
+                    "INSERT OR IGNORE INTO person_faces (person_id, face_id) VALUES (?, ?)",
+                )
+                .bind(pid)
+                .bind(face_id)
+                .execute(pool)
+                .await?;
+                // Add to map so subsequent faces can match against it
+                person_map.entry(pid).or_default().push((face_id, emb));
+                continue;
+            }
+        }
+        still_unassigned.push((face_id, emb));
+    }
+
+    // ── 3. DBSCAN on remaining unassigned → new people ────────────────────
+    let clusters = cluster_faces(&still_unassigned, EPS, 2);
+    let new_count = clusters.len();
+
+    for group in clusters {
+        let cover_face_id = {
+            let mut best_id = group[0];
+            let mut best_conf: f32 = sqlx::query_scalar(
+                "SELECT confidence FROM faces WHERE id = ?",
+            )
+            .bind(best_id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0.0);
+            for &fid in &group[1..] {
+                let conf: f32 = sqlx::query_scalar(
+                    "SELECT confidence FROM faces WHERE id = ?",
+                )
+                .bind(fid)
+                .fetch_one(pool)
+                .await
+                .unwrap_or(0.0);
+                if conf > best_conf {
+                    best_conf = conf;
+                    best_id = fid;
+                }
+            }
+            best_id
+        };
+
+        let person_id: i64 =
+            sqlx::query_scalar("INSERT INTO people (cover_face_id) VALUES (?) RETURNING id")
+                .bind(cover_face_id)
+                .fetch_one(pool)
+                .await?;
+        for face_id in group {
+            sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+                .bind(person_id)
+                .bind(face_id)
+                .execute(pool)
+                .await?;
+        }
+    }
+
+    Ok(new_count)
+}
+
 /// Re-cluster all faces with non-NULL embeddings, writing results to
 /// the `people` / `person_faces` tables (full replacement each run).
 /// Returns the number of people created.
@@ -277,5 +404,115 @@ mod tests {
         let a = unit_vec(8, 0);
         let b = unit_vec(8, 1);
         assert!((cosine_distance(&a, &b) - 1.0).abs() < 1e-6);
+    }
+
+    async fn setup_pool() -> sqlx::SqlitePool {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    async fn insert_photo(pool: &sqlx::SqlitePool, id: i64) {
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status) \
+             VALUES (?, ?, ?, 'jpeg', 'imported')"
+        )
+        .bind(id).bind(format!("/p{id}")).bind(format!("sha{id}"))
+        .execute(pool).await.unwrap();
+    }
+
+    async fn insert_face_with_emb(pool: &sqlx::SqlitePool, photo_id: i64, emb: &[f32]) -> i64 {
+        use crate::face::embedder::encode_embedding;
+        sqlx::query_scalar(
+            "INSERT INTO faces (photo_id, x, y, width, height, confidence, embedding) \
+             VALUES (?, 0, 0, 50, 50, 0.9, ?) RETURNING id"
+        )
+        .bind(photo_id).bind(encode_embedding(emb).as_slice())
+        .fetch_one(pool).await.unwrap()
+    }
+
+    async fn assign_face(pool: &sqlx::SqlitePool, person_id: i64, face_id: i64) {
+        sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+            .bind(person_id).bind(face_id)
+            .execute(pool).await.unwrap();
+    }
+
+    async fn create_person(pool: &sqlx::SqlitePool, cover_face_id: i64) -> i64 {
+        sqlx::query_scalar("INSERT INTO people (cover_face_id) VALUES (?) RETURNING id")
+            .bind(cover_face_id)
+            .fetch_one(pool).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn incremental_assigns_new_face_to_existing_person() {
+        let pool = setup_pool().await;
+        insert_photo(&pool, 1).await;
+        insert_photo(&pool, 2).await;
+
+        let emb = unit_vec(512, 0);
+        // Two faces already clustered into a person
+        let f1 = insert_face_with_emb(&pool, 1, &emb).await;
+        let f2 = insert_face_with_emb(&pool, 1, &emb).await;
+        let person = create_person(&pool, f1).await;
+        assign_face(&pool, person, f1).await;
+        assign_face(&pool, person, f2).await;
+
+        // A new, unassigned face with the same embedding
+        let f3 = insert_face_with_emb(&pool, 2, &emb).await;
+
+        let new_people = run_incremental_clustering(&pool).await.unwrap();
+        assert_eq!(new_people, 0, "no new person should be created");
+
+        let people_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM people")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(people_count, 1, "still only one person");
+
+        let assigned: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM person_faces WHERE face_id = ?")
+                .bind(f3).fetch_one(&pool).await.unwrap();
+        assert_eq!(assigned, 1, "f3 should now be assigned to the existing person");
+    }
+
+    #[tokio::test]
+    async fn incremental_creates_new_person_for_distant_face() {
+        let pool = setup_pool().await;
+        insert_photo(&pool, 1).await;
+        insert_photo(&pool, 2).await;
+
+        let emb_a = unit_vec(512, 0);
+        let emb_b = unit_vec(512, 255); // orthogonal → cosine dist = 1.0
+
+        let f1 = insert_face_with_emb(&pool, 1, &emb_a).await;
+        let person = create_person(&pool, f1).await;
+        assign_face(&pool, person, f1).await;
+
+        // New face very different from existing person
+        let _f2 = insert_face_with_emb(&pool, 2, &emb_b).await;
+
+        let new_people = run_incremental_clustering(&pool).await.unwrap();
+        assert_eq!(new_people, 1, "one new person should be created");
+
+        let people_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM people")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(people_count, 2);
+    }
+
+    #[tokio::test]
+    async fn incremental_noop_when_no_unassigned_faces() {
+        let pool = setup_pool().await;
+        insert_photo(&pool, 1).await;
+        let f1 = insert_face_with_emb(&pool, 1, &unit_vec(512, 0)).await;
+        let p = create_person(&pool, f1).await;
+        assign_face(&pool, p, f1).await;
+
+        let new_people = run_incremental_clustering(&pool).await.unwrap();
+        assert_eq!(new_people, 0);
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM people")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "no change");
     }
 }
