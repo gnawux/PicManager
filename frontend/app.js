@@ -632,7 +632,7 @@ function renderGeoPhotos(photos, total) {
   const pager = document.getElementById('geo-photos-pager');
 
   section.style.display = '';
-  section.scrollTop = 0;
+  grid.scrollTop = 0;
   grid.innerHTML = '';
 
   for (const p of photos) {
@@ -792,8 +792,8 @@ function showPeopleList() {
   state.currentPersonParentId = null;
   clearPeopleSelection();
   clearPersonDetailSelection();
-  document.getElementById('people-list-section').classList.remove('hidden');
-  document.getElementById('person-detail-section').classList.add('hidden');
+  document.getElementById('person-detail-section').classList.add('detail-empty');
+  document.getElementById('people-detail-empty').classList.remove('hidden');
   loadPeopleList();
 }
 
@@ -922,8 +922,8 @@ async function confirmPeopleNameMerge() {
 async function showPersonDetail(personId) {
   state.currentPersonId = personId;
   clearPersonDetailSelection();
-  document.getElementById('people-list-section').classList.add('hidden');
-  document.getElementById('person-detail-section').classList.remove('hidden');
+  document.getElementById('person-detail-section').classList.remove('detail-empty');
+  document.getElementById('people-detail-empty').classList.add('hidden');
 
   // Load person info
   const people = state.allPeople;

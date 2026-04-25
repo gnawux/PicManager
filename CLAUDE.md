@@ -435,6 +435,49 @@ let result: Vec<_> = kept.into_iter().map(|i| candidates[i].0.clone()).collect()
 - 检查照片容器是否缺 `min-height: 0`
 - 检查固定高度的兄弟元素是否有 `flex-shrink: 0`
 
+### CSS grid + aspect-ratio：卡片高度为 0
+
+**症状：** 卡片宽度正确（由 grid column 决定），但高度为 0，`img` 的 `aspect-ratio: 1` 没有生效。
+
+**根因：** CSS grid 默认 `align-items: stretch`。当 grid item 同时设置了 `aspect-ratio` 时，浏览器用"stretch 高度"推导 aspect-ratio 高度，又用 aspect-ratio 高度推导 stretch 高度，循环依赖导致结果为 0。
+
+**修法：** 在 grid 容器或 grid item 上加 `align-items: start`（或 `align-self: start`），让卡片高度由内容（aspect-ratio + meta 文字）决定，打破循环：
+
+```css
+.people-grid { align-items: start; }
+```
+
+### flex 侧边栏内滚动：让 section 本身滚动而非嵌套 grid 滚动
+
+**症状：** 侧边栏中 grid 设置了 `flex: 1; overflow-y: auto`，但所有行被压缩进容器高度，内容不滚动。
+
+**根因：** flex column 容器上的 `overflow: hidden` 会压制子 grid 的 `overflow-y: auto` 滚动语义，导致 grid 行高被等分压缩。
+
+**修法：** 不要让 grid 自身滚动，改为让**外层 section 滚动**，grid 自然展开到内容高度：
+
+```css
+/* 外层 section 负责滚动 */
+#people-list-section { overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; }
+/* grid 不参与滚动，自然高度 */
+#people-list-section .people-grid { flex: none; overflow-y: visible; }
+```
+
+### 视图切换：布局覆盖规则不能用 display !important
+
+**症状：** 切换到其他标签页后，人物标签页的内容仍然显示在下方。
+
+**根因：** 用 `#view-people { display: flex !important }` 覆盖 flex-direction 时，`!important` 同时覆盖了 `.view-section.hidden { display: none }`，导致隐藏状态失效。
+
+**修法：** 用 `:not(.hidden)` 选择器限定布局覆盖的作用范围，避免与隐藏状态冲突：
+
+```css
+/* ✗ 错误：!important 覆盖 display:none */
+#view-people { display: flex !important; flex-direction: row !important; }
+
+/* ✓ 正确：只在非隐藏状态下应用布局 */
+#view-people:not(.hidden) { display: flex; flex-direction: row; }
+```
+
 ### 测试样本照片（tests/samples/）
 
 **选用原则：根据内容选正确的文件，不要混用。**

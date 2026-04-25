@@ -149,8 +149,8 @@
           <div id="people-grid" class="people-grid"></div>
         </div>
 
-        <!-- Person detail (hidden until a person is clicked) -->
-        <div id="person-detail-section" class="hidden">
+        <!-- Person detail (shown alongside list in side-by-side layout) -->
+        <div id="person-detail-section" class="detail-empty">
           <div class="toolbar">
             <button id="person-back-btn" class="btn-ghost">← 人物列表</button>
             <div style="display:flex;gap:8px;align-items:center;">
@@ -184,6 +184,8 @@
             <h3>子人物</h3>
             <div id="subpeople-list"></div>
           </div>
+          <!-- Empty state shown when no person selected -->
+          <div id="people-detail-empty">点击左侧人物卡片查看详情</div>
         </div>
 
       </div>
