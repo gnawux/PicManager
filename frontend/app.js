@@ -534,13 +534,13 @@ function switchView(view) {
 
 // ── Geo view ──────────────────────────────────────────────────────────────────
 let geoData = null; // cached hierarchy
-let geoCurrentAlbumId = null;
+let geoCurrentGeoFilter = null; // {country?, state?, city?}
 let geoCurrentPage = 1;
 const GEO_PER_PAGE = 50;
 
 function hideGeoPhotos() {
   document.getElementById('geo-photos-section').style.display = 'none';
-  geoCurrentAlbumId = null;
+  geoCurrentGeoFilter = null;
   geoCurrentPage = 1;
 }
 
@@ -563,8 +563,11 @@ function renderGeoCountries(countries) {
     li.addEventListener('click', () => {
       ul.querySelectorAll('li').forEach(x => x.classList.remove('active'));
       li.classList.add('active');
-      renderGeoStates(c);
       setBreadcrumb(c.name);
+      renderGeoStates(c);
+      geoCurrentGeoFilter = { country: c.name };
+      geoCurrentPage = 1;
+      loadGeoPhotos();
     });
     ul.appendChild(li);
   }
@@ -574,7 +577,6 @@ function renderGeoStates(country) {
   const stateCol = document.getElementById('geo-col-state');
   stateCol.classList.remove('hidden');
   document.getElementById('geo-col-city').classList.add('hidden');
-  hideGeoPhotos();
 
   const ul = document.getElementById('geo-state-list');
   ul.innerHTML = '';
@@ -584,8 +586,11 @@ function renderGeoStates(country) {
     li.addEventListener('click', () => {
       ul.querySelectorAll('li').forEach(x => x.classList.remove('active'));
       li.classList.add('active');
-      renderGeoCities(s, country.name);
       setBreadcrumb(`${country.name} › ${s.name}`);
+      renderGeoCities(s, country.name);
+      geoCurrentGeoFilter = { country: country.name, state: s.name };
+      geoCurrentPage = 1;
+      loadGeoPhotos();
     });
     ul.appendChild(li);
   }
@@ -594,34 +599,35 @@ function renderGeoStates(country) {
 function renderGeoCities(st, countryName) {
   const cityCol = document.getElementById('geo-col-city');
   cityCol.classList.remove('hidden');
-  hideGeoPhotos();
 
   const ul = document.getElementById('geo-city-list');
   ul.innerHTML = '';
   for (const c of st.cities) {
     const li = document.createElement('li');
     li.innerHTML = `<span>${c.name}</span><span class="geo-count">${c.photo_count}</span>`;
-    li.addEventListener('click', async () => {
+    li.addEventListener('click', () => {
       ul.querySelectorAll('li').forEach(x => x.classList.remove('active'));
       li.classList.add('active');
       setBreadcrumb(`${countryName} › ${st.name} › ${c.name}`);
-      const albums = await fetchJSON('/api/albums');
-      const album = albums && albums.find(a => a.kind === 'location' && a.name === c.name);
-      if (album) {
-        geoCurrentAlbumId = album.id;
-        geoCurrentPage = 1;
-        loadGeoPhotos();
-      }
+      const cityParam = c.name === 'Unknown' ? '__null__' : c.name;
+      geoCurrentGeoFilter = { country: countryName, state: st.name, city: cityParam };
+      geoCurrentPage = 1;
+      loadGeoPhotos();
     });
     ul.appendChild(li);
   }
 }
 
 async function loadGeoPhotos() {
-  if (!geoCurrentAlbumId) return;
-  const data = await fetchJSON(
-    `/api/albums/${geoCurrentAlbumId}/photos?page=${geoCurrentPage}&per_page=${GEO_PER_PAGE}`
-  );
+  if (!geoCurrentGeoFilter) return;
+  const q = new URLSearchParams();
+  const f = geoCurrentGeoFilter;
+  if (f.country) q.set('country', f.country);
+  if (f.state)   q.set('state',   f.state);
+  if (f.city)    q.set('city',    f.city);
+  q.set('page', geoCurrentPage);
+  q.set('per_page', GEO_PER_PAGE);
+  const data = await fetchJSON(`/api/geo/photos?${q}`);
   if (!data) return;
   renderGeoPhotos(data.photos || [], data.total || 0);
 }
