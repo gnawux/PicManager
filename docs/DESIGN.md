@@ -991,6 +991,14 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 **`GET /api/geo/regeocode/status`**：返回 `{"running":true/false}`，供前端轮询。
 
+**`GET /api/geo/photos`**：按地理层级过滤照片，支持分页。
+
+查询参数：`country`、`state`、`city`（均可选）、`page`（默认 1）、`per_page`（默认 50，最大 200）。
+
+- 参数值 `__null__` 表示过滤该字段为 NULL 的记录（对应前端 "Unknown" 条目）
+- 省略参数则不对该字段过滤（如只传 `country` 则返回该国所有照片）
+- 返回 `{ "total": N, "page": N, "per_page": N, "photos": [{id, path, taken_at, camera}] }`
+
 ### animals.rs
 
 **`GET /api/animals/species`**：返回所有检测到的动物种类及照片数：
@@ -1030,6 +1038,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | POST | `/api/albums/merge` | `{"source":id,"target":id}` | 200 | 404 / 500 |
 | GET | `/api/faces/{id}/thumb` | — | JPEG bytes（人脸裁剪图） | 404 / 500 |
 | GET | `/api/geo/hierarchy` | — | 地理层级嵌套 JSON | 500 |
+| GET | `/api/geo/photos` | `?country=X&state=Y&city=Z&page=N&per_page=N` | `{total,photos[]}` | 500 |
 | POST | `/api/geo/regeocode` | — | `{"status":"started","count":N}` 或 `{"status":"already_running"}` | 500 |
 | GET | `/api/geo/regeocode/status` | — | `{"running":true/false}` | — |
 | GET | `/api/people` | — | `PersonRow[]` JSON（默认 status=active） | 500 |
@@ -1091,7 +1100,8 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | `loadPeopleList()` | GET `/api/people`，渲染人物卡片网格；选中的卡片（`.person-card.selected`）始终显示紫色勾选指示符（不依赖鼠标悬停） |
 | `clusterPeople()` | POST `/api/people/cluster`，触发重聚类，轮询进度 |
 | `loadPeopleTree()` | GET `/api/people/tree`，渲染层级树 |
-| `loadGeoHierarchy()` | GET `/api/geo/hierarchy`，渲染三列钻取面板 |
+| `loadGeoHierarchy()` | GET `/api/geo/hierarchy`，渲染三列钻取面板；点击任意层级触发 `loadGeoPhotos()` |
+| `loadGeoPhotos()` | GET `/api/geo/photos?country=X&state=Y&city=Z`，直接按地理过滤照片；`city=__null__` 对应 Unknown 条目 |
 | `initMap()` | 初始化 Leaflet.js 地图，GET `/api/photos/gps-points`，加载 marker cluster |
 | `loadAnimals()` | GET `/api/animals/species`，渲染种类卡片网格 |
 | `loadSpeciesPhotos(species)` | GET `/api/animals/{species}/photos`，渲染该种类照片 |
