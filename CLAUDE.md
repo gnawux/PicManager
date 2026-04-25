@@ -413,6 +413,28 @@ let result: Vec<_> = kept.into_iter().map(|i| candidates[i].0.clone()).collect()
 
 验证方法：`python3 -c "import onnx; m=onnx.load('model.onnx'); print([i.name for i in m.graph.input])"`，或在二进制中搜索字符串（见 ONNX protobuf 格式）。
 
+### 前端 flex 布局：照片/缩略图被压扁
+
+此问题已出现两次（人物卡片、地点相册照片网格），根因相同：**flex 容器未给图片网格分配明确高度，图片在剩余空间中被压缩**。
+
+**规则：**
+
+1. `photo-grid` / `photo-card` 放在 flex 列容器里时，容器必须有明确的可用高度，否则网格会被压到零或挤成一条。
+2. 需要独立滚动的照片区域，必须同时设置三个属性：
+   ```css
+   flex: 1;          /* 占据剩余空间 */
+   min-height: 0;    /* 允许 flex 子元素收缩到小于内容高度，否则会撑破父容器 */
+   overflow-y: auto; /* 内容超出时滚动 */
+   ```
+   缺少任何一个都会复现压扁问题。
+3. 同级的固定高度兄弟节点（如筛选列、工具栏）要加 `flex-shrink: 0`，防止它们被照片区域挤压。
+4. 照片区域如果可能有大量图片（如地点相册），必须加分页或虚拟滚动，不能一次性 `per_page=100` 硬拉所有数据。
+
+**检查清单（出现图片压扁时）：**
+- 找到 `photo-grid` 的所有祖先 flex 容器，逐级确认是否有未约束的高度
+- 检查照片容器是否缺 `min-height: 0`
+- 检查固定高度的兄弟元素是否有 `flex-shrink: 0`
+
 ### 测试样本照片（tests/samples/）
 
 **选用原则：根据内容选正确的文件，不要混用。**
