@@ -1632,7 +1632,7 @@ async function fillMissingMeta() {
 
     const geoRunning = geoSt && geoSt.running;
     const geoText = geoRunning
-      ? `处理中（${geoCount} 张待编码）`
+      ? `处理中（${geoCount} 张待处理）`
       : (geoStatus === 'already_running' ? '已在运行' : `完成（${geoCount} 张）`);
 
     const faceDone = !faceJob || faceJob.status !== 'running';

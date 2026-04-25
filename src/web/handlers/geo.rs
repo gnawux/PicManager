@@ -86,15 +86,27 @@ pub async fn start_regeocode(
         return Ok(Json(serde_json::json!({"status": "already_running"})));
     }
 
+    // Count photos that will trigger a real Nominatim call:
+    // - no geocache entry at all, OR
+    // - stale entry (city set but state NULL, e.g. pre-fix direct-controlled municipalities)
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos ph
          WHERE ph.import_status = 'imported'
            AND ph.gps_lat IS NOT NULL
            AND ph.gps_lon IS NOT NULL
-           AND NOT EXISTS (
-             SELECT 1 FROM geocache gc
-             WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
-               AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+           AND (
+             NOT EXISTS (
+               SELECT 1 FROM geocache gc
+               WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+                 AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+             )
+             OR EXISTS (
+               SELECT 1 FROM geocache gc
+               WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+                 AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+                 AND gc.city  IS NOT NULL
+                 AND gc.state IS NULL
+             )
            )",
     )
     .fetch_one(&state.pool)
