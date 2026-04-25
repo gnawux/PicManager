@@ -311,12 +311,31 @@ pub async fn import_dir(
     copy_only: bool,
 ) -> Result<ImportSummary>
 
+// CLI 使用的带进度追踪版本
+pub async fn import_dir_with_progress(
+    pool: &SqlitePool,
+    source_dir: &Path,
+    library_path: &Path,
+    copy_only: bool,
+    progress: SharedImportProgress,
+) -> Result<ImportSummary>
+
 pub struct ImportSummary {
     pub total: usize,
     pub imported: usize,
     pub skipped: usize,
     pub errors: usize,
 }
+
+// 原子计数器，供 CLI 进度循环轮询
+pub struct ImportProgress {
+    pub total: AtomicUsize,      // scan_dir 完成后立即写入
+    pub processed: AtomicUsize,  // 每处理一个文件后递增（= imported + skipped + errors）
+    pub imported: AtomicUsize,
+    pub skipped: AtomicUsize,
+    pub errors: AtomicUsize,
+}
+pub type SharedImportProgress = Arc<ImportProgress>;
 ```
 
 ### 流水线（`import_dir` → `import_one`）

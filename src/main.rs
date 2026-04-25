@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use picmanager::{album, config::Config, face, storage, importer, dedup};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering::Relaxed;
 
 #[derive(Parser)]
 #[command(name = "picmanager", version, about = "家庭照片管理工具")]
@@ -84,12 +85,7 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Command::Import { dir, copy } => {
-            println!("从 {} 导入照片...", dir.display());
-            let summary = importer::import_dir(&pool, &dir, &config.library_path, copy).await?;
-            println!(
-                "完成：共 {} 张，导入 {}，跳过 {}，失败 {}",
-                summary.total, summary.imported, summary.skipped, summary.errors
-            );
+            import_with_progress(&pool, &dir, &config.library_path, copy).await?;
         }
         Command::Dedup { full } => {
             let n = if full {
@@ -171,6 +167,72 @@ async fn main() -> anyhow::Result<()> {
             fill_missing(&pool, faces, geo).await?;
         }
     }
+    Ok(())
+}
+
+async fn import_with_progress(
+    pool: &sqlx::SqlitePool,
+    dir: &std::path::Path,
+    library_path: &std::path::Path,
+    copy: bool,
+) -> anyhow::Result<()> {
+    println!("从 {} 导入照片，扫描中…", dir.display());
+    let progress = importer::SharedImportProgress::default();
+    let pool2 = pool.clone();
+    let dir2 = dir.to_path_buf();
+    let lib2 = library_path.to_path_buf();
+    let progress2 = progress.clone();
+
+    let handle = tokio::spawn(async move {
+        importer::import_dir_with_progress(&pool2, &dir2, &lib2, copy, progress2).await
+    });
+
+    let start = std::time::Instant::now();
+    let print_interval = std::time::Duration::from_secs(60);
+    let mut last_print = std::time::Instant::now()
+        .checked_sub(print_interval)
+        .unwrap_or(std::time::Instant::now());
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let done = handle.is_finished();
+
+        let now = std::time::Instant::now();
+        if now.duration_since(last_print) >= print_interval || done {
+            last_print = now;
+            let total = progress.total.load(Relaxed);
+            let processed = progress.processed.load(Relaxed);
+            let imported = progress.imported.load(Relaxed);
+            let skipped = progress.skipped.load(Relaxed);
+            let errors = progress.errors.load(Relaxed);
+            if total > 0 {
+                let elapsed = start.elapsed();
+                let mins = elapsed.as_secs() / 60;
+                let secs = elapsed.as_secs() % 60;
+                let pct = processed * 100 / total;
+                println!(
+                    "[{:02}:{:02}:{:02}] 共 {} 张 ｜ 已处理：{}/{} ({}%) ｜ 导入：{} ｜ 跳过：{} ｜ 失败：{}",
+                    mins / 60, mins % 60, secs, total, processed, total, pct, imported, skipped, errors,
+                );
+            }
+        }
+
+        if done {
+            break;
+        }
+    }
+
+    let summary = handle.await??;
+    let elapsed = start.elapsed();
+    println!(
+        "\n完成（耗时 {} 分 {} 秒）：共 {} 张，导入 {}，跳过 {}，失败 {}",
+        elapsed.as_secs() / 60,
+        elapsed.as_secs() % 60,
+        summary.total,
+        summary.imported,
+        summary.skipped,
+        summary.errors,
+    );
     Ok(())
 }
 
