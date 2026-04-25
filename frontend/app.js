@@ -565,7 +565,7 @@ function renderGeoCountries(countries) {
       li.classList.add('active');
       setBreadcrumb(c.name);
       renderGeoStates(c);
-      geoCurrentGeoFilter = { country: c.name };
+      geoCurrentGeoFilter = { country: c.name === 'Unknown' ? '__null__' : c.name };
       geoCurrentPage = 1;
       loadGeoPhotos();
     });
@@ -588,7 +588,10 @@ function renderGeoStates(country) {
       li.classList.add('active');
       setBreadcrumb(`${country.name} › ${s.name}`);
       renderGeoCities(s, country.name);
-      geoCurrentGeoFilter = { country: country.name, state: s.name };
+      geoCurrentGeoFilter = {
+        country: country.name === 'Unknown' ? '__null__' : country.name,
+        state: s.name === 'Unknown' ? '__null__' : s.name,
+      };
       geoCurrentPage = 1;
       loadGeoPhotos();
     });
