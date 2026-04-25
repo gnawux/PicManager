@@ -145,7 +145,9 @@ dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* Geo view */
 .geo-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
-.geo-columns { display: flex; gap: 0; border-bottom: 1px solid #e0e0e0; height: 260px; }
+.geo-columns { display: flex; gap: 0; border-bottom: 1px solid #e0e0e0; height: 260px; flex-shrink: 0; }
+.geo-photos-section { flex: 1; overflow-y: auto; min-height: 0; }
+.geo-pager { padding: 10px 12px; display: flex; justify-content: center; align-items: center; gap: 12px; border-top: 1px solid #e0e0e0; font-size: 13px; }
 .geo-col { flex: 1; border-right: 1px solid #e0e0e0; display: flex; flex-direction: column; overflow: hidden; }
 .geo-col.hidden { display: none; }
 .geo-col-header { padding: 8px 12px; font-size: 11px; text-transform: uppercase; color: #888; letter-spacing: .06em; background: #fafafa; border-bottom: 1px solid #e0e0e0; }

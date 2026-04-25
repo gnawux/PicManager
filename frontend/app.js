@@ -534,6 +534,15 @@ function switchView(view) {
 
 // ── Geo view ──────────────────────────────────────────────────────────────────
 let geoData = null; // cached hierarchy
+let geoCurrentAlbumId = null;
+let geoCurrentPage = 1;
+const GEO_PER_PAGE = 50;
+
+function hideGeoPhotos() {
+  document.getElementById('geo-photos-section').style.display = 'none';
+  geoCurrentAlbumId = null;
+  geoCurrentPage = 1;
+}
 
 async function loadGeoHierarchy() {
   geoData = await fetchJSON('/api/geo/hierarchy');
@@ -541,7 +550,7 @@ async function loadGeoHierarchy() {
   renderGeoCountries(geoData.countries);
   document.getElementById('geo-col-state').classList.add('hidden');
   document.getElementById('geo-col-city').classList.add('hidden');
-  document.getElementById('geo-photos').style.display = 'none';
+  hideGeoPhotos();
   setBreadcrumb('地理位置');
 }
 
@@ -565,7 +574,7 @@ function renderGeoStates(country) {
   const stateCol = document.getElementById('geo-col-state');
   stateCol.classList.remove('hidden');
   document.getElementById('geo-col-city').classList.add('hidden');
-  document.getElementById('geo-photos').style.display = 'none';
+  hideGeoPhotos();
 
   const ul = document.getElementById('geo-state-list');
   ul.innerHTML = '';
@@ -585,7 +594,7 @@ function renderGeoStates(country) {
 function renderGeoCities(st, countryName) {
   const cityCol = document.getElementById('geo-col-city');
   cityCol.classList.remove('hidden');
-  document.getElementById('geo-photos').style.display = 'none';
+  hideGeoPhotos();
 
   const ul = document.getElementById('geo-city-list');
   ul.innerHTML = '';
@@ -596,23 +605,36 @@ function renderGeoCities(st, countryName) {
       ul.querySelectorAll('li').forEach(x => x.classList.remove('active'));
       li.classList.add('active');
       setBreadcrumb(`${countryName} › ${st.name} › ${c.name}`);
-      // Show photos for this city (via album if one exists)
       const albums = await fetchJSON('/api/albums');
       const album = albums && albums.find(a => a.kind === 'location' && a.name === c.name);
       if (album) {
-        const data = await fetchJSON(`/api/albums/${album.id}/photos?per_page=100`);
-        const photos = data ? (data.photos || []) : [];
-        renderGeoPhotos(photos);
+        geoCurrentAlbumId = album.id;
+        geoCurrentPage = 1;
+        loadGeoPhotos();
       }
     });
     ul.appendChild(li);
   }
 }
 
-function renderGeoPhotos(photos) {
+async function loadGeoPhotos() {
+  if (!geoCurrentAlbumId) return;
+  const data = await fetchJSON(
+    `/api/albums/${geoCurrentAlbumId}/photos?page=${geoCurrentPage}&per_page=${GEO_PER_PAGE}`
+  );
+  if (!data) return;
+  renderGeoPhotos(data.photos || [], data.total || 0);
+}
+
+function renderGeoPhotos(photos, total) {
+  const section = document.getElementById('geo-photos-section');
   const grid = document.getElementById('geo-photos');
-  grid.style.display = '';
+  const pager = document.getElementById('geo-photos-pager');
+
+  section.style.display = '';
+  section.scrollTop = 0;
   grid.innerHTML = '';
+
   for (const p of photos) {
     const card = document.createElement('div');
     card.className = 'photo-card';
@@ -620,6 +642,20 @@ function renderGeoPhotos(photos) {
     card.innerHTML = `<img src="/api/photos/${p.id}/thumb" loading="lazy" alt="${label}">
       <div class="meta">${label}</div>`;
     grid.appendChild(card);
+  }
+
+  const totalPages = Math.ceil(total / GEO_PER_PAGE);
+  if (totalPages > 1) {
+    pager.style.display = '';
+    pager.innerHTML = `
+      <button id="geo-prev-btn" class="btn-ghost" ${geoCurrentPage <= 1 ? 'disabled' : ''}>← 上一页</button>
+      <span>${geoCurrentPage} / ${totalPages}（共 ${total} 张）</span>
+      <button id="geo-next-btn" class="btn-ghost" ${geoCurrentPage >= totalPages ? 'disabled' : ''}>下一页 →</button>
+    `;
+    document.getElementById('geo-prev-btn').onclick = () => { geoCurrentPage--; loadGeoPhotos(); };
+    document.getElementById('geo-next-btn').onclick = () => { geoCurrentPage++; loadGeoPhotos(); };
+  } else {
+    pager.style.display = 'none';
   }
 }
 
