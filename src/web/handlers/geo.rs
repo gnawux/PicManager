@@ -1,5 +1,5 @@
-use axum::{extract::State, http::StatusCode, Json};
-use serde::Serialize;
+use axum::{extract::{Query, State}, http::StatusCode, Json};
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 use crate::web::AppState;
 
@@ -77,6 +77,85 @@ pub async fn get_geo_hierarchy(
     }
 
     Ok(Json(GeoHierarchy { countries }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GeoPhotosQuery {
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub city: Option<String>,
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+fn default_page() -> i64 { 1 }
+fn default_per_page() -> i64 { 50 }
+
+pub async fn get_geo_photos(
+    State(state): State<AppState>,
+    Query(params): Query<GeoPhotosQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let page = params.page.max(1);
+    let per_page = params.per_page.clamp(1, 200);
+    let offset = (page - 1) * per_page;
+
+    let join = "FROM photos ph
+                JOIN geocache gc
+                  ON PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+                 AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key";
+
+    // Build dynamic WHERE conditions
+    let mut conds = vec![
+        "ph.import_status = 'imported'".to_owned(),
+        "ph.gps_lat IS NOT NULL".to_owned(),
+    ];
+    let mut binds: Vec<String> = vec![];
+
+    for (field, val) in [("gc.country", &params.country), ("gc.state", &params.state), ("gc.city", &params.city)] {
+        match val {
+            None => {}
+            Some(v) if v == "__null__" => conds.push(format!("{field} IS NULL")),
+            Some(v) => {
+                conds.push(format!("{field} = ?"));
+                binds.push(v.clone());
+            }
+        }
+    }
+
+    let where_clause = conds.join(" AND ");
+
+    // COUNT
+    let count_sql = format!("SELECT COUNT(DISTINCT ph.id) {join} WHERE {where_clause}");
+    let mut count_q = sqlx::query_scalar::<_, i64>(&count_sql);
+    for b in &binds { count_q = count_q.bind(b); }
+    let total: i64 = count_q
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // LIST
+    let list_sql = format!(
+        "SELECT ph.id, ph.path, ph.taken_at, ph.camera {join} WHERE {where_clause}
+         ORDER BY ph.taken_at NULLS LAST, ph.id
+         LIMIT ? OFFSET ?"
+    );
+    let mut list_q = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>)>(&list_sql);
+    for b in &binds { list_q = list_q.bind(b); }
+    list_q = list_q.bind(per_page).bind(offset);
+    let photos = list_q
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "photos": photos.into_iter().map(|(id, path, taken_at, camera)| {
+            serde_json::json!({ "id": id, "path": path, "taken_at": taken_at, "camera": camera })
+        }).collect::<Vec<_>>()
+    })))
 }
 
 pub async fn start_regeocode(

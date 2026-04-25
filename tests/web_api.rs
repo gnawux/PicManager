@@ -1004,6 +1004,118 @@ async fn list_people_status_all_includes_all() {
     assert_eq!(json.as_array().unwrap().len(), 2);
 }
 
+// ── Step 26a: GET /api/geo/photos ────────────────────────────────────────────
+
+async fn seed_geo_photo(pool: &SqlitePool, path: &str, sha: &str, lat: f64, lon: f64) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon, taken_at)
+         VALUES (?, ?, 'jpeg', 'imported', ?, ?, '2024-06-01 10:00:00') RETURNING id",
+    )
+    .bind(path).bind(sha).bind(lat).bind(lon)
+    .fetch_one(pool).await.unwrap()
+}
+
+async fn seed_geocache(pool: &SqlitePool, lat: f64, lon: f64, country: Option<&str>, state: Option<&str>, city: Option<&str>) {
+    let fmt = |v: f64| format!("{:.4}", v);
+    sqlx::query(
+        "INSERT INTO geocache (lat_key, lon_key, country, state, city) VALUES (?, ?, ?, ?, ?)",
+    )
+    .bind(fmt(lat)).bind(fmt(lon)).bind(country).bind(state).bind(city)
+    .execute(pool).await.unwrap();
+}
+
+#[tokio::test]
+async fn geo_photos_by_country() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    seed_geo_photo(&pool, "/a.jpg", "sha_a", 37.7749, -122.4194).await;
+    seed_geo_photo(&pool, "/b.jpg", "sha_b", 34.0522, -118.2437).await;
+    seed_geo_photo(&pool, "/c.jpg", "sha_c", 48.8566, 2.3522).await;
+    seed_geocache(&pool, 37.7749, -122.4194, Some("USA"), Some("California"), Some("San Francisco")).await;
+    seed_geocache(&pool, 34.0522, -118.2437, Some("USA"), Some("California"), Some("Los Angeles")).await;
+    seed_geocache(&pool, 48.8566, 2.3522, Some("France"), Some("Île-de-France"), Some("Paris")).await;
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/geo/photos?country=USA").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["photos"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn geo_photos_by_state() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    seed_geo_photo(&pool, "/sf.jpg", "sha_sf", 37.7749, -122.4194).await;
+    seed_geo_photo(&pool, "/la.jpg", "sha_la", 34.0522, -118.2437).await;
+    seed_geo_photo(&pool, "/ny.jpg", "sha_ny", 40.7128, -74.0060).await;
+    seed_geocache(&pool, 37.7749, -122.4194, Some("USA"), Some("California"), Some("San Francisco")).await;
+    seed_geocache(&pool, 34.0522, -118.2437, Some("USA"), Some("California"), Some("Los Angeles")).await;
+    seed_geocache(&pool, 40.7128, -74.0060, Some("USA"), Some("New York"), Some("New York City")).await;
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/geo/photos?country=USA&state=California").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total"], 2);
+}
+
+#[tokio::test]
+async fn geo_photos_by_city() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    seed_geo_photo(&pool, "/sf.jpg", "sha_sf2", 37.7749, -122.4194).await;
+    seed_geo_photo(&pool, "/la.jpg", "sha_la2", 34.0522, -118.2437).await;
+    seed_geocache(&pool, 37.7749, -122.4194, Some("USA"), Some("California"), Some("San Francisco")).await;
+    seed_geocache(&pool, 34.0522, -118.2437, Some("USA"), Some("California"), Some("Los Angeles")).await;
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/geo/photos?country=USA&state=California&city=San+Francisco").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total"], 1);
+}
+
+#[tokio::test]
+async fn geo_photos_null_city() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    seed_geo_photo(&pool, "/known.jpg", "sha_kn", 37.7749, -122.4194).await;
+    seed_geo_photo(&pool, "/unknown.jpg", "sha_unk", 34.0522, -118.2437).await;
+    seed_geocache(&pool, 37.7749, -122.4194, Some("USA"), Some("California"), Some("San Francisco")).await;
+    seed_geocache(&pool, 34.0522, -118.2437, Some("USA"), Some("California"), None).await;
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/geo/photos?country=USA&state=California&city=__null__").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total"], 1);
+    assert_eq!(json["photos"][0]["path"], "/unknown.jpg");
+}
+
+#[tokio::test]
+async fn geo_photos_pagination() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    for i in 0..5u32 {
+        let lat = 37.0 + i as f64 * 0.001;
+        seed_geo_photo(&pool, &format!("/p{i}.jpg"), &format!("sha_pg{i}"), lat, -122.0).await;
+        seed_geocache(&pool, lat, -122.0, Some("USA"), Some("California"), Some("TestCity")).await;
+    }
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/geo/photos?country=USA&state=California&city=TestCity&page=1&per_page=2").body(Body::empty()).unwrap())
+        .await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total"], 5);
+    assert_eq!(json["photos"].as_array().unwrap().len(), 2);
+}
+
 #[tokio::test]
 async fn patch_person_status_ignored_hides_from_list() {
     let (_app, pool, tmp) = test_app_with_pool().await;
@@ -1076,3 +1188,4 @@ async fn people_name_exact_search() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(json.as_array().unwrap().len(), 2);
 }
+
