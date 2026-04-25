@@ -709,15 +709,41 @@ pub(crate) async fn execute_job(pool: &SqlitePool, job_id: i64, scope: Option<Ve
 
 ```rust
 // cluster.rs
+pub const EPS: f32 = 0.35;            // 余弦距离阈值
+pub const MIN_CONFIDENCE: f32 = 0.70; // 参与 DBSCAN 核心聚类的最低置信度
+
 pub fn cluster_faces(faces: &[(i64, Vec<f32>)], eps: f32, min_samples: usize) -> Vec<Vec<i64>>
 pub async fn run_clustering(pool: &SqlitePool) -> Result<usize>
+pub async fn run_incremental_clustering(pool: &SqlitePool) -> Result<usize>
 ```
 
+**基础算法**
 - `faces`：`(face_id, embedding)` 列表，embedding 为 L2 归一化 512D 向量
 - 距离度量：`1.0 - dot(a, b)`（余弦距离）
 - `region_query` 包含点本身（标准 DBSCAN，min_samples=2 意味着至少 1 个其他邻居）
 - 噪点各自单独成组（不丢弃），返回所有聚类（含噪点组）的 face_id 列表
-- `run_clustering(pool)`：读取所有 `embedding IS NOT NULL` 的 faces → 运行 DBSCAN → 清空 `people` / `person_faces` → 写入新人物记录 → 返回生成的人物数量
+
+**`run_clustering(pool)` — 全量重建，两阶段算法**
+
+DBSCAN 存在**链式合并（chaining）缺陷**：若人脸 A→B→C 两两距离均 < eps，即使 A 与 C 差异很大（dist > eps），三者也会被并入同一组。置信度低的检测（小脸、侧脸、模糊脸）embedding 质量差，容易充当"桥接点"，把原本不相关的真实人物串联成一个巨型簇。
+
+为此采用两阶段算法：
+
+1. **Phase 1 — DBSCAN 核心聚类（仅高置信度脸）**
+   - 筛选 `confidence >= MIN_CONFIDENCE (0.70)` 的人脸，以 `eps = 0.35`、`min_samples = 2` 运行 DBSCAN
+   - 低置信度检测排除在 DBSCAN 之外，避免桥接效应
+   - 噪点各自单独建人物记录
+
+2. **Phase 2 — 低置信度脸后向归入**
+   - 对每张 `confidence < 0.70` 的脸，计算其与所有已建人物的最小余弦距离
+   - 距离 < EPS：归入最近人物
+   - 否则：单独建一条人物记录（同 DBSCAN 噪点处理逻辑）
+
+**`run_incremental_clustering(pool)` — 增量聚类（非破坏性）**
+- 找出所有尚未归入任何人物的 face（`NOT EXISTS person_faces`）
+- 逐一与已有人物比对：最小距离 < EPS 则归入最近人物
+- 剩余无法匹配的脸再运行 DBSCAN → 新建人物；不修改已有人物记录
+- **注意**：已有人物库很大时，每张新脸都会与库中全量 embedding 比对（O(n×m)）；小批量导入场景下性能可接受
 
 ---
 

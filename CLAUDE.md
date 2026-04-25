@@ -359,8 +359,20 @@ ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "nd
 
 - `region_query` 包含点本身（min_samples 按标准 DBSCAN 定义计数自身，如 min_samples=2 意味着至少 1 个其他邻居）
 - 距离 = `1.0 - dot(a, b)`（L2 归一化嵌入，所以等价于余弦距离）
-- 默认参数：`eps = 0.4`，`min_samples = 2`
+- **当前参数**：`EPS = 0.35`，`min_samples = 2`，`MIN_CONFIDENCE = 0.70`（均为 `face/cluster.rs` 顶部常量）
 - 噪点（未归入任何核心点）各自单独成组，便于用户后续手动合并
+
+### DBSCAN 链式合并（chaining）陷阱
+
+**症状**：全量重建后出现一个包含数百张脸的超大聚类，其中 98%+ 的脸对余弦距离远超 eps，脸 ID 均匀分布在整个数据库范围内。
+
+**根因**：若 A→B→C 两两距离均 < eps（即使 A 与 C 差异极大），DBSCAN 会把三者并入同一簇。置信度低的检测（小脸、侧脸、模糊脸）embedding 质量差，落在不同真实人物之间充当"桥接点"，导致不相关人物的脸被链式串联。超大簇形成后，增量聚类也会持续把新脸吸入（越大的簇越容易命中 eps 阈值）。
+
+**修法（已实现）**：`run_clustering` 使用两阶段算法：
+1. 仅对 `confidence >= MIN_CONFIDENCE (0.70)` 的脸做 DBSCAN
+2. 低置信度脸事后归入最近人物（距离 < eps）或各自单独建人物记录
+
+**禁止**：不要调高 eps（会加剧链式合并）；不要在未修复算法的情况下反复全量重建（重建结果相同）
 
 ### YOLOv8-nano 关键细节
 
