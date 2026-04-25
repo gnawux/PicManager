@@ -1775,6 +1775,7 @@ async function confirmMerge() {
     body: JSON.stringify({ source_id: state.currentPersonId, target_id: state.mergeTargetId }),
   });
   document.getElementById('merge-modal').classList.add('hidden');
+  loadPeopleList();
   showPersonDetail(state.mergeTargetId);
 }
 
