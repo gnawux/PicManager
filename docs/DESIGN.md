@@ -601,8 +601,12 @@ pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64>
 1. 查询所有 `import_status='imported' AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL` 的照片
 2. 对每张照片：
    - 将 lat/lon 格式化为 4 位小数字符串作为缓存 key（`coord_key(f64) -> String`）
-   - 查 `geocache` 表：命中则直接用缓存的城市名（`city` 可能为 NULL，表示历史失败）
-   - 未命中则调用 Nominatim API（见下），结果写入 `geocache`（`INSERT OR IGNORE`）
+   - 查 `geocache` 表（同时读取 `city`/`state`/`country`）：
+     - 三字段均为 NULL → 历史上 Nominatim 调用临时失败，视为缓存未命中，触发重试
+     - city 为 NULL 但 country 等有值 → 合法的"仅知国家/省"结果，直接返回 NULL（不重试）
+     - city 有值但 state 为 NULL → 旧版数据（直辖市修复前），视为过期条目，触发重试
+     - city 和 state 均有值 → 完整命中，直接返回 city
+   - 未命中则调用 Nominatim API（见下），结果写入 `geocache`（`INSERT OR REPLACE`）
    - 相邻 API 调用之间 `tokio::time::sleep(1s)` 限速
 3. 得到城市名后，`ensure_location_album()` 创建 `kind='location'` 相册并关联照片
 

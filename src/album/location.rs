@@ -81,9 +81,9 @@ async fn cached_or_fetch(
     let lat_key = coord_key(lat);
     let lon_key = coord_key(lon);
 
-    // Read both city and state so we can detect stale entries (city set, state NULL).
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT city, state FROM geocache WHERE lat_key = ? AND lon_key = ?",
+    // Read city, state, and country to distinguish permanent failures from transient ones.
+    let row: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT city, state, country FROM geocache WHERE lat_key = ? AND lon_key = ?",
     )
     .bind(&lat_key)
     .bind(&lon_key)
@@ -91,13 +91,19 @@ async fn cached_or_fetch(
     .await
     .ok()?;
 
-    if let Some((city, state)) = row {
-        // Complete entry, or a previously-failed geocoding (city is NULL) — use as-is.
-        if state.is_some() || city.is_none() {
-            return city;
+    if let Some((city, state, country)) = row {
+        // All three NULL means Nominatim returned an error or no data during a previous
+        // attempt (transient failure) — treat as a cache miss and retry.
+        let truly_empty = city.is_none() && state.is_none() && country.is_none();
+        if !truly_empty {
+            // Complete entry (state set), or a partial result (only country known) — use as-is.
+            if state.is_some() || city.is_none() {
+                return city;
+            }
+            // city is set but state is NULL → stale entry written before municipality fix.
+            // Fall through to re-geocode and update.
         }
-        // city is set but state is NULL → stale entry written before municipality fix.
-        // Fall through to re-geocode and update.
+        // truly_empty → fall through to re-geocode
     }
 
     // Cache miss or stale entry — respect Nominatim's 1 req/s policy
@@ -492,12 +498,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cached_null_city_skips_photo() {
+    async fn all_null_geocache_is_retried_produces_no_album() {
+        // All-NULL geocache rows (city=NULL, state=NULL, country=NULL) indicate a transient
+        // Nominatim failure and should be retried. In tests, Nominatim has no network, so
+        // the retry also returns None and no album is created — but the code path runs.
         let pool = test_pool().await;
         let lat = 0.0;
         let lon = 0.0;
         insert_photo(&pool, "/unknown.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon, None, None).await; // cached as "failed"
+        seed_geocache(&pool, lat, lon, None, None).await; // all-NULL → transient failure
 
         group_by_location(&pool).await.unwrap();
 
@@ -505,7 +514,35 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(count.0, 0, "null city in cache → no album created");
+        assert_eq!(count.0, 0, "all-null geocache → Nominatim retry → fails in test → no album");
+    }
+
+    #[tokio::test]
+    async fn partial_geocache_with_country_only_skips_photo() {
+        // city=NULL, state=NULL, country=set → Nominatim returned data but no city/state.
+        // This is a legitimate (non-transient) result; do not retry.
+        let pool = test_pool().await;
+        let lat = 22.1969;
+        let lon = 113.5408;
+        insert_photo(&pool, "/macau.jpg", Some(lat), Some(lon)).await;
+        // Seed with country set but no city/state — simulates "country-only" geocache result.
+        sqlx::query(
+            "INSERT INTO geocache (lat_key, lon_key, city, state, country) VALUES (?, ?, NULL, NULL, ?)",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(lon))
+        .bind("Macau")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        group_by_location(&pool).await.unwrap();
+
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM albums WHERE kind = 'location'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count.0, 0, "country-only geocache → treated as permanent → no album");
     }
 
     #[test]

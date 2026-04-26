@@ -167,7 +167,8 @@ pub async fn start_regeocode(
 
     // Count photos that will trigger a real Nominatim call:
     // - no geocache entry at all, OR
-    // - stale entry (city set but state NULL, e.g. pre-fix direct-controlled municipalities)
+    // - stale entry (city set but state NULL, e.g. pre-fix direct-controlled municipalities), OR
+    // - all-NULL entry (transient failure during a previous geocoding attempt)
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos ph
          WHERE ph.import_status = 'imported'
@@ -185,6 +186,14 @@ pub async fn start_regeocode(
                  AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
                  AND gc.city  IS NOT NULL
                  AND gc.state IS NULL
+             )
+             OR EXISTS (
+               SELECT 1 FROM geocache gc
+               WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+                 AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+                 AND gc.city    IS NULL
+                 AND gc.state   IS NULL
+                 AND gc.country IS NULL
              )
            )",
     )
