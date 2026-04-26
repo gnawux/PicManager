@@ -162,8 +162,12 @@ docs/
 | 29b | 后端：GET /api/photos/{id}/file 返回原始文件字节（Content-Type 依 format 列推断）；前端详情模态框增加"查看原图/切换缩略图"切换按钮 |
 | 30a | 文档：邻近地理编码缓存（proximity geocache）设计写入 REQUIREMENTS/ARCHITECTURE/DESIGN |
 | 30b | 后端：`cached_or_fetch` 精确 key 未命中时先查 ±0.01°（约 1km）邻近缓存，命中则写回精确 key 并返回（TDD，6 个新测试） |
+| 31a | importer/log.rs：MigrationLog（NDJSON，TDD，5 个测试） |
+| 31b | import_dir_batch()：batch_size/log/dry_run 支持（TDD，6 个测试） |
+| 31c | CLI: --batch-size / --log / --dry-run 参数 |
+| 31d | 文档更新：REQUIREMENTS.md 新增大批量分批迁移节 |
 
-当前测试数：**237 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**248 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
