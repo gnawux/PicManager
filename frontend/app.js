@@ -1175,6 +1175,9 @@ async function showPersonDetail(personId) {
 
   // Load merge suggestions (named people only)
   await loadMergeSuggestions(personId, person);
+
+  // Load outlier faces
+  await loadOutlierFaces(personId);
 }
 
 async function loadMergeSuggestions(personId, person) {
@@ -1234,6 +1237,78 @@ async function loadMergeSuggestions(personId, person) {
 
     row.append(thumb, info, mergeBtn);
     list.appendChild(row);
+  }
+}
+
+async function loadOutlierFaces(personId) {
+  const panel = document.getElementById('outlier-faces-panel');
+  const list = document.getElementById('outlier-faces-list');
+  list.innerHTML = '';
+
+  const outliers = await fetchJSON(`/api/people/${personId}/outlier-faces?limit=5`);
+  if (!outliers || outliers.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+
+  // Track dismissed face IDs in this session
+  const dismissed = new Set();
+
+  for (const o of outliers) {
+    const card = document.createElement('div');
+    card.dataset.faceId = o.face_id;
+    card.style.cssText = 'flex-shrink:0;width:80px;text-align:center';
+
+    const img = document.createElement('img');
+    img.src = `/api/faces/${o.face_id}/thumb`;
+    img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #e74c3c;display:block';
+    img.onerror = () => { img.style.border = '2px solid #ccc'; };
+
+    const pct = Math.round((1 - o.distance) * 100);
+    const meta = document.createElement('div');
+    meta.style.cssText = 'font-size:10px;color:#888;margin:2px 0';
+    meta.textContent = `相似度 ${pct}%`;
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:2px;justify-content:center;margin-top:2px';
+
+    const ejectBtn = document.createElement('button');
+    ejectBtn.textContent = '移出';
+    ejectBtn.className = 'btn-ghost';
+    ejectBtn.style.cssText = 'font-size:10px;padding:1px 5px;color:#c0392b';
+    ejectBtn.addEventListener('click', async () => {
+      ejectBtn.disabled = true;
+      keepBtn.disabled = true;
+      const resp = await fetch(`/api/people/${personId}/eject-face`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ face_id: o.face_id }),
+      });
+      if (resp.ok) {
+        card.remove();
+        if (list.children.length === 0) panel.classList.add('hidden');
+        await loadPersonDetailPage(personId);
+        loadPeopleList();
+      } else {
+        ejectBtn.disabled = false;
+        keepBtn.disabled = false;
+      }
+    });
+
+    const keepBtn = document.createElement('button');
+    keepBtn.textContent = '保留';
+    keepBtn.className = 'btn-ghost';
+    keepBtn.style.cssText = 'font-size:10px;padding:1px 5px';
+    keepBtn.addEventListener('click', () => {
+      dismissed.add(o.face_id);
+      card.remove();
+      if (list.children.length === 0) panel.classList.add('hidden');
+    });
+
+    btnRow.append(ejectBtn, keepBtn);
+    card.append(img, meta, btnRow);
+    list.appendChild(card);
   }
 }
 
