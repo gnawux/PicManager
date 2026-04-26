@@ -120,6 +120,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Close floating context menus when clicking outside
   document.addEventListener('click', () => closePersonMenu());
 
+  document.getElementById('detail-original-btn').addEventListener('click', toggleDetailOriginal);
   document.getElementById('detail-edit-btn').addEventListener('click', () => {
     openDetailEdit();
   });
@@ -267,8 +268,8 @@ async function openDetail(idx, context) {
 
   const modal = document.getElementById('detail-modal');
   modal.classList.remove('hidden');
+  resetDetailOriginalBtn();
 
-  // Show thumb immediately, then swap to original if available
   const img = document.getElementById('detail-img');
   img.src = `/api/photos/${photo.id}/thumb`;
 
@@ -410,6 +411,37 @@ function closeDetail() {
   document.getElementById('detail-faces').innerHTML = '';
   document.getElementById('detail-animals').innerHTML = '';
   state.detailIdx = -1;
+  resetDetailOriginalBtn();
+}
+
+function resetDetailOriginalBtn() {
+  const btn = document.getElementById('detail-original-btn');
+  btn.textContent = '⤢ 查看原图';
+  btn.disabled = false;
+  btn.dataset.mode = 'thumb';
+}
+
+async function toggleDetailOriginal() {
+  const photo = state.detailPhotos[state.detailIdx];
+  if (!photo) return;
+  const btn = document.getElementById('detail-original-btn');
+  const img = document.getElementById('detail-img');
+  if (btn.dataset.mode !== 'original') {
+    btn.disabled = true;
+    btn.textContent = '加载中…';
+    img.src = `/api/photos/${photo.id}/file`;
+    await new Promise(resolve => {
+      img.onload = resolve;
+      img.onerror = resolve;
+    });
+    btn.disabled = false;
+    btn.textContent = '⤡ 切换缩略图';
+    btn.dataset.mode = 'original';
+  } else {
+    img.src = `/api/photos/${photo.id}/thumb`;
+    btn.textContent = '⤢ 查看原图';
+    btn.dataset.mode = 'thumb';
+  }
 }
 
 function navigateDetail(delta) {

@@ -250,6 +250,37 @@ pub async fn get_thumb(
     }
 }
 
+pub async fn get_photo_file(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Response {
+    let row: Option<(String, String)> =
+        sqlx::query_as("SELECT path, format FROM photos WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.pool)
+            .await
+            .unwrap_or(None);
+
+    let Some((path, format)) = row else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let mime = match format.to_lowercase().as_str() {
+        "jpeg" | "jpg" => "image/jpeg",
+        "png"          => "image/png",
+        "gif"          => "image/gif",
+        "webp"         => "image/webp",
+        "heic" | "heif"=> "image/heic",
+        "tiff" | "tif" => "image/tiff",
+        _              => "application/octet-stream",
+    };
+
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+        Err(_)    => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
 fn generate_thumb(path: &str, size: u32) -> anyhow::Result<Vec<u8>> {
     use image::{ImageFormat, ImageReader};
     use std::io::Cursor;
