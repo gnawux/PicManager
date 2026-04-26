@@ -12,18 +12,29 @@ fn coord_key(v: f64) -> String {
     format!("{:.prec$}", v, prec = GEO_COORD_PRECISION)
 }
 
-/// Returns the count of imported photos that have GPS coordinates but no matching
-/// entry in the geocache table (i.e., not yet reverse-geocoded).
+/// Returns the count of imported photos that have GPS coordinates but whose geocoding
+/// is missing or retriable: no geocache entry at all, OR an all-NULL entry (written
+/// when Nominatim previously failed transiently — e.g., no network at import time).
 pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64> {
     let n = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos ph
          WHERE ph.import_status = 'imported'
            AND ph.gps_lat IS NOT NULL
            AND ph.gps_lon IS NOT NULL
-           AND NOT EXISTS (
-             SELECT 1 FROM geocache gc
-             WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
-               AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+           AND (
+             NOT EXISTS (
+               SELECT 1 FROM geocache gc
+               WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+                 AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+             )
+             OR EXISTS (
+               SELECT 1 FROM geocache gc
+               WHERE PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+                 AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+                 AND gc.city    IS NULL
+                 AND gc.state   IS NULL
+                 AND gc.country IS NULL
+             )
            )",
     )
     .fetch_one(pool)
@@ -383,6 +394,39 @@ mod tests {
         )
         .bind(lat)
         .bind(lon)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(count_missing_geo(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn count_missing_geo_counts_all_null_geocache_entries() {
+        // all-NULL geocache entry (transient Nominatim failure) must count as "missing"
+        // so that fill-missing --geo doesn't skip it.
+        let pool = test_pool().await;
+        let lat = 48.8566;
+        let lon = 2.3522;
+        insert_photo(&pool, "/paris.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon, None, None).await; // all-NULL → retriable
+
+        assert_eq!(count_missing_geo(&pool).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn count_missing_geo_does_not_count_partial_geocache() {
+        // city=NULL but country set → legitimate partial result, not retriable → not counted
+        let pool = test_pool().await;
+        let lat = 22.1969;
+        let lon = 113.5408;
+        insert_photo(&pool, "/macau.jpg", Some(lat), Some(lon)).await;
+        sqlx::query(
+            "INSERT INTO geocache (lat_key, lon_key, city, state, country) VALUES (?, ?, NULL, NULL, ?)",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(lon))
+        .bind("Macau")
         .execute(&pool)
         .await
         .unwrap();
