@@ -119,8 +119,15 @@ pub async fn get_person_photos(
     let limit = pag.per_page as i64;
 
     let total: (i64,) = sqlx::query_as(
-        "SELECT COUNT(DISTINCT f.photo_id) FROM person_faces pf
-         JOIN faces f ON f.id = pf.face_id WHERE pf.person_id = ?",
+        "WITH RECURSIVE subtree(id) AS (
+           SELECT id FROM people WHERE id = ?
+           UNION ALL
+           SELECT p.id FROM people p JOIN subtree s ON p.parent_id = s.id
+         )
+         SELECT COUNT(DISTINCT f.photo_id)
+         FROM person_faces pf
+         JOIN faces f ON f.id = pf.face_id
+         JOIN subtree s ON pf.person_id = s.id",
     )
     .bind(person_id)
     .fetch_one(&state.pool)
@@ -128,11 +135,16 @@ pub async fn get_person_photos(
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     let photos: Vec<PhotoRow> = sqlx::query_as(
-        "SELECT DISTINCT ph.id, ph.path, ph.format, ph.taken_at, ph.camera, ph.import_status
+        "WITH RECURSIVE subtree(id) AS (
+           SELECT id FROM people WHERE id = ?
+           UNION ALL
+           SELECT p.id FROM people p JOIN subtree s ON p.parent_id = s.id
+         )
+         SELECT DISTINCT ph.id, ph.path, ph.format, ph.taken_at, ph.camera, ph.import_status
          FROM person_faces pf
          JOIN faces f ON f.id = pf.face_id
          JOIN photos ph ON ph.id = f.photo_id
-         WHERE pf.person_id = ?
+         JOIN subtree s ON pf.person_id = s.id
          ORDER BY ph.taken_at DESC NULLS LAST, ph.id DESC
          LIMIT ? OFFSET ?",
     )

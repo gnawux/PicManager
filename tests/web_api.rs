@@ -1190,6 +1190,90 @@ async fn people_name_exact_search() {
 }
 
 #[tokio::test]
+async fn get_person_photos_includes_descendant_photos() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Build a 3-level tree: A → B → C
+    let pa: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('A') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let pb: i64 = sqlx::query_scalar("INSERT INTO people (name, parent_id) VALUES ('B', ?) RETURNING id")
+        .bind(pa).fetch_one(&pool).await.unwrap();
+    let pc: i64 = sqlx::query_scalar("INSERT INTO people (name, parent_id) VALUES ('C', ?) RETURNING id")
+        .bind(pb).fetch_one(&pool).await.unwrap();
+
+    // One photo + face per person
+    for (label, sha, person_id) in [("pA", "sha27a1", pa), ("pB", "sha27a2", pb), ("pC", "sha27a3", pc)] {
+        let photo_id: i64 = sqlx::query_scalar(
+            "INSERT INTO photos (path, sha256, format, import_status) VALUES (?, ?, 'jpeg', 'imported') RETURNING id",
+        )
+        .bind(format!("/{label}.jpg")).bind(sha)
+        .fetch_one(&pool).await.unwrap();
+        let face_id: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,0,0,50,50,0.9) RETURNING id",
+        )
+        .bind(photo_id).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+            .bind(person_id).bind(face_id).execute(&pool).await.unwrap();
+    }
+
+    let resp = app
+        .oneshot(Request::builder()
+            .uri(&format!("/api/people/{pa}?per_page=50"))
+            .body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total"], 3, "should include photos from A, B, and C");
+    assert_eq!(json["photos"].as_array().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn get_person_photos_pagination_with_descendants() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pa: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('PA') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let pb: i64 = sqlx::query_scalar("INSERT INTO people (name, parent_id) VALUES ('PB', ?) RETURNING id")
+        .bind(pa).fetch_one(&pool).await.unwrap();
+
+    for (i, person_id) in [(1, pa), (2, pa), (3, pb)] {
+        let photo_id: i64 = sqlx::query_scalar(
+            "INSERT INTO photos (path, sha256, format, import_status) VALUES (?, ?, 'jpeg', 'imported') RETURNING id",
+        )
+        .bind(format!("/pg{i}.jpg")).bind(format!("sha27b{i}"))
+        .fetch_one(&pool).await.unwrap();
+        let face_id: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,0,0,50,50,0.9) RETURNING id",
+        )
+        .bind(photo_id).fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+            .bind(person_id).bind(face_id).execute(&pool).await.unwrap();
+    }
+
+    // Page 1: 2 photos
+    let resp1 = app.clone()
+        .oneshot(Request::builder()
+            .uri(&format!("/api/people/{pa}?per_page=2&page=1"))
+            .body(Body::empty()).unwrap())
+        .await.unwrap();
+    let bytes1 = axum::body::to_bytes(resp1.into_body(), usize::MAX).await.unwrap();
+    let j1: serde_json::Value = serde_json::from_slice(&bytes1).unwrap();
+    assert_eq!(j1["total"], 3);
+    assert_eq!(j1["photos"].as_array().unwrap().len(), 2);
+
+    // Page 2: 1 photo
+    let resp2 = app
+        .oneshot(Request::builder()
+            .uri(&format!("/api/people/{pa}?per_page=2&page=2"))
+            .body(Body::empty()).unwrap())
+        .await.unwrap();
+    let bytes2 = axum::body::to_bytes(resp2.into_body(), usize::MAX).await.unwrap();
+    let j2: serde_json::Value = serde_json::from_slice(&bytes2).unwrap();
+    assert_eq!(j2["photos"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn get_albums_latest_photo_at_null_when_no_photos() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 
