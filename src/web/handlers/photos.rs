@@ -28,17 +28,59 @@ pub struct GpsPoint {
     pub gps_lon: f64,
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct GpsPointsQuery {
+    pub country: Option<String>,
+    pub state: Option<String>,
+    pub city: Option<String>,
+}
+
 pub async fn get_gps_points(
     State(state): State<AppState>,
+    Query(params): Query<GpsPointsQuery>,
 ) -> Result<Json<Vec<GpsPoint>>, StatusCode> {
-    let rows: Vec<(i64, Option<String>, f64, f64)> = sqlx::query_as(
-        "SELECT id, taken_at, gps_lat, gps_lon FROM photos
-         WHERE import_status = 'imported' AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
-         ORDER BY taken_at DESC NULLS LAST",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let has_filter = params.country.is_some() || params.state.is_some() || params.city.is_some();
+
+    let join = if has_filter {
+        "JOIN geocache gc \
+           ON PRINTF('%.4f', ph.gps_lat) = gc.lat_key \
+          AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key"
+    } else {
+        ""
+    };
+
+    let mut conds = vec![
+        "ph.import_status = 'imported'".to_owned(),
+        "ph.gps_lat IS NOT NULL".to_owned(),
+        "ph.gps_lon IS NOT NULL".to_owned(),
+    ];
+    let mut binds: Vec<String> = vec![];
+
+    if has_filter {
+        for (field, val) in [
+            ("gc.country", &params.country),
+            ("gc.state",   &params.state),
+            ("gc.city",    &params.city),
+        ] {
+            match val {
+                None => {}
+                Some(v) if v == "__null__" => conds.push(format!("{field} IS NULL")),
+                Some(v) => { conds.push(format!("{field} = ?")); binds.push(v.clone()); }
+            }
+        }
+    }
+
+    let where_str = conds.join(" AND ");
+    let sql = format!(
+        "SELECT ph.id, ph.taken_at, ph.gps_lat, ph.gps_lon \
+         FROM photos ph {join} WHERE {where_str} ORDER BY ph.taken_at DESC NULLS LAST"
+    );
+
+    let mut q = sqlx::query_as::<_, (i64, Option<String>, f64, f64)>(&sql);
+    for b in &binds { q = q.bind(b); }
+
+    let rows = q.fetch_all(&state.pool).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(Json(
         rows.into_iter()

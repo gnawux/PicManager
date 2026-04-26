@@ -744,6 +744,7 @@ function renderGeoCountries(countries) {
       geoCurrentGeoFilter = { country: c.name === 'Unknown' ? '__null__' : c.name };
       geoCurrentPage = 1;
       loadGeoPhotos();
+      refreshMapIfActive();
     });
     ul.appendChild(li);
   }
@@ -770,6 +771,7 @@ function renderGeoStates(country) {
       };
       geoCurrentPage = 1;
       loadGeoPhotos();
+      refreshMapIfActive();
     });
     ul.appendChild(li);
   }
@@ -792,6 +794,7 @@ function renderGeoCities(st, countryName) {
       geoCurrentGeoFilter = { country: countryName, state: st.name, city: cityParam };
       geoCurrentPage = 1;
       loadGeoPhotos();
+      refreshMapIfActive();
     });
     ul.appendChild(li);
   }
@@ -854,63 +857,85 @@ function switchGeoView(view) {
     b.classList.toggle('active', b.dataset.geoview === view);
   });
   document.getElementById('geo-list-view').classList.toggle('hidden', view !== 'list');
-  const mapDiv = document.getElementById('geo-map-view');
-  mapDiv.classList.toggle('hidden', view !== 'map');
+  document.getElementById('geo-map-view').classList.toggle('hidden', view !== 'map');
   if (view === 'map') {
-    // Delay to let the div become visible before initialising Leaflet
-    setTimeout(initMap, 50);
+    setTimeout(() => refreshMapMarkers(), 50);
+  }
+}
+
+function refreshMapIfActive() {
+  if (!document.getElementById('geo-map-view').classList.contains('hidden')) {
+    refreshMapMarkers();
   }
 }
 
 let leafletMap = null;
+let _mapCluster = null;
 
-async function initMap() {
-  // Leaflet may not be loaded if offline
+async function ensureMapInit() {
   if (typeof L === 'undefined') {
     document.getElementById('leaflet-map').textContent = '地图需要网络连接才能加载（Leaflet CDN）';
-    return;
+    return false;
   }
-
   const mapEl = document.getElementById('leaflet-map');
   if (leafletMap) {
-    // If initialised while container was hidden (zero size), destroy and redo
     if (leafletMap.getContainer().offsetWidth === 0) {
       leafletMap.remove();
       leafletMap = null;
+      _mapCluster = null;
       mapEl.innerHTML = '';
     } else {
       leafletMap.invalidateSize();
-      return;
+      return true;
     }
   }
-
   leafletMap = L.map(mapEl).setView([20, 0], 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors',
     maxZoom: 19,
   }).addTo(leafletMap);
+  return true;
+}
 
-  const pts = await fetchJSON('/api/photos/gps-points');
+async function refreshMapMarkers() {
+  if (document.getElementById('geo-map-view').classList.contains('hidden')) return;
+  const ok = await ensureMapInit();
+  if (!ok) return;
+
+  if (_mapCluster) { leafletMap.removeLayer(_mapCluster); _mapCluster = null; }
+
+  const f = geoCurrentGeoFilter || {};
+  const qs = new URLSearchParams();
+  if (f.country) qs.set('country', f.country);
+  if (f.state)   qs.set('state',   f.state);
+  if (f.city)    qs.set('city',    f.city);
+  const qstr = qs.toString();
+  const pts = await fetchJSON(`/api/photos/gps-points${qstr ? '?' + qstr : ''}`);
   if (!pts || pts.length === 0) return;
 
   const cluster = L.markerClusterGroup();
-  for (const p of pts) {
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
     const marker = L.marker([p.gps_lat, p.gps_lon]);
     const date = p.taken_at ? p.taken_at.slice(0, 10) : '未知日期';
     marker.bindPopup(`
-      <div style="text-align:center">
-        <img src="/api/photos/${p.id}/thumb" style="max-width:120px;max-height:120px;display:block;margin:0 auto 4px">
+      <div style="text-align:center;cursor:pointer">
+        <img src="/api/photos/${p.id}/thumb"
+             style="max-width:120px;max-height:120px;display:block;margin:0 auto 4px;cursor:pointer">
         <div style="font-size:12px">${date}</div>
+        <div style="font-size:11px;color:#6c7af4;margin-top:2px">点击查看详情</div>
       </div>`);
+    marker.on('popupopen', () => {
+      const pop = marker.getPopup().getElement();
+      if (pop) pop.querySelector('img').addEventListener('click', () => openDetail(i, pts));
+    });
     cluster.addLayer(marker);
   }
   leafletMap.addLayer(cluster);
+  _mapCluster = cluster;
 
-  // Fit to markers
-  if (pts.length > 0) {
-    const bounds = L.latLngBounds(pts.map(p => [p.gps_lat, p.gps_lon]));
-    leafletMap.fitBounds(bounds, { padding: [40, 40] });
-  }
+  const bounds = L.latLngBounds(pts.map(p => [p.gps_lat, p.gps_lon]));
+  leafletMap.fitBounds(bounds, { padding: [40, 40] });
 }
 
 // ── People list ───────────────────────────────────────────────────────────────
