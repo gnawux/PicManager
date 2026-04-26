@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::error::Result;
 
 const GEO_COORD_PRECISION: usize = 4; // ≈11 m precision at equator
+const PROXIMITY_DEG: f64 = 0.01;      // ≈1 km; used to reuse nearby geocache entries
 
 fn coord_key(v: f64) -> String {
     format!("{:.prec$}", v, prec = GEO_COORD_PRECISION)
@@ -106,7 +107,43 @@ async fn cached_or_fetch(
         // truly_empty → fall through to re-geocode
     }
 
-    // Cache miss or stale entry — respect Nominatim's 1 req/s policy
+    // Proximity lookup: reuse the nearest valid geocache entry within ±PROXIMITY_DEG.
+    // Excludes the exact key itself (which may be stale) and all-NULL entries.
+    // Avoids a Nominatim API call when a nearby coordinate has already been resolved.
+    let nearby: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT city, state, county, country FROM geocache
+             WHERE CAST(lat_key AS REAL) BETWEEN ? AND ?
+               AND CAST(lon_key AS REAL) BETWEEN ? AND ?
+               AND NOT (lat_key = ? AND lon_key = ?)
+               AND (city IS NOT NULL OR state IS NOT NULL OR country IS NOT NULL)
+             ORDER BY
+               (CAST(lat_key AS REAL) - ?) * (CAST(lat_key AS REAL) - ?) +
+               (CAST(lon_key AS REAL) - ?) * (CAST(lon_key AS REAL) - ?)
+             LIMIT 1",
+        )
+        .bind(lat - PROXIMITY_DEG).bind(lat + PROXIMITY_DEG)
+        .bind(lon - PROXIMITY_DEG).bind(lon + PROXIMITY_DEG)
+        .bind(&lat_key).bind(&lon_key)
+        .bind(lat).bind(lat).bind(lon).bind(lon)
+        .fetch_optional(pool)
+        .await
+        .ok()?;
+
+    if let Some((city, state, county, country)) = nearby {
+        // Write back to exact key so future lookups skip this proximity scan.
+        let _ = sqlx::query(
+            "INSERT OR REPLACE INTO geocache (lat_key, lon_key, city, state, county, country)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&lat_key).bind(&lon_key)
+        .bind(&city).bind(&state).bind(&county).bind(&country)
+        .execute(pool)
+        .await;
+        return city;
+    }
+
+    // No exact hit and no nearby hit — call Nominatim (respect 1 req/s policy).
     if *need_rate_limit {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
@@ -571,5 +608,118 @@ mod tests {
 
         // Should not panic; city will become None after failed re-fetch
         group_by_location(&pool).await.unwrap();
+    }
+
+    // --- proximity cache tests ---
+
+    #[tokio::test]
+    async fn proximity_cache_returns_nearby_city() {
+        let pool = test_pool().await;
+        let lat = 35.0;
+        let lon = 139.0;
+        insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon + 0.005, Some("Tokyo"), Some("Tokyo-to")).await;
+
+        group_by_location(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE name = 'Tokyo'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1, "proximity cache should create album from nearby entry");
+    }
+
+    #[tokio::test]
+    async fn proximity_cache_writes_back_exact_key() {
+        let pool = test_pool().await;
+        let lat = 35.0;
+        let lon = 139.0;
+        insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon + 0.005, Some("Tokyo"), Some("Tokyo-to")).await;
+
+        group_by_location(&pool).await.unwrap();
+
+        let city: Option<String> = sqlx::query_scalar(
+            "SELECT city FROM geocache WHERE lat_key = ? AND lon_key = ?",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(lon))
+        .fetch_optional(&pool)
+        .await
+        .unwrap()
+        .flatten();
+        assert_eq!(city.as_deref(), Some("Tokyo"), "proximity hit should be written to exact key");
+    }
+
+    #[tokio::test]
+    async fn proximity_cache_ignores_all_null_nearby() {
+        // Use ocean coordinates (Gulf of Guinea) so Nominatim returns no city either,
+        // making the "no album" assertion reliable regardless of network availability.
+        let pool = test_pool().await;
+        let lat = 0.0;
+        let lon = 0.0;
+        insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon + 0.005, None, None).await; // all-NULL, invalid
+
+        group_by_location(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE kind = 'location'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "all-NULL nearby entry should not be used as proximity cache hit");
+    }
+
+    #[tokio::test]
+    async fn proximity_cache_out_of_range_not_used() {
+        // Ocean coordinates so Nominatim also returns no city, making the assertion robust.
+        let pool = test_pool().await;
+        let lat = 0.0;
+        let lon = 0.0;
+        insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon + 0.011, Some("ACity"), Some("AState")).await; // > 0.01°
+
+        group_by_location(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM albums WHERE kind = 'location'")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 0, "entry beyond ±0.01° must not trigger proximity cache");
+    }
+
+    #[tokio::test]
+    async fn proximity_cache_prefers_closest() {
+        let pool = test_pool().await;
+        let lat = 35.0;
+        let lon = 139.0;
+        insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon + 0.003, Some("Near City"), Some("S1")).await;
+        seed_geocache(&pool, lat, lon + 0.008, Some("Far City"),  Some("S2")).await;
+
+        group_by_location(&pool).await.unwrap();
+
+        let albums: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM albums WHERE kind = 'location' ORDER BY name",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(albums, vec!["Near City"], "should pick the closest valid entry");
+    }
+
+    #[tokio::test]
+    async fn proximity_cache_used_for_stale_exact_entry() {
+        // Stale exact key (city set, state NULL) should fall through to proximity lookup.
+        let pool = test_pool().await;
+        let lat = 35.0;
+        let lon = 139.0;
+        insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon, Some("OldCity"), None).await; // stale: city set, state NULL
+        seed_geocache(&pool, lat, lon + 0.005, Some("NewCity"), Some("S")).await;
+
+        group_by_location(&pool).await.unwrap();
+
+        let albums: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM albums WHERE kind = 'location' ORDER BY name",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(albums, vec!["NewCity"], "stale exact entry should fall through to proximity");
     }
 }
