@@ -1,3 +1,4 @@
+pub mod log;
 pub mod placer;
 pub mod scanner;
 pub mod state;
