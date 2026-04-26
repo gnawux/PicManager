@@ -1440,3 +1440,164 @@ async fn get_albums_latest_photo_at_is_most_recent() {
     );
 }
 
+// ── helpers for embedding tests ───────────────────────────────────────────────
+
+fn unit_emb(dim: usize, hot: usize) -> Vec<u8> {
+    let mut v = vec![0.0f32; dim];
+    v[hot] = 1.0;
+    picmanager::face::embedder::encode_embedding(&v)
+}
+
+async fn insert_photo_plain(pool: &SqlitePool, suffix: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES (?,?,  'jpeg', 'imported') RETURNING id"
+    )
+    .bind(format!("/p_{suffix}.jpg"))
+    .bind(format!("sha_{suffix}"))
+    .fetch_one(pool).await.unwrap()
+}
+
+async fn insert_face_emb(pool: &SqlitePool, photo_id: i64, emb: &[u8]) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence, embedding) \
+         VALUES (?, 0, 0, 50, 50, 0.95, ?) RETURNING id"
+    )
+    .bind(photo_id)
+    .bind(emb)
+    .fetch_one(pool).await.unwrap()
+}
+
+async fn create_named_person(pool: &SqlitePool, name: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO people (name) VALUES (?) RETURNING id")
+        .bind(name)
+        .fetch_one(pool).await.unwrap()
+}
+
+async fn create_unnamed_person(pool: &SqlitePool) -> i64 {
+    sqlx::query_scalar("INSERT INTO people DEFAULT VALUES RETURNING id")
+        .fetch_one(pool).await.unwrap()
+}
+
+async fn link_face(pool: &SqlitePool, person_id: i64, face_id: i64) {
+    sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(person_id).bind(face_id)
+        .execute(pool).await.unwrap();
+}
+
+// ── merge suggestions tests ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn merge_suggestions_returns_similar_person_first() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Alice: embedding at dim-0
+    let alice_id = create_named_person(&pool, "Alice").await;
+    let p1 = insert_photo_plain(&pool, "ms1").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(8, 0)).await;
+    link_face(&pool, alice_id, f1).await;
+
+    // Bob (unnamed, similar to Alice): embedding at dim-0
+    let bob_id = create_unnamed_person(&pool).await;
+    let p2 = insert_photo_plain(&pool, "ms2").await;
+    let f2 = insert_face_emb(&pool, p2, &unit_emb(8, 0)).await;
+    link_face(&pool, bob_id, f2).await;
+
+    // Carol (unnamed, dissimilar): embedding at dim-4
+    let carol_id = create_unnamed_person(&pool).await;
+    let p3 = insert_photo_plain(&pool, "ms3").await;
+    let f3 = insert_face_emb(&pool, p3, &unit_emb(8, 4)).await;
+    link_face(&pool, carol_id, f3).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{alice_id}/merge-suggestions"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = json.as_array().unwrap();
+    assert!(!arr.is_empty(), "should have suggestions");
+    // Bob (distance 0) comes before Carol (distance 1)
+    assert_eq!(arr[0]["person_id"].as_i64().unwrap(), bob_id);
+    assert!(arr[0]["distance"].as_f64().unwrap() < arr[1]["distance"].as_f64().unwrap());
+}
+
+#[tokio::test]
+async fn merge_suggestions_excludes_self() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let alice_id = create_named_person(&pool, "Alice").await;
+    let p1 = insert_photo_plain(&pool, "se1").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(8, 0)).await;
+    link_face(&pool, alice_id, f1).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{alice_id}/merge-suggestions"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = json.as_array().unwrap();
+    // No other people, so empty
+    assert!(arr.is_empty());
+    // If there were results, none should have person_id == alice_id
+    for item in arr {
+        assert_ne!(item["person_id"].as_i64().unwrap(), alice_id);
+    }
+}
+
+#[tokio::test]
+async fn merge_suggestions_empty_when_no_embedding() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Person with no faces (no embeddings)
+    let pid = create_named_person(&pool, "Ghost").await;
+
+    // Another person with embedding
+    let other_id = create_unnamed_person(&pool).await;
+    let p2 = insert_photo_plain(&pool, "ne2").await;
+    let f2 = insert_face_emb(&pool, p2, &unit_emb(8, 1)).await;
+    link_face(&pool, other_id, f2).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/merge-suggestions"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn merge_suggestions_empty_when_only_one_person() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let alice_id = create_named_person(&pool, "Solo").await;
+    let p1 = insert_photo_plain(&pool, "op1").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(8, 0)).await;
+    link_face(&pool, alice_id, f1).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{alice_id}/merge-suggestions"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json.as_array().unwrap().is_empty());
+}
+

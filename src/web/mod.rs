@@ -15,7 +15,7 @@ use handlers::{
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
     geo::{get_geo_hierarchy, get_geo_photos, start_regeocode, get_regeocode_status},
-    people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person},
+    people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person, get_merge_suggestions},
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb, get_photo_file, get_photo, get_gps_points, patch_photo, batch_update_photos},
 };
@@ -65,6 +65,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/people/{id}/reparent", post(reparent_person))
         .route("/api/people/{id}/transfer", post(transfer_faces))
         .route("/api/people/{id}/lift", post(lift_person))
+        .route("/api/people/{id}/merge-suggestions", get(get_merge_suggestions))
         .route("/api/faces/{id}/thumb", get(get_face_thumb))
         .route("/api/animals/species", get(list_species))
         .route("/api/animals/{species}/photos", get(list_species_photos))

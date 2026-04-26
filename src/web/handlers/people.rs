@@ -531,6 +531,159 @@ pub async fn delete_person(
     }
 }
 
+// ── merge suggestions ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct MergeSuggestion {
+    pub person_id: i64,
+    pub name: Option<String>,
+    pub cover_face_id: Option<i64>,
+    pub photo_count: i64,
+    pub face_count: i64,
+    pub distance: f32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MergeSuggestionsQuery {
+    pub limit: Option<i64>,
+}
+
+pub async fn get_merge_suggestions(
+    State(state): State<AppState>,
+    Path(target_id): Path<i64>,
+    Query(params): Query<MergeSuggestionsQuery>,
+) -> Result<Json<Vec<MergeSuggestion>>, StatusCode> {
+    use crate::face::embedder::decode_embedding;
+    use crate::face::cluster::cosine_distance;
+
+    let limit = params.limit.unwrap_or(5).max(1).min(20);
+
+    // Load target person's embeddings
+    let target_rows: Vec<(Vec<u8>,)> = sqlx::query_as(
+        "SELECT f.embedding FROM person_faces pf
+         JOIN faces f ON f.id = pf.face_id
+         WHERE pf.person_id = ? AND f.embedding IS NOT NULL",
+    )
+    .bind(target_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if target_rows.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    let target_centroid = {
+        let embs: Vec<Vec<f32>> = target_rows.iter().map(|(b,)| decode_embedding(b)).collect();
+        compute_centroid(&embs)
+    };
+
+    // Load all other people's embeddings in one pass
+    let all_emb_rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT pf.person_id, f.embedding
+         FROM person_faces pf
+         JOIN faces f ON f.id = pf.face_id
+         JOIN people p ON p.id = pf.person_id
+         WHERE pf.person_id != ? AND p.status = 'active' AND f.embedding IS NOT NULL",
+    )
+    .bind(target_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if all_emb_rows.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    // Group embeddings by person_id and compute centroid per person
+    let mut person_embs: std::collections::HashMap<i64, Vec<Vec<f32>>> =
+        std::collections::HashMap::new();
+    for (pid, bytes) in &all_emb_rows {
+        person_embs
+            .entry(*pid)
+            .or_default()
+            .push(decode_embedding(bytes));
+    }
+
+    // Compute distances
+    let mut scored: Vec<(i64, f32)> = person_embs
+        .into_iter()
+        .map(|(pid, embs)| {
+            let centroid = compute_centroid(&embs);
+            let dist = cosine_distance(&target_centroid, &centroid);
+            (pid, dist)
+        })
+        .collect();
+    scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit as usize);
+
+    if scored.is_empty() {
+        return Ok(Json(vec![]));
+    }
+
+    // Fetch metadata for the top candidates
+    let ids: Vec<i64> = scored.iter().map(|(id, _)| *id).collect();
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT p.id, p.name,
+                COALESCE(p.cover_face_id,
+                    (SELECT pf2.face_id FROM person_faces pf2
+                     WHERE pf2.person_id = p.id ORDER BY pf2.face_id LIMIT 1)) AS cover_face_id,
+                COUNT(DISTINCT pf.face_id) AS face_count,
+                COUNT(DISTINCT f.photo_id) AS photo_count
+         FROM people p
+         LEFT JOIN person_faces pf ON pf.person_id = p.id
+         LEFT JOIN faces f ON f.id = pf.face_id
+         WHERE p.id IN ({placeholders})
+         GROUP BY p.id"
+    );
+    let mut q = sqlx::query(&sql);
+    for id in &ids { q = q.bind(id); }
+    let meta_rows = q
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Build map: person_id → (name, cover_face_id, face_count, photo_count)
+    let mut meta_map: std::collections::HashMap<i64, (Option<String>, Option<i64>, i64, i64)> =
+        std::collections::HashMap::new();
+    for row in meta_rows {
+        use sqlx::Row;
+        let pid: i64 = row.get(0);
+        let name: Option<String> = row.get(1);
+        let cover_face_id: Option<i64> = row.get(2);
+        let face_count: i64 = row.get(3);
+        let photo_count: i64 = row.get(4);
+        meta_map.insert(pid, (name, cover_face_id, face_count, photo_count));
+    }
+
+    let suggestions = scored
+        .into_iter()
+        .filter_map(|(pid, dist)| {
+            meta_map.remove(&pid).map(|(name, cover_face_id, face_count, photo_count)| {
+                MergeSuggestion { person_id: pid, name, cover_face_id, photo_count, face_count, distance: dist }
+            })
+        })
+        .collect();
+
+    Ok(Json(suggestions))
+}
+
+fn compute_centroid(embs: &[Vec<f32>]) -> Vec<f32> {
+    use crate::face::embedder::l2_normalize;
+    if embs.is_empty() {
+        return vec![];
+    }
+    let dim = embs[0].len();
+    let mut sum = vec![0.0f32; dim];
+    for e in embs {
+        for (s, x) in sum.iter_mut().zip(e.iter()) {
+            *s += x;
+        }
+    }
+    l2_normalize(&sum)
+}
+
 pub async fn lift_person(
     State(state): State<AppState>,
     Path(id): Path<i64>,
