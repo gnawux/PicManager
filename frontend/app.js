@@ -901,7 +901,7 @@ async function loadPeopleList() {
     card.className = 'person-card';
     const thumbSrc = p.cover_face_id
       ? `/api/faces/${p.cover_face_id}/thumb`
-      : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="%23ddd"/></svg>';
+      : '/default-person.svg';
     if (state.selectedPeople.has(p.id)) card.classList.add('selected');
     card.innerHTML = `
       <div class="person-card-check"></div>
@@ -1205,7 +1205,7 @@ async function loadSubPersons(personId) {
     row.className = 'subperson-row';
     const thumbSrc = child.cover_face_id
       ? `/api/faces/${child.cover_face_id}/thumb`
-      : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="%23ddd"/></svg>';
+      : '/default-person.svg';
     row.innerHTML = `<img class="subperson-thumb" src="${thumbSrc}" alt="">
       <span class="subperson-name">${escHtml(child.name || '未命名')}</span>
       <div class="subperson-actions">
