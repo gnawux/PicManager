@@ -160,8 +160,10 @@ docs/
 | 28  | 照片详情模态框展示人物：GET /api/photos/{id}/faces 增加 person_id/person_name（TDD）；前端渲染人物缩略图区 |
 | 29a | 前端：人物列表按有名/无名排序，有子节点的显示子节点数量；无人脸人物使用 default-person.svg 占位图 |
 | 29b | 后端：GET /api/photos/{id}/file 返回原始文件字节（Content-Type 依 format 列推断）；前端详情模态框增加"查看原图/切换缩略图"切换按钮 |
+| 30a | 文档：邻近地理编码缓存（proximity geocache）设计写入 REQUIREMENTS/ARCHITECTURE/DESIGN |
+| 30b | 后端：`cached_or_fetch` 精确 key 未命中时先查 ±0.01°（约 1km）邻近缓存，命中则写回精确 key 并返回（TDD，6 个新测试） |
 
-当前测试数：**228 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**235 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 

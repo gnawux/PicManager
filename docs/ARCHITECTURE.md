@@ -161,7 +161,7 @@ picmanager/
 
 **自动分组维度：**
 - 时间（`kind='time'`）：按 `taken_at` 年月，形如 `2024-06`
-- 地点（`kind='location'`）：调用 OSM Nominatim 反地理编码将 GPS 坐标解析为城市名；结果缓存到 `geocache` 表，限速 1 req/s；无 GPS 的照片跳过；`count_missing_geo(pool)` 返回有 GPS 但尚无缓存的照片数，供 CLI `fill-missing` 使用
+- 地点（`kind='location'`）：调用 OSM Nominatim 反地理编码将 GPS 坐标解析为城市名；结果缓存到 `geocache` 表，限速 1 req/s；精确 key 未命中时先在 ±0.01°（约 1 km）范围内查邻近缓存（proximity lookup），命中则写入精确 key 并返回，避免 API 调用（实测覆盖约 89% 的坐标）；无 GPS 的照片跳过；`count_missing_geo(pool)` 返回有 GPS 但尚无缓存的照片数，供 CLI `fill-missing` 使用
 - 相机（`kind='camera'`）：按 EXIF Make+Model；无相机信息的照片跳过
 
 一张照片可同时属于多个相册（时间相册 + 地点相册 + 相机相册），通过 `photo_albums` 多对多表关联。

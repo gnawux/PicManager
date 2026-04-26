@@ -606,7 +606,11 @@ pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64>
      - city 为 NULL 但 country 等有值 → 合法的"仅知国家/省"结果，直接返回 NULL（不重试）
      - city 有值但 state 为 NULL → 旧版数据（直辖市修复前），视为过期条目，触发重试
      - city 和 state 均有值 → 完整命中，直接返回 city
-   - 未命中则调用 Nominatim API（见下），结果写入 `geocache`（`INSERT OR REPLACE`）
+   - 精确 key 未命中（或为可重试条目）时，先做邻近查找（proximity lookup）：
+     在 ±`PROXIMITY_DEG`（0.01°，约 1 km）边界框内按距离升序找最近的有效缓存条目
+     （city/state/country 至少有一个非 NULL），若命中则 `INSERT OR REPLACE` 到当前精确 key
+     并返回，不调用 Nominatim、不触发限速
+   - 邻近也未命中则调用 Nominatim API（见下），结果写入 `geocache`（`INSERT OR REPLACE`）
    - 相邻 API 调用之间 `tokio::time::sleep(1s)` 限速
 3. 得到城市名后，`ensure_location_album()` 创建 `kind='location'` 相册并关联照片
 
