@@ -1093,8 +1093,10 @@ async function showPersonDetail(personId) {
   document.getElementById('person-name-input').value = person ? (person.name || '') : '';
   document.getElementById('person-name-input').dataset.personId = personId;
 
-  // Load photos for this person (paginated)
+  // Load photos for this person (paginated); eagerly hide bar to avoid stale state
   state.personDetailPage = 1;
+  state.personDetailTotal = 0;
+  document.getElementById('person-photos-pagination').classList.add('hidden');
   await loadPersonDetailPage(personId);
 
   // Breadcrumb and reparent panel
@@ -1113,7 +1115,8 @@ async function loadPersonDetailPage(personId) {
   const data = await fetchJSON(
     `/api/people/${personId}?page=${page}&per_page=${PERSON_DETAIL_PER_PAGE}`
   );
-  if (!data) return;
+  // Discard stale responses that arrived after the user switched persons
+  if (!data || personId !== state.currentPersonId) return;
   state.personDetailPhotos = data.photos || [];
   state.personDetailTotal = data.total || 0;
   renderPersonDetailPhotos(state.personDetailPhotos);
@@ -1511,10 +1514,8 @@ async function doTransferToSibling(currentPersonId, targetId, photoIds, isNewPer
 
 async function refreshPersonDetail() {
   if (state.currentPersonId) {
-    const data = await fetchJSON(`/api/people/${state.currentPersonId}?per_page=100`);
-    const photos = data ? (data.photos || data) : [];
-    state.personDetailPhotos = photos;
-    renderPersonDetailPhotos(photos);
+    state.personDetailPage = 1;
+    await loadPersonDetailPage(state.currentPersonId);
     await loadSubPersons(state.currentPersonId);
   }
 }
