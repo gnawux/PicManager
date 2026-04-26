@@ -39,7 +39,7 @@ const PERSON_DETAIL_PER_PAGE = 50;
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   // Tab navigation
-  document.querySelectorAll('.tab-btn').forEach(btn => {
+  document.querySelectorAll('.tab-btn[data-view]').forEach(btn => {
     btn.addEventListener('click', () => switchView(btn.dataset.view));
   });
 
@@ -873,8 +873,15 @@ async function initMap() {
 
   const mapEl = document.getElementById('leaflet-map');
   if (leafletMap) {
-    leafletMap.invalidateSize();
-    return;
+    // If initialised while container was hidden (zero size), destroy and redo
+    if (leafletMap.getContainer().offsetWidth === 0) {
+      leafletMap.remove();
+      leafletMap = null;
+      mapEl.innerHTML = '';
+    } else {
+      leafletMap.invalidateSize();
+      return;
+    }
   }
 
   leafletMap = L.map(mapEl).setView([20, 0], 2);
