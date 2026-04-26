@@ -949,7 +949,7 @@ async function loadPeopleList() {
   rootPeople.sort((a, b) => {
     if (a.name && !b.name) return -1;
     if (!a.name && b.name) return 1;
-    return 0;
+    return b.photo_count - a.photo_count;
   });
   document.getElementById('people-count').textContent = `共 ${rootPeople.length} 人`;
   const grid = document.getElementById('people-grid');
