@@ -1601,3 +1601,151 @@ async fn merge_suggestions_empty_when_only_one_person() {
     assert!(json.as_array().unwrap().is_empty());
 }
 
+// ── outlier faces tests ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn outlier_faces_returns_distant_face_first() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Person with 3 faces: 2 close (dim-1) and 1 outlier (dim-5)
+    let pid = create_named_person(&pool, "Alice").await;
+    let p1 = insert_photo_plain(&pool, "of1").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(8, 1)).await;
+    link_face(&pool, pid, f1).await;
+
+    let p2 = insert_photo_plain(&pool, "of2").await;
+    let f2 = insert_face_emb(&pool, p2, &unit_emb(8, 1)).await;
+    link_face(&pool, pid, f2).await;
+
+    let p3 = insert_photo_plain(&pool, "of3").await;
+    // Outlier: orthogonal to the centroid at dim-1
+    let f3 = insert_face_emb(&pool, p3, &unit_emb(8, 5)).await;
+    link_face(&pool, pid, f3).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/outlier-faces"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = json.as_array().unwrap();
+    assert!(!arr.is_empty(), "should have at least one outlier");
+    // Outlier face (f3) should be first (highest distance)
+    assert_eq!(arr[0]["face_id"].as_i64().unwrap(), f3);
+    // Distance should be significant (orthogonal = 1.0)
+    assert!(arr[0]["distance"].as_f64().unwrap() > 0.2);
+}
+
+#[tokio::test]
+async fn outlier_faces_empty_when_too_few_faces() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pid = create_named_person(&pool, "Loner").await;
+    let p1 = insert_photo_plain(&pool, "tf1").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(8, 0)).await;
+    link_face(&pool, pid, f1).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/outlier-faces"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    // Only 1 face with embedding — cannot detect outliers
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn outlier_faces_empty_when_all_close() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pid = create_named_person(&pool, "Tight").await;
+    // All faces identical → distance ≈ 0
+    for suffix in ["ac1", "ac2", "ac3"] {
+        let p = insert_photo_plain(&pool, suffix).await;
+        let f = insert_face_emb(&pool, p, &unit_emb(8, 0)).await;
+        link_face(&pool, pid, f).await;
+    }
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/outlier-faces"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    // All identical → no face exceeds the 0.20 distance threshold
+    assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn eject_face_removes_from_person_and_creates_new() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pid = create_named_person(&pool, "Alice").await;
+    let p1 = insert_photo_plain(&pool, "ej1").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(8, 0)).await;
+    link_face(&pool, pid, f1).await;
+
+    let body = serde_json::json!({ "face_id": f1 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/eject-face"))
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string())).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let new_pid = json["new_person_id"].as_i64().unwrap();
+    assert_ne!(new_pid, pid);
+
+    // Face no longer belongs to original person
+    let old_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM person_faces WHERE person_id = ? AND face_id = ?"
+    )
+    .bind(pid).bind(f1)
+    .fetch_one(&pool).await.unwrap();
+    assert_eq!(old_count, 0);
+
+    // Face now belongs to new person
+    let new_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM person_faces WHERE person_id = ? AND face_id = ?"
+    )
+    .bind(new_pid).bind(f1)
+    .fetch_one(&pool).await.unwrap();
+    assert_eq!(new_count, 1);
+}
+
+#[tokio::test]
+async fn eject_face_404_if_face_not_in_person() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pid = create_named_person(&pool, "Alice").await;
+    let body = serde_json::json!({ "face_id": 9999 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/eject-face"))
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string())).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+

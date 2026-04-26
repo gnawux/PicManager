@@ -684,6 +684,138 @@ fn compute_centroid(embs: &[Vec<f32>]) -> Vec<f32> {
     l2_normalize(&sum)
 }
 
+// ── outlier faces ─────────────────────────────────────────────────────────────
+
+const OUTLIER_MIN_DISTANCE: f32 = 0.20;
+
+#[derive(Debug, Serialize)]
+pub struct OutlierFace {
+    pub face_id: i64,
+    pub photo_id: i64,
+    pub distance: f32,
+    pub confidence: f32,
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct OutlierFacesQuery {
+    pub limit: Option<i64>,
+}
+
+pub async fn get_outlier_faces(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+    Query(params): Query<OutlierFacesQuery>,
+) -> Result<Json<Vec<OutlierFace>>, StatusCode> {
+    use crate::face::embedder::decode_embedding;
+    use crate::face::cluster::cosine_distance;
+
+    let limit = params.limit.unwrap_or(5).max(1).min(20);
+
+    // Load all faces for this person that have embeddings
+    let rows: Vec<(i64, i64, Vec<u8>, f32, i32, i32, i32, i32)> = sqlx::query_as(
+        "SELECT f.id, f.photo_id, f.embedding, COALESCE(f.confidence, 0.0),
+                f.x, f.y, f.width, f.height
+         FROM person_faces pf
+         JOIN faces f ON f.id = pf.face_id
+         WHERE pf.person_id = ? AND f.embedding IS NOT NULL",
+    )
+    .bind(person_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Need at least 2 faces to detect outliers
+    if rows.len() < 2 {
+        return Ok(Json(vec![]));
+    }
+
+    let embs: Vec<Vec<f32>> = rows.iter().map(|(_, _, b, ..)| decode_embedding(b)).collect();
+    let centroid = compute_centroid(&embs);
+
+    let mut scored: Vec<OutlierFace> = rows
+        .iter()
+        .zip(embs.iter())
+        .map(|((face_id, photo_id, _, conf, x, y, w, h), emb)| {
+            let dist = cosine_distance(emb, &centroid);
+            OutlierFace {
+                face_id: *face_id,
+                photo_id: *photo_id,
+                distance: dist,
+                confidence: *conf,
+                x: *x,
+                y: *y,
+                width: *w,
+                height: *h,
+            }
+        })
+        .filter(|o| o.distance > OUTLIER_MIN_DISTANCE)
+        .collect();
+
+    scored.sort_by(|a, b| b.distance.partial_cmp(&a.distance).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(limit as usize);
+    Ok(Json(scored))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EjectFaceBody {
+    pub face_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EjectFaceResponse {
+    pub new_person_id: i64,
+}
+
+pub async fn eject_face(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+    Json(body): Json<EjectFaceBody>,
+) -> Result<Json<EjectFaceResponse>, StatusCode> {
+    // Verify the face belongs to this person
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM person_faces WHERE person_id = ? AND face_id = ?",
+    )
+    .bind(person_id)
+    .bind(body.face_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if count.0 == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // Remove from current person
+    sqlx::query("DELETE FROM person_faces WHERE person_id = ? AND face_id = ?")
+        .bind(person_id)
+        .bind(body.face_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Create a new unnamed person for this face
+    let new_person_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (cover_face_id, status) VALUES (?, 'active') RETURNING id",
+    )
+    .bind(body.face_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(new_person_id)
+        .bind(body.face_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(EjectFaceResponse { new_person_id }))
+}
+
 pub async fn lift_person(
     State(state): State<AppState>,
     Path(id): Path<i64>,
