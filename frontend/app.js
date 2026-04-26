@@ -1172,6 +1172,69 @@ async function showPersonDetail(personId) {
 
   // Load sub-persons
   await loadSubPersons(personId);
+
+  // Load merge suggestions (named people only)
+  await loadMergeSuggestions(personId, person);
+}
+
+async function loadMergeSuggestions(personId, person) {
+  const panel = document.getElementById('merge-suggestions-panel');
+  const list = document.getElementById('merge-suggestions-list');
+  list.innerHTML = '';
+  if (!person || !person.name) {
+    panel.classList.add('hidden');
+    return;
+  }
+  const suggestions = await fetchJSON(`/api/people/${personId}/merge-suggestions?limit=5`);
+  if (!suggestions || suggestions.length === 0) {
+    panel.classList.add('hidden');
+    return;
+  }
+  panel.classList.remove('hidden');
+  for (const s of suggestions) {
+    const pct = Math.round((1 - s.distance) * 100);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0';
+
+    const thumb = document.createElement('img');
+    if (s.cover_face_id) {
+      thumb.src = `/api/faces/${s.cover_face_id}/thumb`;
+      thumb.style.cssText = 'width:36px;height:36px;object-fit:cover;border-radius:50%;flex-shrink:0';
+      thumb.onerror = () => { thumb.style.display = 'none'; };
+    } else {
+      thumb.style.display = 'none';
+    }
+
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0';
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = 'font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    nameEl.textContent = s.name || '未命名';
+    const meta = document.createElement('div');
+    meta.style.cssText = 'font-size:11px;color:#888';
+    meta.textContent = `${s.photo_count} 张照片 · 相似度 ${pct}%`;
+    info.append(nameEl, meta);
+
+    const mergeBtn = document.createElement('button');
+    mergeBtn.textContent = '合并';
+    mergeBtn.className = 'btn-ghost';
+    mergeBtn.style.cssText = 'font-size:11px;padding:2px 8px;flex-shrink:0';
+    mergeBtn.addEventListener('click', async () => {
+      mergeBtn.disabled = true;
+      await fetch('/api/people/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_id: s.person_id, target_id: personId }),
+      });
+      row.remove();
+      if (list.children.length === 0) panel.classList.add('hidden');
+      await loadPersonDetailPage(personId);
+      loadPeopleList();
+    });
+
+    row.append(thumb, info, mergeBtn);
+    list.appendChild(row);
+  }
 }
 
 async function loadPersonDetailPage(personId) {
