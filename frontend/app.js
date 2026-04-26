@@ -417,7 +417,7 @@ async function loadAlbums() {
     { kind: 'time',     label: '时间' },
     { kind: 'location', label: '地点' },
   ];
-  const SHOW_DEFAULT = 5;
+  const SHOW_DEFAULT = 4;
 
   for (const { kind, label } of CATEGORIES) {
     const sorted = albums
@@ -454,15 +454,24 @@ async function loadAlbums() {
       innerUl.appendChild(li);
     });
 
-    if (sorted.length > SHOW_DEFAULT && !albumCategoryExpanded[kind]) {
-      const moreLi = document.createElement('li');
-      moreLi.className = 'album-more-link';
-      moreLi.textContent = `更多 (${sorted.length - SHOW_DEFAULT})`;
-      moreLi.addEventListener('click', (e) => {
-        e.stopPropagation();
-        expandAlbumCategory(kind);
-      });
-      innerUl.appendChild(moreLi);
+    if (sorted.length > SHOW_DEFAULT) {
+      const actionLi = document.createElement('li');
+      if (albumCategoryExpanded[kind]) {
+        actionLi.className = 'album-more-link album-collapse-link';
+        actionLi.textContent = '收起';
+        actionLi.addEventListener('click', (e) => {
+          e.stopPropagation();
+          collapseAlbumCategory(kind);
+        });
+      } else {
+        actionLi.className = 'album-more-link';
+        actionLi.textContent = `更多 (${sorted.length - SHOW_DEFAULT})`;
+        actionLi.addEventListener('click', (e) => {
+          e.stopPropagation();
+          expandAlbumCategory(kind);
+        });
+      }
+      innerUl.appendChild(actionLi);
     }
 
     catLi.appendChild(headerDiv);
@@ -485,7 +494,26 @@ function expandAlbumCategory(kind) {
   const catLi = document.querySelector(`#album-list .album-category[data-kind="${kind}"]`);
   if (!catLi) return;
   catLi.classList.add('album-category-expanded');
-  catLi.querySelector('.album-more-link')?.remove();
+  const moreLi = catLi.querySelector('.album-more-link');
+  if (moreLi) {
+    moreLi.className = 'album-more-link album-collapse-link';
+    moreLi.textContent = '收起';
+    moreLi.onclick = (e) => { e.stopPropagation(); collapseAlbumCategory(kind); };
+  }
+}
+
+function collapseAlbumCategory(kind) {
+  albumCategoryExpanded[kind] = false;
+  const catLi = document.querySelector(`#album-list .album-category[data-kind="${kind}"]`);
+  if (!catLi) return;
+  catLi.classList.remove('album-category-expanded');
+  const collapseLi = catLi.querySelector('.album-collapse-link');
+  if (collapseLi) {
+    const hidden = catLi.querySelectorAll('.album-hidden-extra');
+    collapseLi.className = 'album-more-link';
+    collapseLi.textContent = `更多 (${hidden.length})`;
+    collapseLi.onclick = (e) => { e.stopPropagation(); expandAlbumCategory(kind); };
+  }
 }
 
 function selectAlbum(albumId, li) {
