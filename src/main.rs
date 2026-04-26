@@ -19,6 +19,15 @@ enum Command {
         /// 复制文件（保留源文件），不移动
         #[arg(long)]
         copy: bool,
+        /// 每批最多导入 N 张照片（结合 --log 可随时中断后恢复）
+        #[arg(long, value_name = "N")]
+        batch_size: Option<usize>,
+        /// NDJSON 导入日志路径（记录每张文件的导入结果，重跑时自动跳过已处理文件）
+        #[arg(long, value_name = "FILE")]
+        log: Option<PathBuf>,
+        /// 预览模式：只扫描计数，不实际导入
+        #[arg(long)]
+        dry_run: bool,
     },
     /// 扫描重复照片并交互式确认
     Dedup {
@@ -84,8 +93,8 @@ async fn main() -> anyhow::Result<()> {
     let pool = storage::connect(&config.db_url()).await?;
 
     match cli.command {
-        Command::Import { dir, copy } => {
-            import_with_progress(&pool, &dir, &config.library_path, copy).await?;
+        Command::Import { dir, copy, batch_size, log, dry_run } => {
+            import_with_progress(&pool, &dir, &config.library_path, copy, batch_size, log.as_deref(), dry_run).await?;
         }
         Command::Dedup { full } => {
             let n = if full {
@@ -175,16 +184,39 @@ async fn import_with_progress(
     dir: &std::path::Path,
     library_path: &std::path::Path,
     copy: bool,
+    batch_size: Option<usize>,
+    log_path: Option<&std::path::Path>,
+    dry_run: bool,
 ) -> anyhow::Result<()> {
     println!("从 {} 导入照片，扫描中…", dir.display());
+
+    if dry_run {
+        let progress = importer::SharedImportProgress::default();
+        let result = importer::import_dir_batch(
+            pool, dir, library_path, copy,
+            batch_size, log_path, true, progress,
+        ).await?;
+        println!(
+            "[dry-run] 目录 {} 个文件，将处理 {} 个（本批），剩余 {} 个待处理",
+            result.total_files,
+            result.summary.total,
+            result.remaining,
+        );
+        return Ok(());
+    }
+
     let progress = importer::SharedImportProgress::default();
     let pool2 = pool.clone();
     let dir2 = dir.to_path_buf();
     let lib2 = library_path.to_path_buf();
     let progress2 = progress.clone();
+    let log2 = log_path.map(|p| p.to_path_buf());
 
     let handle = tokio::spawn(async move {
-        importer::import_dir_with_progress(&pool2, &dir2, &lib2, copy, progress2).await
+        importer::import_dir_batch(
+            &pool2, &dir2, &lib2, copy,
+            batch_size, log2.as_deref(), false, progress2,
+        ).await
     });
 
     let start = std::time::Instant::now();
@@ -212,7 +244,6 @@ async fn import_with_progress(
                 let secs = elapsed.as_secs() % 60;
                 let import_pct = processed * 100 / total;
 
-                // geo status: waiting while import loop runs; then count or "无 GPS"
                 let geo_str = if processed < total {
                     "等待中".to_string()
                 } else if geo_total == 0 {
@@ -236,16 +267,22 @@ async fn import_with_progress(
         }
     }
 
-    let summary = handle.await??;
+    let batch_result = handle.await??;
     let elapsed = start.elapsed();
+    let remaining_note = if batch_result.remaining > 0 {
+        format!("（剩余 {} 张未处理）", batch_result.remaining)
+    } else {
+        String::new()
+    };
     println!(
-        "\n完成（耗时 {} 分 {} 秒）：共 {} 张，导入 {}，跳过 {}，失败 {}",
+        "\n完成（耗时 {} 分 {} 秒）：共 {} 张，导入 {}，跳过 {}，失败 {}{}",
         elapsed.as_secs() / 60,
         elapsed.as_secs() % 60,
-        summary.total,
-        summary.imported,
-        summary.skipped,
-        summary.errors,
+        batch_result.summary.total,
+        batch_result.summary.imported,
+        batch_result.summary.skipped,
+        batch_result.summary.errors,
+        remaining_note,
     );
     Ok(())
 }
