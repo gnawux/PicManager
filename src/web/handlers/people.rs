@@ -54,6 +54,7 @@ pub struct PersonPhotos {
 pub struct PersonNode {
     id: i64,
     name: Option<String>,
+    cover_face_id: Option<i64>,
     children: Vec<PersonNode>,
 }
 
@@ -166,22 +167,29 @@ pub async fn get_person_photos(
 pub async fn get_people_tree(
     State(state): State<AppState>,
 ) -> Result<Json<PeopleTree>, StatusCode> {
-    let rows: Vec<(i64, Option<String>, Option<i64>)> =
-        sqlx::query_as("SELECT id, name, parent_id FROM people ORDER BY id")
-            .fetch_all(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let rows: Vec<(i64, Option<String>, Option<i64>, Option<i64>)> =
+        sqlx::query_as(
+            "SELECT id, name, parent_id,
+                    COALESCE(cover_face_id,
+                        (SELECT pf.face_id FROM person_faces pf
+                         WHERE pf.person_id = people.id ORDER BY pf.face_id LIMIT 1))
+             FROM people ORDER BY id",
+        )
+        .fetch_all(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Build tree from flat list
     fn build(
-        all: &[(i64, Option<String>, Option<i64>)],
+        all: &[(i64, Option<String>, Option<i64>, Option<i64>)],
         parent: Option<i64>,
     ) -> Vec<PersonNode> {
         all.iter()
-            .filter(|(_, _, p)| *p == parent)
-            .map(|(id, name, _)| PersonNode {
+            .filter(|(_, _, p, _)| *p == parent)
+            .map(|(id, name, _, cover_face_id)| PersonNode {
                 id: *id,
                 name: name.clone(),
+                cover_face_id: *cover_face_id,
                 children: build(all, Some(*id)),
             })
             .collect()

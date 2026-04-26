@@ -1274,6 +1274,55 @@ async fn get_person_photos_pagination_with_descendants() {
 }
 
 #[tokio::test]
+async fn get_people_tree_includes_cover_face_id() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pa: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('Alice') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES ('/t.jpg','sha_t','jpeg','imported') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    let face_id: i64 = sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,0,0,50,50,0.9) RETURNING id",
+    ).bind(photo_id).fetch_one(&pool).await.unwrap();
+    sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(pa).bind(face_id).execute(&pool).await.unwrap();
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/people/tree").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let people = json["people"].as_array().unwrap();
+    assert_eq!(people.len(), 1);
+    assert_eq!(
+        people[0]["cover_face_id"].as_i64().unwrap(),
+        face_id,
+        "tree node should expose cover_face_id"
+    );
+}
+
+#[tokio::test]
+async fn get_people_tree_cover_face_id_null_when_no_face() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    sqlx::query("INSERT INTO people (name) VALUES ('Bob')")
+        .execute(&pool).await.unwrap();
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/people/tree").body(Body::empty()).unwrap())
+        .await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let people = json["people"].as_array().unwrap();
+    assert_eq!(people.len(), 1);
+    assert!(people[0]["cover_face_id"].is_null(), "should be null when no face");
+}
+
+#[tokio::test]
 async fn get_albums_latest_photo_at_null_when_no_photos() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 

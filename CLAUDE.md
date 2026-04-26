@@ -155,8 +155,9 @@ docs/
 | 26a | 后端：GET /api/albums 新增 latest_photo_at 字段（MAX(p.taken_at)，TDD） |
 | 26b | 前端：相册侧边栏分三类（设备/时间/地点）折叠展示，按最新照片时间排序，默认显示 4 个 + "更多/收起" |
 | 27a | 后端：GET /api/people/{id} 改用 WITH RECURSIVE CTE 包含子树所有后代照片（TDD） |
+| 27b | 后端：PersonNode 增加 cover_face_id 字段，GET /api/people/tree 返回（TDD） |
 
-当前测试数：**216 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**218 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
