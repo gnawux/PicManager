@@ -156,6 +156,7 @@ docs/
 | 26b | 前端：相册侧边栏分三类（设备/时间/地点）折叠展示，按最新照片时间排序，默认显示 4 个 + "更多/收起" |
 | 27a | 后端：GET /api/people/{id} 改用 WITH RECURSIVE CTE 包含子树所有后代照片（TDD） |
 | 27b | 后端：PersonNode 增加 cover_face_id 字段，GET /api/people/tree 返回（TDD） |
+| 27c | 前端：人物列表只显示顶级节点；详情页照片分页（50/页，上/下页按钮）；子人物行加缩略图可点击 |
 
 当前测试数：**218 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 

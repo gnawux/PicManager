@@ -21,6 +21,8 @@ const state = {
   personDetailSelectMode: false,
   personDetailSelection: new Set(), // photo IDs selected in person detail
   personDetailPhotos: [], // photos shown in person detail (for undo)
+  personDetailPage: 1,
+  personDetailTotal: 0,
   // Animals
   animalSpecies: null,  // current species being browsed
   animalPage: 1,
@@ -31,6 +33,8 @@ const state = {
 // Album category UI state — lives outside `state` so it survives loadAlbums() re-calls
 const albumCategoryCollapsed = { camera: false, time: false, location: false };
 const albumCategoryExpanded  = { camera: false, time: false, location: false };
+
+const PERSON_DETAIL_PER_PAGE = 50;
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -841,16 +845,18 @@ async function loadPeopleList() {
   if (!people) return;
   state.allPeople = people;
 
-  document.getElementById('people-count').textContent = `共 ${people.length} 人`;
+  // Only show root-level people (parent_id === null) in the grid
+  const rootPeople = people.filter(p => p.parent_id === null);
+  document.getElementById('people-count').textContent = `共 ${rootPeople.length} 人`;
   const grid = document.getElementById('people-grid');
   grid.innerHTML = '';
 
-  if (people.length === 0) {
+  if (rootPeople.length === 0) {
     grid.innerHTML = '<p style="padding:24px;color:#888">尚无人物。导入含人脸的照片后，点击"整合新面孔"。</p>';
     return;
   }
 
-  for (const p of people) {
+  for (const p of rootPeople) {
     const card = document.createElement('div');
     card.className = 'person-card';
     const thumbSrc = p.cover_face_id
@@ -1047,11 +1053,9 @@ async function showPersonDetail(personId) {
   document.getElementById('person-name-input').value = person ? (person.name || '') : '';
   document.getElementById('person-name-input').dataset.personId = personId;
 
-  // Load photos for this person
-  const data = await fetchJSON(`/api/people/${personId}?per_page=100`);
-  const photos = data ? (data.photos || data) : [];
-  state.personDetailPhotos = photos;
-  renderPersonDetailPhotos(photos);
+  // Load photos for this person (paginated)
+  state.personDetailPage = 1;
+  await loadPersonDetailPage(personId);
 
   // Breadcrumb and reparent panel
   document.getElementById('person-reparent-panel').classList.add('hidden');
@@ -1062,6 +1066,45 @@ async function showPersonDetail(personId) {
 
   // Load sub-persons
   await loadSubPersons(personId);
+}
+
+async function loadPersonDetailPage(personId) {
+  const page = state.personDetailPage;
+  const data = await fetchJSON(
+    `/api/people/${personId}?page=${page}&per_page=${PERSON_DETAIL_PER_PAGE}`
+  );
+  if (!data) return;
+  state.personDetailPhotos = data.photos || [];
+  state.personDetailTotal = data.total || 0;
+  renderPersonDetailPhotos(state.personDetailPhotos);
+  renderPersonDetailPagination();
+}
+
+function renderPersonDetailPagination() {
+  const bar = document.getElementById('person-photos-pagination');
+  const total = state.personDetailTotal;
+  const page  = state.personDetailPage;
+  const pages = Math.ceil(total / PERSON_DETAIL_PER_PAGE);
+  if (pages <= 1) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  bar.innerHTML = '';
+  const prev = document.createElement('button');
+  prev.className = 'btn-ghost'; prev.textContent = '‹ 上页';
+  prev.disabled = page <= 1;
+  prev.addEventListener('click', () => {
+    state.personDetailPage--;
+    loadPersonDetailPage(state.currentPersonId);
+  });
+  const info = document.createElement('span');
+  info.textContent = `第 ${page} / ${pages} 页 · 共 ${total} 张`;
+  const next = document.createElement('button');
+  next.className = 'btn-ghost'; next.textContent = '下页 ›';
+  next.disabled = page >= pages;
+  next.addEventListener('click', () => {
+    state.personDetailPage++;
+    loadPersonDetailPage(state.currentPersonId);
+  });
+  bar.append(prev, info, next);
 }
 
 function renderPersonDetailPhotos(photos) {
@@ -1120,9 +1163,17 @@ async function loadSubPersons(personId) {
   for (const child of children) {
     const row = document.createElement('div');
     row.className = 'subperson-row';
-    row.innerHTML = `<span>${escHtml(child.name || '未命名')}</span>
-      <button class="btn-ghost" data-action="top">移至顶级</button>
-      <button class="btn-ghost" data-action="pick">移至…</button>`;
+    const thumbSrc = child.cover_face_id
+      ? `/api/faces/${child.cover_face_id}/thumb`
+      : 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect width="1" height="1" fill="%23ddd"/></svg>';
+    row.innerHTML = `<img class="subperson-thumb" src="${thumbSrc}" alt="">
+      <span class="subperson-name">${escHtml(child.name || '未命名')}</span>
+      <div class="subperson-actions">
+        <button class="btn-ghost" data-action="top">移至顶级</button>
+        <button class="btn-ghost" data-action="pick">移至…</button>
+      </div>`;
+    row.querySelector('.subperson-thumb').addEventListener('click', () => showPersonDetail(child.id));
+    row.querySelector('.subperson-name').addEventListener('click', () => showPersonDetail(child.id));
     row.querySelector('[data-action="top"]').addEventListener('click', async () => {
       const resp = await fetch(`/api/people/${child.id}/reparent`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
