@@ -1008,6 +1008,15 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 **`POST /api/people/{id}/lift`**：`{ "name": "父节点名" }` — 在当前人物上方插入一个新父节点：新人物继承当前人物原 `parent_id`，当前人物的 `parent_id` 改为新人物。在同一事务中执行。返回 `{ "new_person_id": N }`。
 
+**`GET /api/people/{id}/merge-suggestions?limit=5`**：计算目标人物所有人脸 embedding 的质心（L2 归一化均值），对所有其他 active 人物也计算质心，按余弦距离升序返回最多 `limit` 条建议。若目标人物无 embedding 则返回空列表。
+Response 数组元素：`{ person_id, name, cover_face_id, photo_count, face_count, distance }`
+
+**`GET /api/people/{id}/outlier-faces?limit=5`**：计算该人物所有人脸 embedding 的质心，返回距质心余弦距离超过 0.20 的人脸，按距离降序排列，最多 `limit` 条。若有效 embedding 数量 < 2 则返回空列表。
+Response 数组元素：`{ face_id, photo_id, distance, confidence, x, y, width, height }`
+
+**`POST /api/people/{id}/eject-face`**：Body `{ "face_id": N }` — 将指定人脸从当前人物中移出（删除 person_faces 记录），并为该人脸创建新的未命名人物。若 face_id 不属于该人物返回 404。
+Response：`{ "new_person_id": N }`
+
 **`GET /api/faces/{id}/thumb`**：按 faces 表中 bbox 裁剪原图，再 `resize_to_fill(160, 160)` 正方形中心裁剪，`spawn_blocking` 生成 JPEG，磁盘缓存至 `.thumbs/face_{id}.jpg`。
 
 ### geo.rs

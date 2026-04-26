@@ -166,8 +166,14 @@ docs/
 | 31b | import_dir_batch()：batch_size/log/dry_run 支持（TDD，6 个测试） |
 | 31c | CLI: --batch-size / --log / --dry-run 参数 |
 | 31d | 文档更新：REQUIREMENTS.md 新增大批量分批迁移节 |
+| 32a | 前端：人物列表两组（命名/未命名）均按 photo_count 降序排列 |
+| 32b | 后端：GET /api/people/{id}/merge-suggestions（质心余弦距离，TDD） |
+| 32c | 前端：已命名人物详情页「建议合并」面板 |
+| 32d | 后端：GET /api/people/{id}/outlier-faces + POST /api/people/{id}/eject-face（TDD） |
+| 32e | 前端：人物详情页「⚠ 可能误入的照片」面板（移出/保留） |
+| 32f | 文档更新：REQUIREMENTS.md 新增人物聚类辅助功能节，DESIGN.md 新增 3 个 API 接口 |
 
-当前测试数：**248 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**257 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
