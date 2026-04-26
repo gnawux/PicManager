@@ -68,7 +68,7 @@ src/
     mod.rs                 AppState, router(), serve()
     handlers/
       import.rs            ImportStatus, start_import, get_import_status
-      photos.rs            list_photos, get_thumb, get_photo, patch_photo, batch_update_photos, get_gps_points
+      photos.rs            list_photos, get_thumb, get_photo_file, get_photo, patch_photo, batch_update_photos, get_gps_points
       dedup.rs             list_dedup_groups, resolve_group
       albums.rs            list_albums, list_album_photos, merge_albums
       faces.rs             start_analyze (支持 missing_only), get_job_status, list_photo_faces
@@ -844,6 +844,7 @@ POST   /api/photos/batch-update           → batch_update_photos
 GET    /api/photos/{id}                   → get_photo
 PATCH  /api/photos/{id}                   → patch_photo
 GET    /api/photos/{id}/thumb             → get_thumb
+GET    /api/photos/{id}/file              → get_photo_file
 GET    /api/photos/{id}/faces             → list_photo_faces
 GET    /api/photos/{id}/animals           → list_photo_animals
 POST   /api/import                        → start_import
@@ -916,6 +917,12 @@ GET    /api/animals/{species}/photos      → list_species_photos
 - 检查 `{thumb_cache_dir}/{id}.jpg`：存在则 `spawn_blocking { fs::read }` 直接返回
 - 未命中：`spawn_blocking { decode → resize_to_fill(thumb_size, thumb_size) 正方形中心裁剪 → encode JPEG → write cache → return bytes }`
 - `Content-Type: image/jpeg`；任何错误返回 500
+
+**`GET /api/photos/{id}/file`**：
+- 查 `photos.path` 和 `photos.format`，不存在返回 404
+- `tokio::fs::read(path)` 读取原始文件字节
+- `Content-Type` 由 `format` 列推断（jpeg→`image/jpeg`，png→`image/png`，gif→`image/gif`，webp→`image/webp`，heic/heif→`image/heic`，tiff→`image/tiff`，其他→`application/octet-stream`）
+- 文件不存在返回 404，读取失败返回 404
 
 `GET /api/photos`：`total` 字段读自 `photo_stats.active_count`（不执行 `COUNT(*)`）
 
@@ -1053,6 +1060,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 | GET | `/api/photos/{id}` | — | 单张照片详情 JSON | 404 / 500 |
 | PATCH | `/api/photos/{id}` | `{"taken_at":"...","timezone_offset":480}` | 200 | 404 / 500 |
 | GET | `/api/photos/{id}/thumb` | — | JPEG bytes | 404 / 500 |
+| GET | `/api/photos/{id}/file` | — | 原始文件字节（MIME 由 format 推断） | 404 |
 | GET | `/api/photos/{id}/faces` | — | `FaceResponse[]` JSON | 500 |
 | GET | `/api/photos/{id}/animals` | — | `AnimalResponse[]` JSON | 500 |
 | POST | `/api/import` | `{"dir":"...","copy":false}` | `{"status":"started"}` | 409（已在运行） |

@@ -60,7 +60,7 @@ src/
     embed.rs           rust-embed 静态文件服务
     handlers/
       import.rs        POST /api/import（body: {dir, copy?}），GET /api/import/status
-      photos.rs        GET /api/photos, GET /api/photos/{id}/thumb, GET /api/photos/{id}, PATCH /api/photos/{id}, POST /api/photos/batch-update, GET /api/photos/gps-points
+      photos.rs        GET /api/photos, GET /api/photos/{id}/thumb, GET /api/photos/{id}/file, GET /api/photos/{id}, PATCH /api/photos/{id}, POST /api/photos/batch-update, GET /api/photos/gps-points
       dedup.rs         GET /api/dedup, POST /api/dedup/{group_id}/resolve
       albums.rs        GET /api/albums（含 latest_photo_at 字段）, GET /api/albums/{id}/photos, POST /api/albums/merge
       faces.rs         POST /api/faces/analyze, GET /api/faces/jobs/{id}, GET /api/photos/{id}/faces
@@ -158,8 +158,10 @@ docs/
 | 27b | 后端：PersonNode 增加 cover_face_id 字段，GET /api/people/tree 返回（TDD） |
 | 27c | 前端：人物列表只显示顶级节点；详情页照片分页（50/页，上/下页按钮）；子人物行加缩略图可点击 |
 | 28  | 照片详情模态框展示人物：GET /api/photos/{id}/faces 增加 person_id/person_name（TDD）；前端渲染人物缩略图区 |
+| 29a | 前端：人物列表按有名/无名排序，有子节点的显示子节点数量；无人脸人物使用 default-person.svg 占位图 |
+| 29b | 后端：GET /api/photos/{id}/file 返回原始文件字节（Content-Type 依 format 列推断）；前端详情模态框增加"查看原图/切换缩略图"切换按钮 |
 
-当前测试数：**220 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**228 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
