@@ -31,6 +31,8 @@ pub struct FaceResponse {
     pub width: i32,
     pub height: i32,
     pub confidence: f64,
+    pub person_id: Option<i64>,
+    pub person_name: Option<String>,
 }
 
 pub async fn start_analyze(
@@ -83,8 +85,12 @@ pub async fn list_photo_faces(
     Path(photo_id): Path<i64>,
 ) -> Result<Json<Vec<FaceResponse>>, StatusCode> {
     let rows = sqlx::query(
-        "SELECT id, x, y, width, height, confidence \
-         FROM faces WHERE photo_id = ? ORDER BY id",
+        "SELECT f.id, f.x, f.y, f.width, f.height, f.confidence,
+                pf.person_id, p.name AS person_name
+         FROM faces f
+         LEFT JOIN person_faces pf ON pf.face_id = f.id
+         LEFT JOIN people p ON p.id = pf.person_id
+         WHERE f.photo_id = ? ORDER BY f.id",
     )
     .bind(photo_id)
     .fetch_all(&state.pool)
@@ -100,6 +106,8 @@ pub async fn list_photo_faces(
             width: r.get("width"),
             height: r.get("height"),
             confidence: r.get("confidence"),
+            person_id: r.get("person_id"),
+            person_name: r.get("person_name"),
         })
         .collect();
 

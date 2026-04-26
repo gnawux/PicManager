@@ -1190,6 +1190,63 @@ async fn people_name_exact_search() {
 }
 
 #[tokio::test]
+async fn get_photo_faces_includes_person_info() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Insert a photo, a face, a person, and link them
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES ('/f.jpg','sha_f28','jpeg','imported') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    let face_id: i64 = sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,10,10,60,60,0.9) RETURNING id",
+    ).bind(photo_id).fetch_one(&pool).await.unwrap();
+    let person_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name) VALUES ('Alice') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(person_id).bind(face_id).execute(&pool).await.unwrap();
+
+    let resp = app
+        .oneshot(Request::builder()
+            .uri(&format!("/api/photos/{photo_id}/faces"))
+            .body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["person_id"].as_i64().unwrap(), person_id);
+    assert_eq!(arr[0]["person_name"].as_str().unwrap(), "Alice");
+}
+
+#[tokio::test]
+async fn get_photo_faces_person_null_when_unassigned() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES ('/g.jpg','sha_g28','jpeg','imported') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    sqlx::query_scalar::<_, i64>(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,5,5,40,40,0.8) RETURNING id",
+    ).bind(photo_id).fetch_one(&pool).await.unwrap();
+
+    let resp = app
+        .oneshot(Request::builder()
+            .uri(&format!("/api/photos/{photo_id}/faces"))
+            .body(Body::empty()).unwrap())
+        .await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert!(arr[0]["person_id"].is_null(), "unassigned face should have null person_id");
+    assert!(arr[0]["person_name"].is_null());
+}
+
+#[tokio::test]
 async fn get_person_photos_includes_descendant_photos() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 

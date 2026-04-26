@@ -277,9 +277,9 @@ async function openDetail(idx, context) {
   if (detail) { state.currentDetail = detail; renderDetailMeta(detail); }
   cancelDetailEdit();
 
-  // Fetch and draw face boxes
+  // Fetch and draw face boxes; extract people for the sidebar
   const faces = await fetchJSON(`/api/photos/${photo.id}/faces`);
-  if (faces) renderFaceOverlay(faces);
+  if (faces) { renderFaceOverlay(faces); renderDetailPeople(faces); }
 
   // Fetch and draw animal boxes
   const animals = await fetchJSON(`/api/photos/${photo.id}/animals`);
@@ -347,6 +347,41 @@ function renderDetailMeta(detail) {
   const table = document.getElementById('detail-table');
   table.innerHTML = rows.map(([k, v]) =>
     `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+}
+
+function renderDetailPeople(faces) {
+  const box = document.getElementById('detail-people');
+  box.innerHTML = '';
+
+  // Deduplicate by person_id; only show assigned faces
+  const seen = new Set();
+  const people = [];
+  for (const f of faces) {
+    if (f.person_id && !seen.has(f.person_id)) {
+      seen.add(f.person_id);
+      people.push({ person_id: f.person_id, person_name: f.person_name, face_id: f.id });
+    }
+  }
+
+  if (people.length === 0) { box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+
+  const label = document.createElement('div');
+  label.className = 'detail-people-label';
+  label.textContent = '人物';
+  box.appendChild(label);
+
+  const chips = document.createElement('div');
+  chips.className = 'detail-people-chips';
+  for (const p of people) {
+    const chip = document.createElement('div');
+    chip.className = 'person-chip';
+    chip.title = p.person_name || '未命名';
+    chip.innerHTML = `<img src="/api/faces/${p.face_id}/thumb" class="person-chip-thumb" alt="">
+      <span class="person-chip-name">${escHtml(p.person_name || '未命名')}</span>`;
+    chips.appendChild(chip);
+  }
+  box.appendChild(chips);
 }
 
 function renderFaceOverlay(faces) {
