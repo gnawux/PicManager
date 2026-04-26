@@ -4,13 +4,14 @@ pub mod scanner;
 pub mod state;
 
 use sqlx::SqlitePool;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use crate::album;
 use crate::dedup::hash::compute_phash;
 use crate::error::Result;
 use crate::metadata;
+use log::{LogEntry, LogStatus, MigrationLog};
 use state::{ImportDecision, compute_sha256, decide};
 
 #[derive(Debug, Default)]
@@ -19,6 +20,13 @@ pub struct ImportSummary {
     pub imported: usize,
     pub skipped: usize,
     pub errors: usize,
+}
+
+#[derive(Debug)]
+pub struct BatchResult {
+    pub summary: ImportSummary,
+    pub total_files: usize,
+    pub remaining: usize,
 }
 
 #[derive(Default)]
@@ -52,6 +60,108 @@ pub async fn import_dir_with_progress(
     progress: SharedImportProgress,
 ) -> Result<ImportSummary> {
     import_dir_inner(pool, source_dir, library_path, copy_only, Some(progress)).await
+}
+
+pub async fn import_dir_batch(
+    pool: &SqlitePool,
+    source_dir: &Path,
+    library_path: &Path,
+    copy_only: bool,
+    batch_size: Option<usize>,
+    log_path: Option<&Path>,
+    dry_run: bool,
+    progress: SharedImportProgress,
+) -> Result<BatchResult> {
+    let migration_log = log_path.map(|p| MigrationLog::open(p.to_path_buf()));
+    let done_paths = migration_log.as_ref()
+        .and_then(|l| l.load_done_paths().ok())
+        .unwrap_or_default();
+
+    let all_files = scanner::scan_dir(source_dir);
+    let total_files = all_files.len();
+
+    let mut pending: Vec<PathBuf> = all_files
+        .into_iter()
+        .filter(|p| !done_paths.contains(p))
+        .collect();
+
+    let remaining_before = pending.len();
+
+    if let Some(n) = batch_size {
+        pending.truncate(n);
+    }
+
+    let batch_len = pending.len();
+    let remaining = remaining_before.saturating_sub(batch_len);
+
+    progress.total.store(batch_len, Relaxed);
+
+    if dry_run {
+        return Ok(BatchResult {
+            summary: ImportSummary { total: batch_len, ..Default::default() },
+            total_files,
+            remaining: remaining_before,
+        });
+    }
+
+    let mut summary = ImportSummary { total: batch_len, ..Default::default() };
+    let mut newly_imported_ids: Vec<i64> = Vec::new();
+
+    for path in &pending {
+        let (outcome, sha256_opt, err_opt) = match import_one(pool, path, library_path, copy_only).await {
+            Ok(Some((photo_id, face_count))) => {
+                summary.imported += 1;
+                newly_imported_ids.push(photo_id);
+                progress.imported.fetch_add(1, Relaxed);
+                progress.processed.fetch_add(1, Relaxed);
+                progress.faces_found.fetch_add(face_count, Relaxed);
+                (LogStatus::Imported, None, None)
+            }
+            Ok(None) => {
+                summary.skipped += 1;
+                progress.skipped.fetch_add(1, Relaxed);
+                progress.processed.fetch_add(1, Relaxed);
+                (LogStatus::Skipped, None, None)
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                tracing::warn!("failed to import {}: {msg}", path.display());
+                summary.errors += 1;
+                progress.errors.fetch_add(1, Relaxed);
+                progress.processed.fetch_add(1, Relaxed);
+                (LogStatus::Failed, None, Some(msg))
+            }
+        };
+
+        if let Some(ml) = &migration_log {
+            let entry = LogEntry {
+                path: path.to_string_lossy().into_owned(),
+                status: outcome,
+                sha256: sha256_opt,
+                error: err_opt,
+                ts: log::now_ts(),
+            };
+            if let Err(e) = ml.append(&entry) {
+                tracing::warn!("failed to write migration log: {e}");
+            }
+        }
+    }
+
+    album::group_by_month(pool).await?;
+    album::group_by_camera(pool).await?;
+
+    if !newly_imported_ids.is_empty() {
+        let dummy_total = AtomicUsize::new(0);
+        let dummy_done = AtomicUsize::new(0);
+        let (geo_total, geo_done) = (&dummy_total, &dummy_done);
+        album::group_by_location_scoped(pool, &newly_imported_ids, geo_total, geo_done).await?;
+
+        if let Err(e) = crate::face::cluster::run_incremental_clustering(pool).await {
+            tracing::warn!("incremental clustering failed: {e}");
+        }
+    }
+
+    Ok(BatchResult { summary, total_files, remaining })
 }
 
 async fn import_dir_inner(
@@ -345,6 +455,118 @@ mod tests {
         let summary = import_dir(&pool, dir.path(), lib.path(), false).await.unwrap();
         assert_eq!(summary.total, 0);
         assert_eq!(summary.imported, 0);
+    }
+
+    // ── Step 31b: import_dir_batch tests ───────────────────────────────────
+
+    #[tokio::test]
+    async fn batch_imports_only_n_files() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let progress = SharedImportProgress::default();
+        // fixtures dir has 7 files; batch_size=3 → import at most 3
+        let result = import_dir_batch(
+            &pool, &fixtures_dir(), lib.path(), true,
+            Some(3), None, false, progress,
+        ).await.unwrap();
+        assert_eq!(result.summary.imported, 3);
+        assert_eq!(result.total_files, 7);
+        assert_eq!(result.remaining, result.total_files - 3 - result.summary.skipped - result.summary.errors);
+    }
+
+    #[tokio::test]
+    async fn batch_remaining_zero_when_all_fit() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let progress = SharedImportProgress::default();
+        let result = import_dir_batch(
+            &pool, &fixtures_dir(), lib.path(), true,
+            Some(100), None, false, progress,
+        ).await.unwrap();
+        assert_eq!(result.remaining, 0);
+    }
+
+    #[tokio::test]
+    async fn batch_skips_logged_files() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let log_dir = tempdir().unwrap();
+        let log_path = log_dir.path().join("import.log");
+
+        // Scan directory first to know actual file paths.
+        let all_files = scanner::scan_dir(&fixtures_dir());
+        assert!(all_files.len() >= 3, "need at least 3 fixture files");
+
+        // Pre-log first 2 files as already imported.
+        let ml = MigrationLog::open(log_path.clone());
+        for path in &all_files[..2] {
+            ml.append(&LogEntry {
+                path: path.to_string_lossy().into_owned(),
+                status: LogStatus::Imported,
+                sha256: None,
+                error: None,
+                ts: "2026-01-01T00:00:00Z".to_owned(),
+            }).unwrap();
+        }
+
+        let progress = SharedImportProgress::default();
+        let result = import_dir_batch(
+            &pool, &fixtures_dir(), lib.path(), true,
+            Some(2), Some(&log_path), false, progress,
+        ).await.unwrap();
+
+        // Only up to 2 files from the remaining (7-2=5) should be imported.
+        assert!(result.summary.imported <= 2);
+        assert_eq!(result.total_files, all_files.len());
+    }
+
+    #[tokio::test]
+    async fn batch_dry_run_no_import() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let progress = SharedImportProgress::default();
+        let result = import_dir_batch(
+            &pool, &fixtures_dir(), lib.path(), true,
+            None, None, true, progress,
+        ).await.unwrap();
+
+        assert_eq!(result.summary.imported, 0);
+        assert_eq!(result.summary.errors, 0);
+        // No photos in DB.
+        let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photos")
+            .fetch_one(&pool).await.unwrap();
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn batch_writes_log_entries() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let log_dir = tempdir().unwrap();
+        let log_path = log_dir.path().join("import.log");
+        let progress = SharedImportProgress::default();
+
+        let result = import_dir_batch(
+            &pool, &fixtures_dir(), lib.path(), true,
+            Some(3), Some(&log_path), false, progress,
+        ).await.unwrap();
+
+        assert!(log_path.exists(), "log file should be created");
+        let content = fs::read_to_string(&log_path).unwrap();
+        let lines: Vec<_> = content.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines.len(), result.summary.imported + result.summary.skipped + result.summary.errors);
+    }
+
+    #[tokio::test]
+    async fn batch_no_log_works_without_file() {
+        let pool = test_pool().await;
+        let lib = tempdir().unwrap();
+        let progress = SharedImportProgress::default();
+        let result = import_dir_batch(
+            &pool, &fixtures_dir(), lib.path(), true,
+            Some(2), None, false, progress,
+        ).await.unwrap();
+        assert!(result.summary.imported > 0 || result.summary.skipped > 0);
     }
 
     #[tokio::test]
