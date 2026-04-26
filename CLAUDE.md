@@ -153,6 +153,7 @@ docs/
 | 25b | web: POST /api/people/cluster/incremental；import 完成后自动触发增量聚类 |
 | 25c | 前端：工具栏改为「整合新面孔」主按钮 + 「⚠️ 全量重建」次要按钮（带确认对话框） |
 | 26a | 后端：GET /api/albums 新增 latest_photo_at 字段（MAX(p.taken_at)，TDD） |
+| 26b | 前端：相册侧边栏分三类（设备/时间/地点）折叠展示，按最新照片时间排序，默认显示 5 个 + "更多"展开 |
 
 当前测试数：**214 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 

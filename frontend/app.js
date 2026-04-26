@@ -28,6 +28,10 @@ const state = {
   animalPhotos: [],
 };
 
+// Album category UI state — lives outside `state` so it survives loadAlbums() re-calls
+const albumCategoryCollapsed = { camera: false, time: false, location: false };
+const albumCategoryExpanded  = { camera: false, time: false, location: false };
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   // Tab navigation
@@ -402,22 +406,90 @@ async function loadAlbums() {
 
   // "All photos" entry
   const allLi = document.createElement('li');
+  allLi.className = 'album-entry';
   allLi.innerHTML = `全部照片 <span class="count"></span>`;
   allLi.addEventListener('click', () => selectAlbum(null, allLi));
   allLi.classList.add('active');
   ul.appendChild(allLi);
 
-  for (const a of albums) {
-    const li = document.createElement('li');
-    li.dataset.kind = a.kind;
-    li.innerHTML = `${a.name} <span class="count">${a.photo_count}</span>`;
-    li.addEventListener('click', () => selectAlbum(a.id, li));
-    ul.appendChild(li);
+  const CATEGORIES = [
+    { kind: 'camera',   label: '设备' },
+    { kind: 'time',     label: '时间' },
+    { kind: 'location', label: '地点' },
+  ];
+  const SHOW_DEFAULT = 5;
+
+  for (const { kind, label } of CATEGORIES) {
+    const sorted = albums
+      .filter(a => a.kind === kind)
+      .sort((a, b) => {
+        if (!a.latest_photo_at && !b.latest_photo_at) return 0;
+        if (!a.latest_photo_at) return 1;
+        if (!b.latest_photo_at) return -1;
+        return b.latest_photo_at.localeCompare(a.latest_photo_at);
+      });
+    if (sorted.length === 0) continue;
+
+    const catLi = document.createElement('li');
+    catLi.className = 'album-category';
+    catLi.dataset.kind = kind;
+    if (albumCategoryCollapsed[kind]) catLi.classList.add('collapsed');
+    if (albumCategoryExpanded[kind])  catLi.classList.add('album-category-expanded');
+
+    const headerDiv = document.createElement('div');
+    headerDiv.className = 'album-category-header';
+    const arrow = albumCategoryCollapsed[kind] ? '▶' : '▼';
+    headerDiv.innerHTML = `<span class="album-category-toggle">${arrow}</span> ${label}`;
+    headerDiv.addEventListener('click', () => toggleAlbumCategory(kind));
+
+    const innerUl = document.createElement('ul');
+    innerUl.className = 'album-category-list';
+
+    sorted.forEach((a, idx) => {
+      const li = document.createElement('li');
+      li.className = 'album-entry';
+      if (idx >= SHOW_DEFAULT) li.classList.add('album-hidden-extra');
+      li.innerHTML = `${a.name} <span class="count">${a.photo_count}</span>`;
+      li.addEventListener('click', () => selectAlbum(a.id, li));
+      innerUl.appendChild(li);
+    });
+
+    if (sorted.length > SHOW_DEFAULT && !albumCategoryExpanded[kind]) {
+      const moreLi = document.createElement('li');
+      moreLi.className = 'album-more-link';
+      moreLi.textContent = `更多 (${sorted.length - SHOW_DEFAULT})`;
+      moreLi.addEventListener('click', (e) => {
+        e.stopPropagation();
+        expandAlbumCategory(kind);
+      });
+      innerUl.appendChild(moreLi);
+    }
+
+    catLi.appendChild(headerDiv);
+    catLi.appendChild(innerUl);
+    ul.appendChild(catLi);
   }
 }
 
+function toggleAlbumCategory(kind) {
+  albumCategoryCollapsed[kind] = !albumCategoryCollapsed[kind];
+  const catLi = document.querySelector(`#album-list .album-category[data-kind="${kind}"]`);
+  if (!catLi) return;
+  catLi.classList.toggle('collapsed', albumCategoryCollapsed[kind]);
+  catLi.querySelector('.album-category-toggle').textContent =
+    albumCategoryCollapsed[kind] ? '▶' : '▼';
+}
+
+function expandAlbumCategory(kind) {
+  albumCategoryExpanded[kind] = true;
+  const catLi = document.querySelector(`#album-list .album-category[data-kind="${kind}"]`);
+  if (!catLi) return;
+  catLi.classList.add('album-category-expanded');
+  catLi.querySelector('.album-more-link')?.remove();
+}
+
 function selectAlbum(albumId, li) {
-  document.querySelectorAll('#album-list li').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('#album-list .album-entry').forEach(el => el.classList.remove('active'));
   li.classList.add('active');
   state.albumId = albumId;
   state.page = 1;
