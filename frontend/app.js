@@ -882,6 +882,11 @@ async function loadPeopleList() {
 
   // Only show root-level people (parent_id === null) in the grid
   const rootPeople = people.filter(p => p.parent_id === null);
+  rootPeople.sort((a, b) => {
+    if (a.name && !b.name) return -1;
+    if (!a.name && b.name) return 1;
+    return 0;
+  });
   document.getElementById('people-count').textContent = `共 ${rootPeople.length} 人`;
   const grid = document.getElementById('people-grid');
   grid.innerHTML = '';
@@ -903,7 +908,7 @@ async function loadPeopleList() {
       <img src="${thumbSrc}" loading="lazy" alt="">
       <div class="person-meta">
         <div class="person-name-cell" data-pid="${p.id}" data-name="${escHtml(p.name || '')}">${escHtml(p.name || '未命名')}</div>
-        <div class="person-count">${p.photo_count} 张照片</div>
+        <div class="person-count">${(() => { const c = state.allPeople.filter(q => q.parent_id === p.id).length; return c > 0 ? `${p.photo_count} 张 · ${c} 个子人物` : `${p.photo_count} 张照片`; })()}</div>
       </div>
       <button class="person-menu-btn" aria-label="更多操作">⋯</button>`;
 
