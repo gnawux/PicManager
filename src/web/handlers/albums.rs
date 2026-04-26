@@ -12,6 +12,7 @@ pub struct AlbumRow {
     pub name: String,
     pub kind: String,
     pub photo_count: i64,
+    pub latest_photo_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -27,9 +28,13 @@ fn default_per_page() -> u32 { 50 }
 pub async fn list_albums(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<AlbumRow>>, StatusCode> {
-    let rows: Vec<(i64, String, String, i64)> = sqlx::query_as(
-        "SELECT a.id, a.name, a.kind, COUNT(pa.photo_id) as photo_count
-         FROM albums a LEFT JOIN photo_albums pa ON pa.album_id = a.id
+    let rows: Vec<(i64, String, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT a.id, a.name, a.kind,
+                COUNT(pa.photo_id) as photo_count,
+                MAX(p.taken_at) as latest_photo_at
+         FROM albums a
+         LEFT JOIN photo_albums pa ON pa.album_id = a.id
+         LEFT JOIN photos p ON p.id = pa.photo_id
          GROUP BY a.id ORDER BY a.kind, a.name",
     )
     .fetch_all(&state.pool)
@@ -38,7 +43,9 @@ pub async fn list_albums(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, name, kind, photo_count)| AlbumRow { id, name, kind, photo_count })
+            .map(|(id, name, kind, photo_count, latest_photo_at)| AlbumRow {
+                id, name, kind, photo_count, latest_photo_at,
+            })
             .collect(),
     ))
 }

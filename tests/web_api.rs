@@ -1189,3 +1189,64 @@ async fn people_name_exact_search() {
     assert_eq!(json.as_array().unwrap().len(), 2);
 }
 
+#[tokio::test]
+async fn get_albums_latest_photo_at_null_when_no_photos() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    sqlx::query("INSERT INTO albums (name, kind) VALUES ('2024-06', 'time')")
+        .execute(&pool).await.unwrap();
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/albums").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert!(arr[0]["latest_photo_at"].is_null(), "empty album should have null latest_photo_at");
+}
+
+#[tokio::test]
+async fn get_albums_latest_photo_at_is_most_recent() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let album_id: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('2024-06', 'time') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+
+    let p1: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, taken_at)
+         VALUES ('/a.jpg', 'sha_a1', 'jpeg', 'imported', '2024-06-01 10:00:00') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+
+    let p2: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, taken_at)
+         VALUES ('/b.jpg', 'sha_b1', 'jpeg', 'imported', '2024-06-30 18:00:00') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(p1).bind(album_id).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(p2).bind(album_id).execute(&pool).await.unwrap();
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/albums").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    let arr = json.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(
+        arr[0]["latest_photo_at"].as_str().unwrap(),
+        "2024-06-30 18:00:00",
+        "should return the latest taken_at among all photos in the album"
+    );
+}
+

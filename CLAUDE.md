@@ -62,7 +62,7 @@ src/
       import.rs        POST /api/import（body: {dir, copy?}），GET /api/import/status
       photos.rs        GET /api/photos, GET /api/photos/{id}/thumb, GET /api/photos/{id}, PATCH /api/photos/{id}, POST /api/photos/batch-update, GET /api/photos/gps-points
       dedup.rs         GET /api/dedup, POST /api/dedup/{group_id}/resolve
-      albums.rs        GET /api/albums, GET /api/albums/{id}/photos, POST /api/albums/merge
+      albums.rs        GET /api/albums（含 latest_photo_at 字段）, GET /api/albums/{id}/photos, POST /api/albums/merge
       faces.rs         POST /api/faces/analyze, GET /api/faces/jobs/{id}, GET /api/photos/{id}/faces
       people.rs        GET /api/people（含 status/name_exact 过滤）, PATCH /api/people/{id}, POST /api/people/batch-update, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
       geo.rs           GET /api/geo/hierarchy
@@ -152,8 +152,9 @@ docs/
 | 25a | face/cluster: run_incremental_clustering（非破坏性增量聚类，TDD） |
 | 25b | web: POST /api/people/cluster/incremental；import 完成后自动触发增量聚类 |
 | 25c | 前端：工具栏改为「整合新面孔」主按钮 + 「⚠️ 全量重建」次要按钮（带确认对话框） |
+| 26a | 后端：GET /api/albums 新增 latest_photo_at 字段（MAX(p.taken_at)，TDD） |
 
-当前测试数：**212 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**214 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
