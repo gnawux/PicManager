@@ -1188,6 +1188,38 @@ async function showPersonDetail(personId) {
 async function loadCentroidPhotoIds(personId) {
   const data = await fetchJSON(`/api/people/${personId}/centroid-faces`);
   state.centroidPhotoIds = new Set(data ? data.photo_ids : []);
+  renderCentroidStats(data);
+}
+
+function renderCentroidStats(data) {
+  const el = document.getElementById('centroid-stats');
+  if (!el) return;
+  if (!data || data.emb_count === 0) { el.style.display = 'none'; return; }
+
+  const fmt = v => (v * 100).toFixed(0) + '%';
+  const sim = v => ((1 - v) * 100).toFixed(0) + '%';
+
+  // Histogram: bucket distances into ranges
+  const ranges = [
+    { label: '≤20%', max: 0.20, count: 0 },
+    { label: '20–35%', max: 0.35, count: 0 },
+    { label: '35–50%', max: 0.50, count: 0 },
+    { label: '>50%', max: Infinity, count: 0 },
+  ];
+  // We only have percentile summary, not all distances — build a textual display
+  const { emb_count, centroid_size, min_dist, p25_dist, median_dist, p75_dist, max_dist } = data;
+
+  // Similarity = 1 - distance; higher = closer
+  const bar = (dist) => {
+    const pct = Math.round((1 - dist) * 100);
+    const color = pct >= 80 ? '#a6e3a1' : pct >= 65 ? '#f9e2af' : pct >= 50 ? '#fab387' : '#f38ba8';
+    return `<span style="color:${color};font-weight:600">${pct}%</span>`;
+  };
+
+  el.style.display = 'block';
+  el.innerHTML =
+    `质心：用 <b>${centroid_size}</b>/${emb_count} 张人脸 &nbsp;·&nbsp; ` +
+    `相似度分布：最近 ${bar(min_dist)} · P25 ${bar(p25_dist)} · 中位 ${bar(median_dist)} · P75 ${bar(p75_dist)} · 最远 ${bar(max_dist)}`;
 }
 
 function showFaceLightbox(src) {

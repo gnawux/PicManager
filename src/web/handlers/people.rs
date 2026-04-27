@@ -835,12 +835,20 @@ pub async fn get_outlier_faces(
 #[derive(Debug, Serialize)]
 pub struct CentroidFacesResponse {
     pub photo_ids: Vec<i64>,
+    pub emb_count: usize,
+    pub centroid_size: usize,
+    pub min_dist: f32,
+    pub p25_dist: f32,
+    pub median_dist: f32,
+    pub p75_dist: f32,
+    pub max_dist: f32,
 }
 
 pub async fn get_centroid_faces(
     State(state): State<AppState>,
     Path(person_id): Path<i64>,
 ) -> Result<Json<CentroidFacesResponse>, StatusCode> {
+    use crate::face::cluster::cosine_distance;
     use crate::face::embedder::decode_embedding;
 
     let rows: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
@@ -854,8 +862,18 @@ pub async fn get_centroid_faces(
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let emb_count = rows.len();
     if rows.is_empty() {
-        return Ok(Json(CentroidFacesResponse { photo_ids: vec![] }));
+        return Ok(Json(CentroidFacesResponse {
+            photo_ids: vec![],
+            emb_count: 0,
+            centroid_size: 0,
+            min_dist: 0.0,
+            p25_dist: 0.0,
+            median_dist: 0.0,
+            p75_dist: 0.0,
+            max_dist: 0.0,
+        }));
     }
 
     let faces: Vec<(i64, Vec<f32>)> = rows
@@ -863,7 +881,17 @@ pub async fn get_centroid_faces(
         .map(|(face_id, _, bytes)| (*face_id, decode_embedding(bytes)))
         .collect();
 
-    let (_, selected_ids) = compute_refined_centroid(&faces);
+    let (centroid, selected_ids) = compute_refined_centroid(&faces);
+
+    // Compute distances from all faces to the refined centroid
+    let mut all_dists: Vec<f32> = faces
+        .iter()
+        .map(|(_, emb)| cosine_distance(&centroid, emb))
+        .collect();
+    all_dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    let n = all_dists.len();
+    let pct = |p: f32| all_dists[((p * n as f32) as usize).min(n - 1)];
 
     let face_to_photo: std::collections::HashMap<i64, i64> =
         rows.iter().map(|(fid, pid, _)| (*fid, *pid)).collect();
@@ -873,7 +901,16 @@ pub async fn get_centroid_faces(
         .filter_map(|fid| face_to_photo.get(fid).copied())
         .collect();
 
-    Ok(Json(CentroidFacesResponse { photo_ids }))
+    Ok(Json(CentroidFacesResponse {
+        photo_ids,
+        emb_count,
+        centroid_size: selected_ids.len(),
+        min_dist: all_dists[0],
+        p25_dist: pct(0.25),
+        median_dist: pct(0.50),
+        p75_dist: pct(0.75),
+        max_dist: *all_dists.last().unwrap(),
+    }))
 }
 
 #[derive(Debug, Deserialize)]
