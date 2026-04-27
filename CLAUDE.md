@@ -172,7 +172,9 @@ docs/
 | 32d | 后端：GET /api/people/{id}/outlier-faces + POST /api/people/{id}/eject-face（TDD） |
 | 32e | 前端：人物详情页「⚠ 可能误入的照片」面板（移出/保留） |
 | 32f | 文档更新：REQUIREMENTS.md 新增人物聚类辅助功能节，DESIGN.md 新增 3 个 API 接口 |
-| 32g | 质心算法：置信度优先过滤（≥0.85 → ≥0.70 → 全部，至少10张），排除暗光/畸变照片；GET /api/people/{id}/centroid-faces 返回距离分布统计（min/p25/median/p75/max） |
+| 32g | 质心算法：置信度优先过滤（≥0.85 → ≥0.70 → 全部，至少10张），排除暗光/畸变照片；GET /api/people/{id}/centroid-faces 返回距离分布统计（min/p25/median/p75/max）；离群阈值 0.20→0.50；合并建议上限 5→10 |
+| 32h | 前端 UI 优化：建议合并/可能误入面板默认折叠；质心照片 meta 浅黄底色；centroid-stats 移入 outlier panel；离群脸诊断模态窗（min_dist=0 全量排序，最多40张）；调试模态窗多选+创建子人物；面包屑父节点可点击导航；#people-detail-empty CSS 特异性修复 |
+| 32i | 文档更新：REQUIREMENTS.md 更新聚类辅助功能节（新增质心算法说明、诊断功能描述），DESIGN.md 更新 4 个 API 接口（含 centroid-faces） |
 
 当前测试数：**264 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
@@ -375,6 +377,22 @@ ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "nd
 **验证 crate API 的可靠方式：**
 直接读 tagged release 的源码，不依赖 LLM 训练数据或未固定版本的文档。
 例如 ort RC.12 CoreML EP 的实现：`https://github.com/pykeio/ort/blob/v2.0.0-rc.12/src/ep/coreml.rs`
+
+### 精炼质心算法（compute_refined_centroid）
+
+`src/web/handlers/people.rs` 中的 `compute_refined_centroid(faces: &[(i64, Vec<f32>, f32)])` 实现两步算法，所有需要质心的端点均调用此函数。
+
+**步骤1：置信度预过滤**
+- 优先取 confidence ≥ `CENTROID_HIGH_CONF (0.85)` 的人脸，若 ≥ `CENTROID_MIN_CONF_FACES (10)` 张则用这组
+- 否则降至 ≥ `CENTROID_LOW_CONF (0.70)`，若 ≥ 10 张则用这组
+- 否则回退到全部人脸（原始行为）
+- **目的**：排除暗光/畸变/帽沿遮挡等低质量检测——这类照片的 embedding 可能与正常人脸差异极大，会系统性拉偏质心
+
+**步骤2：几何精炼**
+- 若候选数量 > `REFINE_THRESHOLD (50)`：先算粗质心，取距粗质心最近的 `REFINE_PCT (40%)` 再算精炼质心
+- 候选数量 ≤ 50 时直接用全部候选
+
+**注意**：callers 在调用前需 fetch `COALESCE(f.confidence, 0.0)` 并作为第三个元素传入；get_merge_suggestions / get_outlier_faces / get_centroid_faces 三个 handler 均已更新。
 
 ### DBSCAN 聚类关键细节
 
