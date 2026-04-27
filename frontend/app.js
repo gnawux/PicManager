@@ -23,6 +23,7 @@ const state = {
   personDetailPhotos: [], // photos shown in person detail (for undo)
   personDetailPage: 1,
   personDetailTotal: 0,
+  centroidPhotoIds: new Set(), // photo IDs used for refined centroid of current person
   // Animals
   animalSpecies: null,  // current species being browsed
   animalPage: 1,
@@ -1178,6 +1179,15 @@ async function showPersonDetail(personId) {
 
   // Load outlier faces
   await loadOutlierFaces(personId);
+
+  // Load centroid photo IDs for highlight
+  await loadCentroidPhotoIds(personId);
+  renderPersonDetailPhotos(state.personDetailPhotos);
+}
+
+async function loadCentroidPhotoIds(personId) {
+  const data = await fetchJSON(`/api/people/${personId}/centroid-faces`);
+  state.centroidPhotoIds = new Set(data ? data.photo_ids : []);
 }
 
 function showFaceLightbox(src) {
@@ -1306,6 +1316,7 @@ async function loadOutlierFaces(personId) {
       if (resp.ok) {
         card.remove();
         if (list.children.length === 0) panel.classList.add('hidden');
+        await loadCentroidPhotoIds(personId);
         await loadPersonDetailPage(personId);
         loadPeopleList();
       } else {
@@ -1378,6 +1389,7 @@ function renderPersonDetailPhotos(photos) {
     card.className = 'photo-card';
     if (state.personDetailSelectMode) card.classList.add('select-mode');
     if (state.personDetailSelection.has(p.id)) card.classList.add('selected');
+    if (state.centroidPhotoIds.has(p.id)) card.classList.add('centroid-photo');
     card.dataset.photoId = p.id;
     const label = p.taken_at ? p.taken_at.slice(0, 10) : '';
     card.innerHTML = `<div class="card-check"></div>

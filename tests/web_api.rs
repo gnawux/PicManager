@@ -1749,3 +1749,54 @@ async fn eject_face_404_if_face_not_in_person() {
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }
 
+
+// ── centroid faces tests ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn centroid_faces_returns_all_photo_ids_when_few() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pid = create_named_person(&pool, "Alice").await;
+    let p1 = insert_photo_plain(&pool, "cfa1").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(8, 0)).await;
+    link_face(&pool, pid, f1).await;
+    let p2 = insert_photo_plain(&pool, "cfa2").await;
+    let f2 = insert_face_emb(&pool, p2, &unit_emb(8, 0)).await;
+    link_face(&pool, pid, f2).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/centroid-faces"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let photo_ids: Vec<i64> = json["photo_ids"]
+        .as_array().unwrap()
+        .iter().map(|v| v.as_i64().unwrap()).collect();
+    // Only 2 faces (< 50 threshold) → both returned
+    assert_eq!(photo_ids.len(), 2);
+    assert!(photo_ids.contains(&p1));
+    assert!(photo_ids.contains(&p2));
+}
+
+#[tokio::test]
+async fn centroid_faces_empty_when_no_embeddings() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let pid = create_named_person(&pool, "Ghost").await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/centroid-faces"))
+                .body(Body::empty()).unwrap(),
+        )
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json["photo_ids"].as_array().unwrap().is_empty());
+}
