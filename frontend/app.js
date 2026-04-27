@@ -1204,6 +1204,16 @@ function hideFaceLightbox() {
 document.addEventListener('DOMContentLoaded', () => {
   const lb = document.getElementById('face-lightbox');
   if (lb) lb.addEventListener('click', hideFaceLightbox);
+
+  document.addEventListener('click', e => {
+    const header = e.target.closest('.panel-toggle-header');
+    if (!header) return;
+    const panel = header.closest('[id$="-panel"]');
+    if (!panel) return;
+    panel.classList.toggle('panel-collapsed');
+    const arrow = header.querySelector('.panel-toggle-arrow');
+    if (arrow) arrow.textContent = panel.classList.contains('panel-collapsed') ? '▶' : '▼';
+  });
 });
 
 async function loadMergeSuggestions(personId, person) {
@@ -1214,12 +1224,13 @@ async function loadMergeSuggestions(personId, person) {
     panel.classList.add('hidden');
     return;
   }
-  const suggestions = await fetchJSON(`/api/people/${personId}/merge-suggestions?limit=5`);
+  const suggestions = await fetchJSON(`/api/people/${personId}/merge-suggestions?limit=10`);
   if (!suggestions || suggestions.length === 0) {
     panel.classList.add('hidden');
     return;
   }
   panel.classList.remove('hidden');
+  panel.classList.add('panel-collapsed');
   for (const s of suggestions) {
     const pct = Math.round((1 - s.distance) * 100);
     const card = document.createElement('div');
@@ -1277,6 +1288,7 @@ async function loadOutlierFaces(personId) {
     return;
   }
   panel.classList.remove('hidden');
+  panel.classList.add('panel-collapsed');
 
   // Track dismissed face IDs in this session
   const dismissed = new Set();

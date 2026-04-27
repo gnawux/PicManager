@@ -172,7 +172,9 @@
           </div>
           <!-- Merge suggestions (named people only) -->
           <div id="merge-suggestions-panel" class="hidden" style="padding:8px 12px;border-bottom:1px solid #eee">
-            <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:6px">建议合并</div>
+            <div class="panel-toggle-header" style="font-size:12px;color:#888;font-weight:600;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:4px">
+              <span class="panel-toggle-arrow">▶</span><span>建议合并</span>
+            </div>
             <div id="merge-suggestions-list" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px"></div>
           </div>
           <div id="person-photos-grid" class="photo-grid"></div>
@@ -187,7 +189,9 @@
 
           <!-- Outlier faces panel -->
           <div id="outlier-faces-panel" class="hidden" style="padding:8px 12px;border-bottom:1px solid #eee">
-            <div style="font-size:12px;color:#c0392b;font-weight:600;margin-bottom:6px">⚠ 可能误入的照片</div>
+            <div class="panel-toggle-header" style="font-size:12px;color:#c0392b;font-weight:600;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:4px">
+              <span class="panel-toggle-arrow">▶</span><span>⚠ 可能误入的照片</span>
+            </div>
             <div id="outlier-faces-list" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px"></div>
           </div>
 

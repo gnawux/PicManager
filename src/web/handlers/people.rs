@@ -752,7 +752,7 @@ mod centroid_tests {
 
 // ── outlier faces ─────────────────────────────────────────────────────────────
 
-const OUTLIER_MIN_DISTANCE: f32 = 0.20;
+const OUTLIER_MIN_DISTANCE: f32 = 0.50;
 
 #[derive(Debug, Serialize)]
 pub struct OutlierFace {

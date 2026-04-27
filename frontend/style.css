@@ -182,6 +182,11 @@ dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 }
 .photo-card { position: relative; }
 .photo-card.centroid-photo img { box-shadow: inset 0 0 0 2px #a78bfa; }
+.photo-card.centroid-photo .meta { background: #fef9c3; }
+
+/* Collapsible suggestion panels */
+.panel-collapsed > :not(.panel-toggle-header) { display: none; }
+.panel-toggle-header { user-select: none; }
 
 /* Geo view */
 .geo-container { flex: 1; display: flex; flex-direction: row; overflow: hidden; }
