@@ -1195,23 +1195,28 @@ async function loadCentroidPhotoIds(personId) {
 }
 
 function renderCentroidStats(data) {
-  const el = document.getElementById('centroid-stats');
-  if (!el) return;
+  // centroid-stats-text and centroid-debug-btn now live inside outlier-faces-panel
+  const panel = document.getElementById('outlier-faces-panel');
   const textEl = document.getElementById('centroid-stats-text');
-  if (!data || data.emb_count === 0) { el.style.display = 'none'; return; }
+  if (!panel || !textEl) return;
+
+  if (!data || data.emb_count === 0) {
+    textEl.innerHTML = '';
+    return; // panel visibility controlled by loadOutlierFaces
+  }
 
   const { emb_count, centroid_size, min_dist, p25_dist, median_dist, p75_dist, max_dist } = data;
-
   const bar = (dist) => {
     const pct = Math.round((1 - dist) * 100);
     const color = pct >= 80 ? '#a6e3a1' : pct >= 65 ? '#f9e2af' : pct >= 50 ? '#fab387' : '#f38ba8';
     return `<span style="color:${color};font-weight:600">${pct}%</span>`;
   };
-
-  el.style.display = 'flex';
-  if (textEl) textEl.innerHTML =
+  textEl.innerHTML =
     `质心：用 <b>${centroid_size}</b>/${emb_count} 张人脸 &nbsp;·&nbsp; ` +
-    `相似度分布：最近 ${bar(min_dist)} · P25 ${bar(p25_dist)} · 中位 ${bar(median_dist)} · P75 ${bar(p75_dist)} · 最远 ${bar(max_dist)}`;
+    `最近 ${bar(min_dist)} · P25 ${bar(p25_dist)} · 中位 ${bar(median_dist)} · P75 ${bar(p75_dist)} · 最远 ${bar(max_dist)}`;
+
+  // Show panel even if no outlier faces, so centroid stats are always accessible
+  panel.classList.remove('hidden');
 }
 
 function showFaceLightbox(src) {
@@ -1228,35 +1233,68 @@ function hideFaceLightbox() {
 async function openCentroidDebugModal(personId) {
   const modal = document.getElementById('centroid-debug-modal');
   const list = document.getElementById('centroid-debug-list');
+  const selCount = document.getElementById('centroid-debug-sel-count');
+  const createBtn = document.getElementById('centroid-debug-create-child');
+  const selectAllBtn = document.getElementById('centroid-debug-select-all');
   if (!modal || !list) return;
+
+  const selected = new Set(); // face_id → photo_id mapping for selected cards
+  const facePhotoMap = new Map();
+
+  const updateSelUI = () => {
+    const n = selected.size;
+    selCount.textContent = n ? `已选 ${n} 张` : '未选中';
+    createBtn.disabled = n === 0;
+    selectAllBtn.textContent = selected.size === facePhotoMap.size ? '取消全选' : '全选';
+  };
+
   list.innerHTML = '<span style="color:#aaa;font-size:13px">加载中…</span>';
   modal.classList.remove('hidden');
 
   const faces = await fetchJSON(`/api/people/${personId}/outlier-faces?limit=40&min_dist=0`);
   list.innerHTML = '';
+  selected.clear();
+  facePhotoMap.clear();
+  updateSelUI();
+
   if (!faces || faces.length === 0) {
     list.innerHTML = '<span style="color:#aaa;font-size:13px">无人脸数据</span>';
     return;
   }
+
   for (const f of faces) {
+    facePhotoMap.set(f.face_id, f.photo_id);
     const pct = Math.round((1 - f.distance) * 100);
     const color = pct >= 80 ? '#a6e3a1' : pct >= 65 ? '#f9e2af' : pct >= 50 ? '#fab387' : '#f38ba8';
+
     const card = document.createElement('div');
-    card.style.cssText = 'width:90px;text-align:center;flex-shrink:0';
+    card.style.cssText = 'width:90px;text-align:center;flex-shrink:0;position:relative';
 
     const src = `/api/faces/${f.face_id}/thumb`;
     const img = document.createElement('img');
     img.src = src;
-    img.style.cssText = 'width:90px;height:90px;object-fit:cover;border-radius:6px;display:block;cursor:zoom-in;border:2px solid #ddd';
+    img.style.cssText = 'width:90px;height:90px;object-fit:cover;border-radius:6px;display:block;cursor:pointer;border:2px solid #ddd';
     img.onerror = () => { img.style.border = '2px solid #eee'; };
-    img.addEventListener('click', () => showFaceLightbox(src));
+    img.addEventListener('click', (e) => {
+      if (e.shiftKey) { showFaceLightbox(src); return; }
+      if (selected.has(f.face_id)) {
+        selected.delete(f.face_id);
+        img.style.border = '2px solid #ddd';
+        img.style.opacity = '1';
+      } else {
+        selected.add(f.face_id);
+        img.style.border = `3px solid ${color}`;
+        img.style.opacity = '0.85';
+      }
+      updateSelUI();
+    });
 
     const simEl = document.createElement('div');
     simEl.style.cssText = `font-size:12px;font-weight:600;margin:3px 0 2px;color:${color}`;
     simEl.textContent = `${pct}%`;
 
     const ejectBtn = document.createElement('button');
-    ejectBtn.textContent = '移出';
+    ejectBtn.textContent = '单独移出';
     ejectBtn.className = 'btn-ghost';
     ejectBtn.style.cssText = 'font-size:10px;padding:1px 6px;color:#c0392b;width:100%';
     ejectBtn.addEventListener('click', async () => {
@@ -1267,7 +1305,10 @@ async function openCentroidDebugModal(personId) {
         body: JSON.stringify({ face_id: f.face_id }),
       });
       if (resp.ok) {
+        selected.delete(f.face_id);
+        facePhotoMap.delete(f.face_id);
         card.remove();
+        updateSelUI();
         await loadCentroidPhotoIds(personId);
         await loadPersonDetailPage(personId);
         loadPeopleList();
@@ -1277,6 +1318,31 @@ async function openCentroidDebugModal(personId) {
     card.append(img, simEl, ejectBtn);
     list.appendChild(card);
   }
+
+  // Wire up select-all and create-child buttons (replace old listeners by cloning)
+  const newSelectAll = selectAllBtn.cloneNode(true);
+  selectAllBtn.replaceWith(newSelectAll);
+  newSelectAll.addEventListener('click', () => {
+    if (selected.size === facePhotoMap.size) {
+      selected.clear();
+      list.querySelectorAll('img').forEach(img => { img.style.border = '2px solid #ddd'; img.style.opacity = '1'; });
+    } else {
+      facePhotoMap.forEach((_, fid) => selected.add(fid));
+      list.querySelectorAll('img').forEach(img => { img.style.border = '3px solid #a78bfa'; img.style.opacity = '0.85'; });
+    }
+    updateSelUI();
+  });
+
+  const newCreateBtn = createBtn.cloneNode(true);
+  createBtn.replaceWith(newCreateBtn);
+  newCreateBtn.addEventListener('click', async () => {
+    if (selected.size === 0) return;
+    const photoIds = [...selected].map(fid => facePhotoMap.get(fid));
+    modal.classList.add('hidden');
+    await createSubPerson(photoIds);
+    await loadCentroidPhotoIds(personId);
+    loadOutlierFaces(personId);
+  });
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1364,16 +1430,14 @@ async function loadMergeSuggestions(personId, person) {
 }
 
 async function loadOutlierFaces(personId) {
-  const panel = document.getElementById('outlier-faces-panel');
+  // Panel visibility is controlled by renderCentroidStats; we only populate the list
   const list = document.getElementById('outlier-faces-list');
   list.innerHTML = '';
 
   const outliers = await fetchJSON(`/api/people/${personId}/outlier-faces?limit=5`);
-  if (!outliers || outliers.length === 0) {
-    panel.classList.add('hidden');
-    return;
-  }
-  panel.classList.remove('hidden');
+  if (!outliers || outliers.length === 0) return;
+
+  const panel = document.getElementById('outlier-faces-panel');
   panel.classList.add('panel-collapsed');
 
   // Track dismissed face IDs in this session
@@ -1413,7 +1477,6 @@ async function loadOutlierFaces(personId) {
       });
       if (resp.ok) {
         card.remove();
-        if (list.children.length === 0) panel.classList.add('hidden');
         await loadCentroidPhotoIds(personId);
         await loadPersonDetailPage(personId);
         loadPeopleList();
@@ -1430,7 +1493,6 @@ async function loadOutlierFaces(personId) {
     keepBtn.addEventListener('click', () => {
       dismissed.add(o.face_id);
       card.remove();
-      if (list.children.length === 0) panel.classList.add('hidden');
     });
 
     btnRow.append(ejectBtn, keepBtn);
@@ -1856,20 +1918,34 @@ async function updatePersonBreadcrumb(personId) {
   const el = document.getElementById('person-breadcrumb');
   if (!el) return;
   const tree = await fetchJSON('/api/people/tree');
+  el.innerHTML = '';
   if (!tree) { el.textContent = '顶级'; return; }
 
-  const path = [];
+  const path = []; // [{id, name}]
   function findPath(nodes, targetId) {
     for (const n of nodes) {
-      if (n.id === targetId) { path.push(n.name || '未命名'); return true; }
-      if (findPath(n.children || [], targetId)) { path.unshift(n.name || '未命名'); return true; }
+      if (n.id === targetId) { path.push({ id: n.id, name: n.name || '未命名' }); return true; }
+      if (findPath(n.children || [], targetId)) {
+        path.unshift({ id: n.id, name: n.name || '未命名' }); return true;
+      }
     }
     return false;
   }
   findPath(tree.people || [], personId);
-  // Remove the last element (the person itself) – show ancestors only
-  path.pop();
-  el.textContent = path.length ? path.join(' > ') : '顶级';
+  path.pop(); // remove self, show ancestors only
+
+  if (path.length === 0) {
+    el.textContent = '顶级';
+  } else {
+    path.forEach((ancestor, i) => {
+      const span = document.createElement('span');
+      span.textContent = ancestor.name;
+      span.style.cssText = 'color:#89b4fa;cursor:pointer';
+      span.addEventListener('click', () => showPersonDetail(ancestor.id));
+      el.appendChild(span);
+      if (i < path.length - 1) el.appendChild(document.createTextNode(' > '));
+    });
+  }
 }
 
 let _reparentTargetPersonId = null;

@@ -219,9 +219,11 @@ dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 #people-list-section .toolbar button { font-size: 11px; padding: 4px 8px; }
 #people-list-section .people-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); padding: 8px; gap: 8px; flex: none; overflow-y: visible; align-items: start; }
 #people-detail-empty {
-  flex: 1; display: flex; align-items: center; justify-content: center;
+  flex: 1; align-items: center; justify-content: center;
   color: #aaa; font-size: 14px;
 }
+/* Only show as flex when the detail section is in its empty state */
+#person-detail-section.detail-empty #people-detail-empty { display: flex; }
 #person-detail-section.detail-empty > .toolbar,
 #person-detail-section.detail-empty > .person-breadcrumb-bar,
 #person-detail-section.detail-empty > .photo-grid,
