@@ -1180,6 +1180,22 @@ async function showPersonDetail(personId) {
   await loadOutlierFaces(personId);
 }
 
+function showFaceLightbox(src) {
+  const lb = document.getElementById('face-lightbox');
+  const img = document.getElementById('face-lightbox-img');
+  img.src = src;
+  lb.style.display = 'flex';
+}
+
+function hideFaceLightbox() {
+  document.getElementById('face-lightbox').style.display = 'none';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const lb = document.getElementById('face-lightbox');
+  if (lb) lb.addEventListener('click', hideFaceLightbox);
+});
+
 async function loadMergeSuggestions(personId, person) {
   const panel = document.getElementById('merge-suggestions-panel');
   const list = document.getElementById('merge-suggestions-list');
@@ -1196,32 +1212,32 @@ async function loadMergeSuggestions(personId, person) {
   panel.classList.remove('hidden');
   for (const s of suggestions) {
     const pct = Math.round((1 - s.distance) * 100);
-    const row = document.createElement('div');
-    row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:4px 0';
+    const card = document.createElement('div');
+    card.style.cssText = 'flex-shrink:0;width:80px;text-align:center';
 
-    const thumb = document.createElement('img');
-    if (s.cover_face_id) {
-      thumb.src = `/api/faces/${s.cover_face_id}/thumb`;
-      thumb.style.cssText = 'width:36px;height:36px;object-fit:cover;border-radius:50%;flex-shrink:0';
-      thumb.onerror = () => { thumb.style.display = 'none'; };
+    const thumbSrc = s.cover_face_id ? `/api/faces/${s.cover_face_id}/thumb` : null;
+    const img = document.createElement('img');
+    if (thumbSrc) {
+      img.src = thumbSrc;
+      img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #a78bfa;display:block;cursor:zoom-in';
+      img.onerror = () => { img.style.border = '2px solid #ccc'; };
+      img.addEventListener('click', () => showFaceLightbox(thumbSrc));
     } else {
-      thumb.style.display = 'none';
+      img.style.display = 'none';
     }
 
-    const info = document.createElement('div');
-    info.style.cssText = 'flex:1;min-width:0';
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = 'font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
+    nameEl.style.cssText = 'font-size:11px;font-weight:600;margin:2px 0 1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis';
     nameEl.textContent = s.name || '未命名';
+
     const meta = document.createElement('div');
-    meta.style.cssText = 'font-size:11px;color:#888';
-    meta.textContent = `${s.photo_count} 张照片 · 相似度 ${pct}%`;
-    info.append(nameEl, meta);
+    meta.style.cssText = 'font-size:10px;color:#888;margin-bottom:2px';
+    meta.textContent = `${s.photo_count} 张 · ${pct}%`;
 
     const mergeBtn = document.createElement('button');
     mergeBtn.textContent = '合并';
     mergeBtn.className = 'btn-ghost';
-    mergeBtn.style.cssText = 'font-size:11px;padding:2px 8px;flex-shrink:0';
+    mergeBtn.style.cssText = 'font-size:10px;padding:1px 5px;width:100%';
     mergeBtn.addEventListener('click', async () => {
       mergeBtn.disabled = true;
       await fetch('/api/people/merge', {
@@ -1229,14 +1245,14 @@ async function loadMergeSuggestions(personId, person) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source_id: s.person_id, target_id: personId }),
       });
-      row.remove();
+      card.remove();
       if (list.children.length === 0) panel.classList.add('hidden');
       await loadPersonDetailPage(personId);
       loadPeopleList();
     });
 
-    row.append(thumb, info, mergeBtn);
-    list.appendChild(row);
+    card.append(img, nameEl, meta, mergeBtn);
+    list.appendChild(card);
   }
 }
 
@@ -1260,10 +1276,12 @@ async function loadOutlierFaces(personId) {
     card.dataset.faceId = o.face_id;
     card.style.cssText = 'flex-shrink:0;width:80px;text-align:center';
 
+    const faceSrc = `/api/faces/${o.face_id}/thumb`;
     const img = document.createElement('img');
-    img.src = `/api/faces/${o.face_id}/thumb`;
-    img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #e74c3c;display:block';
+    img.src = faceSrc;
+    img.style.cssText = 'width:80px;height:80px;object-fit:cover;border-radius:6px;border:2px solid #e74c3c;display:block;cursor:zoom-in';
     img.onerror = () => { img.style.border = '2px solid #ccc'; };
+    img.addEventListener('click', () => showFaceLightbox(faceSrc));
 
     const pct = Math.round((1 - o.distance) * 100);
     const meta = document.createElement('div');

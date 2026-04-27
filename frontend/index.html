@@ -173,7 +173,7 @@
           <!-- Merge suggestions (named people only) -->
           <div id="merge-suggestions-panel" class="hidden" style="padding:8px 12px;border-bottom:1px solid #eee">
             <div style="font-size:12px;color:#888;font-weight:600;margin-bottom:6px">建议合并</div>
-            <div id="merge-suggestions-list" style="display:flex;flex-direction:column;gap:4px"></div>
+            <div id="merge-suggestions-list" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px"></div>
           </div>
           <div id="person-photos-grid" class="photo-grid"></div>
           <div id="person-photos-pagination" class="person-photos-pagination hidden"></div>
@@ -343,6 +343,11 @@
       <button id="recluster-confirm-ok" class="btn-danger">确认重建</button>
     </div>
   </dialog>
+
+  <!-- Face thumbnail lightbox -->
+  <div id="face-lightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;align-items:center;justify-content:center;cursor:zoom-out">
+    <img id="face-lightbox-img" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 32px rgba(0,0,0,0.5)" />
+  </div>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
