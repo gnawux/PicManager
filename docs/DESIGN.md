@@ -90,6 +90,8 @@ migrations/
   0008_geocache_hierarchy.sql geocache 新增 country/state/county 列
   0009_animals.sql         animals 表
   0010_people_status.sql   people.status 列（active / ignored / not_a_person）
+  0011_rotation.sql        photos.rotation / flip_h / flip_v 列（用户手动旋转/翻转，DB 存储不改文件）
+  0012_exif_orientation.sql photos.exif_orientation 列（EXIF Orientation tag 1-8，导入时写入）
 tests/
   web_api.rs               Web API 集成测试（tower oneshot）
   fixtures/
@@ -1023,7 +1025,7 @@ Response：`{ photo_ids: [N, ...], emb_count: N, centroid_size: N, min_dist: f, 
 
 **精炼质心算法**：分两步计算。①置信度预过滤：优先选 confidence ≥ 0.85 的人脸（不足 10 张降至 ≥ 0.70，仍不足用全部）。②几何精炼：若候选数量 > 50，先算粗质心，取距粗质心最近的 40% 再算精炼质心。所有涉及质心的端点（merge-suggestions、outlier-faces、centroid-faces）均使用此算法。
 
-**`GET /api/faces/{id}/thumb`**：按 faces 表中 bbox 裁剪原图，再 `resize_to_fill(160, 160)` 正方形中心裁剪，`spawn_blocking` 生成 JPEG，磁盘缓存至 `.thumbs/face_{id}.jpg`。
+**`GET /api/faces/{id}/thumb`**：从 DB 读取 `exif_orientation, rotation, flip_h, flip_v`，将原图先通过 `apply_exif_orientation` 再通过 `apply_transform` 变换到显示空间，再按 faces 表中的 bbox（坐标已是显示空间）裁剪，`resize_to_fill(160, 160)`，`spawn_blocking` 生成 JPEG，磁盘缓存至 `.thumbs/face_{id}.jpg`。
 
 ### geo.rs
 

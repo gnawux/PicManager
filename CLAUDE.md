@@ -178,10 +178,22 @@ docs/
 | 33a | DB migration 0011（rotation/flip_h/flip_v 列）；PATCH /api/photos/{id} + batch-update 支持 rotation_delta/flip_h_toggle/flip_v_toggle；apply_transform + generate_thumb 应用变换；删除旧缩略图缓存（TDD，5 个新测试 + 2 个单元测试） |
 | 33b | 前端：详情模态框 + 批量操作栏各增 4 个旋转/翻转按钮；applyPhotoTransform / applyBatchTransform，成功后立即刷新缩略图 |
 | 33c | 文档更新：REQUIREMENTS.md 新增旋转/翻转需求，DESIGN.md 更新 PATCH / batch-update API 字段 |
+| 34a | DB migration 0012（exif_orientation 列）；metadata::exif 读取 EXIF Orientation tag；PhotoMeta 新增 exif_orientation 字段；导入时写入 DB（TDD，3 个新测试） |
+| 34b | face/mod.rs：apply_exif_orientation（EXIF 1-8 → rotation/flip_h）+ apply_transform（从 photos.rs 迁入）；analyze_one 检测前读 DB 方向字段并变换到显示空间；photos.rs generate_thumb 同样应用 EXIF + DB 两层变换；people.rs crop_face 同样应用两层变换后裁剪（TDD，5 个单元测试 + 1 个集成测试） |
+| 34c | 文档更新：REQUIREMENTS.md 新增方向感知检测需求，DESIGN.md/ARCHITECTURE.md 同步更新，CLAUDE.md 记录 image crate 不自动应用 EXIF Orientation |
 
-当前测试数：**271 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**280 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
+
+### image crate 不自动应用 EXIF Orientation
+
+`image::open()` / `ImageReader::decode()` **不会**自动应用 EXIF Orientation tag（0x0112）。需要：
+1. 用 kamadak-exif 手动读取 `Tag::Orientation`，获得 1–8 的值
+2. 调用 `face::apply_exif_orientation(img, orientation)` 将图像旋转/翻转到显示方向
+3. 再叠加用户手动调整的 `rotation/flip_h/flip_v`（通过 `face::apply_transform`）
+
+这两层变换组合后的图像才是"显示空间"。人脸 bbox、缩略图生成、人脸裁图均应在显示空间操作。
 
 ### 测试 fixture 生成
 

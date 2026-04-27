@@ -311,7 +311,9 @@ storage：写入 photos 表（path = 库内新路径），import_status = 'impor
   photo_stats.active_count += 1
     │
     ▼
-face::analyze_one：detect() → 写入 faces 表 → 若模型可用则提取 embedding
+face::analyze_one：读取 photos.exif_orientation + rotation/flip_h/flip_v
+  → apply_exif_orientation + apply_transform 到显示空间
+  → detect() → 写入 faces 表（bbox 坐标为显示空间）→ 若模型可用则提取 embedding
     │
     ▼
 animal::detect_and_save：YOLOv8-nano 检测 → 写入 animals 表（模型不存在时跳过）
