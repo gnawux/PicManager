@@ -75,6 +75,9 @@ document.addEventListener('DOMContentLoaded', () => {
     triggerRecluster();
   });
   document.getElementById('person-back-btn').addEventListener('click', () => showPeopleList());
+  document.getElementById('centroid-debug-btn').addEventListener('click', () => {
+    if (state.currentPersonId) openCentroidDebugModal(state.currentPersonId);
+  });
   document.getElementById('person-name-input').addEventListener('change', savePersonName);
   document.getElementById('person-merge-btn').addEventListener('click', openMergeDialog);
   document.getElementById('person-reparent-btn').addEventListener('click', openReparentPanel);
@@ -1194,30 +1197,19 @@ async function loadCentroidPhotoIds(personId) {
 function renderCentroidStats(data) {
   const el = document.getElementById('centroid-stats');
   if (!el) return;
+  const textEl = document.getElementById('centroid-stats-text');
   if (!data || data.emb_count === 0) { el.style.display = 'none'; return; }
 
-  const fmt = v => (v * 100).toFixed(0) + '%';
-  const sim = v => ((1 - v) * 100).toFixed(0) + '%';
-
-  // Histogram: bucket distances into ranges
-  const ranges = [
-    { label: '≤20%', max: 0.20, count: 0 },
-    { label: '20–35%', max: 0.35, count: 0 },
-    { label: '35–50%', max: 0.50, count: 0 },
-    { label: '>50%', max: Infinity, count: 0 },
-  ];
-  // We only have percentile summary, not all distances — build a textual display
   const { emb_count, centroid_size, min_dist, p25_dist, median_dist, p75_dist, max_dist } = data;
 
-  // Similarity = 1 - distance; higher = closer
   const bar = (dist) => {
     const pct = Math.round((1 - dist) * 100);
     const color = pct >= 80 ? '#a6e3a1' : pct >= 65 ? '#f9e2af' : pct >= 50 ? '#fab387' : '#f38ba8';
     return `<span style="color:${color};font-weight:600">${pct}%</span>`;
   };
 
-  el.style.display = 'block';
-  el.innerHTML =
+  el.style.display = 'flex';
+  if (textEl) textEl.innerHTML =
     `质心：用 <b>${centroid_size}</b>/${emb_count} 张人脸 &nbsp;·&nbsp; ` +
     `相似度分布：最近 ${bar(min_dist)} · P25 ${bar(p25_dist)} · 中位 ${bar(median_dist)} · P75 ${bar(p75_dist)} · 最远 ${bar(max_dist)}`;
 }
@@ -1233,9 +1225,71 @@ function hideFaceLightbox() {
   document.getElementById('face-lightbox').style.display = 'none';
 }
 
+async function openCentroidDebugModal(personId) {
+  const modal = document.getElementById('centroid-debug-modal');
+  const list = document.getElementById('centroid-debug-list');
+  if (!modal || !list) return;
+  list.innerHTML = '<span style="color:#aaa;font-size:13px">加载中…</span>';
+  modal.classList.remove('hidden');
+
+  const faces = await fetchJSON(`/api/people/${personId}/outlier-faces?limit=40&min_dist=0`);
+  list.innerHTML = '';
+  if (!faces || faces.length === 0) {
+    list.innerHTML = '<span style="color:#aaa;font-size:13px">无人脸数据</span>';
+    return;
+  }
+  for (const f of faces) {
+    const pct = Math.round((1 - f.distance) * 100);
+    const color = pct >= 80 ? '#a6e3a1' : pct >= 65 ? '#f9e2af' : pct >= 50 ? '#fab387' : '#f38ba8';
+    const card = document.createElement('div');
+    card.style.cssText = 'width:90px;text-align:center;flex-shrink:0';
+
+    const src = `/api/faces/${f.face_id}/thumb`;
+    const img = document.createElement('img');
+    img.src = src;
+    img.style.cssText = 'width:90px;height:90px;object-fit:cover;border-radius:6px;display:block;cursor:zoom-in;border:2px solid #ddd';
+    img.onerror = () => { img.style.border = '2px solid #eee'; };
+    img.addEventListener('click', () => showFaceLightbox(src));
+
+    const simEl = document.createElement('div');
+    simEl.style.cssText = `font-size:12px;font-weight:600;margin:3px 0 2px;color:${color}`;
+    simEl.textContent = `${pct}%`;
+
+    const ejectBtn = document.createElement('button');
+    ejectBtn.textContent = '移出';
+    ejectBtn.className = 'btn-ghost';
+    ejectBtn.style.cssText = 'font-size:10px;padding:1px 6px;color:#c0392b;width:100%';
+    ejectBtn.addEventListener('click', async () => {
+      ejectBtn.disabled = true;
+      const resp = await fetch(`/api/people/${personId}/eject-face`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ face_id: f.face_id }),
+      });
+      if (resp.ok) {
+        card.remove();
+        await loadCentroidPhotoIds(personId);
+        await loadPersonDetailPage(personId);
+        loadPeopleList();
+      } else { ejectBtn.disabled = false; }
+    });
+
+    card.append(img, simEl, ejectBtn);
+    list.appendChild(card);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   const lb = document.getElementById('face-lightbox');
   if (lb) lb.addEventListener('click', hideFaceLightbox);
+
+  const closeDebug = document.getElementById('centroid-debug-close');
+  if (closeDebug) closeDebug.addEventListener('click', () => {
+    document.getElementById('centroid-debug-modal').classList.add('hidden');
+  });
+  document.getElementById('centroid-debug-modal')?.addEventListener('click', e => {
+    if (e.target === e.currentTarget) e.currentTarget.classList.add('hidden');
+  });
 
   document.addEventListener('click', e => {
     const header = e.target.closest('.panel-toggle-header');

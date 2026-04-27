@@ -831,6 +831,7 @@ pub struct OutlierFace {
 #[derive(Debug, Deserialize)]
 pub struct OutlierFacesQuery {
     pub limit: Option<i64>,
+    pub min_dist: Option<f32>,
 }
 
 pub async fn get_outlier_faces(
@@ -841,7 +842,8 @@ pub async fn get_outlier_faces(
     use crate::face::embedder::decode_embedding;
     use crate::face::cluster::cosine_distance;
 
-    let limit = params.limit.unwrap_or(5).max(1).min(20);
+    let limit = params.limit.unwrap_or(5).max(1).min(50);
+    let min_dist = params.min_dist.unwrap_or(OUTLIER_MIN_DISTANCE).max(0.0);
 
     // Load all faces for this person that have embeddings
     let rows: Vec<(i64, i64, Vec<u8>, f32, i32, i32, i32, i32)> = sqlx::query_as(
@@ -884,7 +886,7 @@ pub async fn get_outlier_faces(
                 height: *h,
             }
         })
-        .filter(|o| o.distance > OUTLIER_MIN_DISTANCE)
+        .filter(|o| o.distance > min_dist)
         .collect();
 
     scored.sort_by(|a, b| b.distance.partial_cmp(&a.distance).unwrap_or(std::cmp::Ordering::Equal));

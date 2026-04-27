@@ -165,8 +165,22 @@
             <button id="person-reparent-btn" class="btn-ghost" style="font-size:11px;padding:2px 8px">更改父节点</button>
             <button id="person-lift-btn" class="btn-ghost" style="font-size:11px;padding:2px 8px">创建父节点</button>
           </div>
-          <!-- Centroid distance distribution -->
-          <div id="centroid-stats" style="display:none;padding:4px 16px 5px;font-size:11px;color:#888;background:#fafafa;border-bottom:1px solid #eee;line-height:1.8"></div>
+          <!-- Centroid distance distribution + debug button -->
+          <div id="centroid-stats" style="display:none;padding:4px 16px 5px;font-size:11px;color:#888;background:#fafafa;border-bottom:1px solid #eee;line-height:1.8;display:flex;align-items:center;gap:8px">
+            <span id="centroid-stats-text" style="flex:1"></span>
+            <button id="centroid-debug-btn" class="btn-ghost" style="font-size:10px;padding:2px 7px;flex-shrink:0">离群脸诊断</button>
+          </div>
+
+          <!-- Centroid debug modal -->
+          <div id="centroid-debug-modal" class="modal hidden">
+            <div class="modal-inner" style="max-width:780px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+                <h2 style="margin:0;font-size:15px">距质心最远的人脸（按相似度升序）</h2>
+                <button id="centroid-debug-close" class="btn-ghost" style="padding:3px 10px">关闭</button>
+              </div>
+              <div id="centroid-debug-list" style="display:flex;flex-wrap:wrap;gap:10px;max-height:60vh;overflow-y:auto"></div>
+            </div>
+          </div>
           <div id="person-reparent-panel" class="person-reparent-panel hidden">
             <input id="person-reparent-search" type="text" placeholder="输入姓名筛选，或选"设为顶级"…"
                    style="display:block;width:100%;padding:6px;border:1px solid #ccc;border-radius:6px;margin-bottom:6px" />
