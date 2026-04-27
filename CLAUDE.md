@@ -172,8 +172,9 @@ docs/
 | 32d | 后端：GET /api/people/{id}/outlier-faces + POST /api/people/{id}/eject-face（TDD） |
 | 32e | 前端：人物详情页「⚠ 可能误入的照片」面板（移出/保留） |
 | 32f | 文档更新：REQUIREMENTS.md 新增人物聚类辅助功能节，DESIGN.md 新增 3 个 API 接口 |
+| 32g | 质心算法：置信度优先过滤（≥0.85 → ≥0.70 → 全部，至少10张），排除暗光/畸变照片；GET /api/people/{id}/centroid-faces 返回距离分布统计（min/p25/median/p75/max） |
 
-当前测试数：**257 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**264 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 

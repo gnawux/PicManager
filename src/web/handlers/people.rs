@@ -558,9 +558,9 @@ pub async fn get_merge_suggestions(
 
     let limit = params.limit.unwrap_or(5).max(1).min(20);
 
-    // Load target person's face IDs + embeddings
-    let target_rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT f.id, f.embedding FROM person_faces pf
+    // Load target person's face IDs + embeddings + confidence
+    let target_rows: Vec<(i64, Vec<u8>, f32)> = sqlx::query_as(
+        "SELECT f.id, f.embedding, COALESCE(f.confidence, 0.0) FROM person_faces pf
          JOIN faces f ON f.id = pf.face_id
          WHERE pf.person_id = ? AND f.embedding IS NOT NULL",
     )
@@ -574,17 +574,17 @@ pub async fn get_merge_suggestions(
     }
 
     let target_centroid = {
-        let faces: Vec<(i64, Vec<f32>)> = target_rows
+        let faces: Vec<(i64, Vec<f32>, f32)> = target_rows
             .iter()
-            .map(|(id, b)| (*id, decode_embedding(b)))
+            .map(|(id, b, c)| (*id, decode_embedding(b), *c))
             .collect();
         let (c, _) = compute_refined_centroid(&faces);
         c
     };
 
-    // Load all other people's face IDs + embeddings in one pass
-    let all_emb_rows: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT pf.person_id, f.id, f.embedding
+    // Load all other people's face IDs + embeddings + confidence in one pass
+    let all_emb_rows: Vec<(i64, i64, Vec<u8>, f32)> = sqlx::query_as(
+        "SELECT pf.person_id, f.id, f.embedding, COALESCE(f.confidence, 0.0)
          FROM person_faces pf
          JOIN faces f ON f.id = pf.face_id
          JOIN people p ON p.id = pf.person_id
@@ -599,14 +599,14 @@ pub async fn get_merge_suggestions(
         return Ok(Json(vec![]));
     }
 
-    // Group (face_id, embedding) by person_id and compute refined centroid per person
-    let mut person_faces: std::collections::HashMap<i64, Vec<(i64, Vec<f32>)>> =
+    // Group (face_id, embedding, confidence) by person_id and compute refined centroid per person
+    let mut person_faces: std::collections::HashMap<i64, Vec<(i64, Vec<f32>, f32)>> =
         std::collections::HashMap::new();
-    for (pid, fid, bytes) in &all_emb_rows {
+    for (pid, fid, bytes, conf) in &all_emb_rows {
         person_faces
             .entry(*pid)
             .or_default()
-            .push((*fid, decode_embedding(bytes)));
+            .push((*fid, decode_embedding(bytes), *conf));
     }
 
     // Compute distances using refined centroids
@@ -676,6 +676,10 @@ pub async fn get_merge_suggestions(
 // 50 张以上取最近 40%，避免口罩/侧脸 embedding 拉偏质心
 const REFINE_THRESHOLD: usize = 50;
 const REFINE_PCT: f32 = 0.40;
+// 优先用高置信度人脸计算质心（排除暗光/畸变照片）
+const CENTROID_HIGH_CONF: f32 = 0.85;
+const CENTROID_LOW_CONF: f32 = 0.70;
+const CENTROID_MIN_CONF_FACES: usize = 10;
 
 fn centroid_from_embs(embs: &[Vec<f32>]) -> Vec<f32> {
     use crate::face::embedder::l2_normalize;
@@ -687,33 +691,52 @@ fn centroid_from_embs(embs: &[Vec<f32>]) -> Vec<f32> {
 }
 
 /// Returns (centroid, selected_face_ids).
-/// For 50+ faces, re-computes from the closest 40% to a rough centroid.
-pub(crate) fn compute_refined_centroid(faces: &[(i64, Vec<f32>)]) -> (Vec<f32>, Vec<i64>) {
+/// Step 1: prefer faces with confidence ≥ 0.85 (fallback to ≥ 0.70, then all).
+/// Step 2: for 50+ remaining faces, re-compute from the closest 40% to a rough centroid.
+pub(crate) fn compute_refined_centroid(faces: &[(i64, Vec<f32>, f32)]) -> (Vec<f32>, Vec<i64>) {
     use crate::face::cluster::cosine_distance;
     if faces.is_empty() { return (vec![], vec![]); }
 
-    let all_embs: Vec<Vec<f32>> = faces.iter().map(|(_, e)| e.clone()).collect();
-    let rough = centroid_from_embs(&all_embs);
-
-    let keep = if faces.len() > REFINE_THRESHOLD {
-        ((faces.len() as f32 * REFINE_PCT) as usize).max(1)
-    } else {
-        faces.len()
+    // Step 1: confidence-based pre-filter
+    let filter_conf = |min: f32| -> Vec<(i64, &Vec<f32>)> {
+        faces.iter()
+            .filter(|(_, _, c)| *c >= min)
+            .map(|(id, emb, _)| (*id, emb))
+            .collect()
+    };
+    let candidates: Vec<(i64, &Vec<f32>)> = {
+        let high = filter_conf(CENTROID_HIGH_CONF);
+        if high.len() >= CENTROID_MIN_CONF_FACES { high }
+        else {
+            let mid = filter_conf(CENTROID_LOW_CONF);
+            if mid.len() >= CENTROID_MIN_CONF_FACES { mid }
+            else { faces.iter().map(|(id, emb, _)| (*id, emb)).collect() }
+        }
     };
 
-    if keep == faces.len() {
-        return (rough, faces.iter().map(|(id, _)| *id).collect());
+    // Step 2: geometric refinement on confidence-filtered candidates
+    let all_embs: Vec<Vec<f32>> = candidates.iter().map(|(_, e)| (*e).clone()).collect();
+    let rough = centroid_from_embs(&all_embs);
+
+    let keep = if candidates.len() > REFINE_THRESHOLD {
+        ((candidates.len() as f32 * REFINE_PCT) as usize).max(1)
+    } else {
+        candidates.len()
+    };
+
+    if keep == candidates.len() {
+        return (rough, candidates.iter().map(|(id, _)| *id).collect());
     }
 
-    let mut sorted: Vec<(&i64, &Vec<f32>, f32)> = faces
+    let mut sorted: Vec<(i64, &Vec<f32>, f32)> = candidates
         .iter()
-        .map(|(id, emb)| (id, emb, cosine_distance(emb, &rough)))
+        .map(|(id, emb)| (*id, *emb, cosine_distance(*emb, &rough)))
         .collect();
     sorted.sort_by(|a, b| a.2.partial_cmp(&b.2).unwrap_or(std::cmp::Ordering::Equal));
 
     let sel = &sorted[..keep];
     let sel_embs: Vec<Vec<f32>> = sel.iter().map(|(_, e, _)| (*e).clone()).collect();
-    let sel_ids: Vec<i64> = sel.iter().map(|(id, _, _)| **id).collect();
+    let sel_ids: Vec<i64> = sel.iter().map(|(id, _, _)| *id).collect();
     (centroid_from_embs(&sel_embs), sel_ids)
 }
 
@@ -727,9 +750,14 @@ mod centroid_tests {
         v
     }
 
+    // helper: (id, unit-vector at `hot`, confidence)
+    fn face(id: i64, hot: usize, conf: f32) -> (i64, Vec<f32>, f32) {
+        (id, uv(4, hot), conf)
+    }
+
     #[test]
     fn uses_all_when_few() {
-        let faces: Vec<(i64, Vec<f32>)> = (0..10i64).map(|i| (i, uv(4, 0))).collect();
+        let faces: Vec<(i64, Vec<f32>, f32)> = (0..10i64).map(|i| face(i, 0, 1.0)).collect();
         let (centroid, selected) = compute_refined_centroid(&faces);
         assert_eq!(selected.len(), 10);
         assert!(!centroid.is_empty());
@@ -737,16 +765,50 @@ mod centroid_tests {
 
     #[test]
     fn filters_outliers_when_many() {
-        // 60 faces: 40 close (dim-0), 20 far (dim-1)
-        let mut faces: Vec<(i64, Vec<f32>)> = (0..40i64).map(|i| (i, uv(4, 0))).collect();
-        faces.extend((40..60i64).map(|i| (i, uv(4, 1))));
+        // 60 faces: 40 close (dim-0), 20 far (dim-1), all high-confidence
+        let mut faces: Vec<(i64, Vec<f32>, f32)> = (0..40i64).map(|i| face(i, 0, 1.0)).collect();
+        faces.extend((40..60i64).map(|i| face(i, 1, 1.0)));
         let (centroid, selected) = compute_refined_centroid(&faces);
         // 40% of 60 = 24
         assert_eq!(selected.len(), 24);
-        // all selected are from the close group (ids 0-39)
         assert!(selected.iter().all(|&id| id < 40));
-        // centroid points toward dim-0
         assert!(centroid[0] > centroid[1]);
+    }
+
+    #[test]
+    fn prefers_high_conf_faces() {
+        // 15 high-conf faces pointing dim-0; 20 low-conf faces pointing dim-1
+        let mut faces: Vec<(i64, Vec<f32>, f32)> =
+            (0..15i64).map(|i| face(i, 0, 0.90)).collect();
+        faces.extend((15..35i64).map(|i| face(i, 1, 0.50)));
+        let (centroid, selected) = compute_refined_centroid(&faces);
+        // Only high-conf faces used (ids 0-14)
+        assert!(selected.iter().all(|&id| id < 15));
+        // Centroid should point toward dim-0
+        assert!(centroid[0] > centroid[1]);
+    }
+
+    #[test]
+    fn falls_back_to_low_conf_when_too_few_high() {
+        // 5 high-conf (< CENTROID_MIN_CONF_FACES=10), 12 mid-conf, 10 low-conf
+        let mut faces: Vec<(i64, Vec<f32>, f32)> =
+            (0..5i64).map(|i| face(i, 0, 0.90)).collect();   // high: 5  → not enough
+        faces.extend((5..17i64).map(|i| face(i, 0, 0.75)));  // mid: 12  → enough
+        faces.extend((17..27i64).map(|i| face(i, 1, 0.50))); // low: 10  (different direction)
+        let (centroid, selected) = compute_refined_centroid(&faces);
+        // Should use high + mid (ids 0-16), not the low-conf group
+        assert!(selected.iter().all(|&id| id < 17));
+        assert!(centroid[0] > centroid[1]);
+    }
+
+    #[test]
+    fn falls_back_to_all_when_too_few_conf() {
+        // Only 3 faces total, all low confidence — must use all
+        let faces: Vec<(i64, Vec<f32>, f32)> = vec![
+            face(0, 0, 0.40), face(1, 0, 0.50), face(2, 0, 0.60),
+        ];
+        let (_, selected) = compute_refined_centroid(&faces);
+        assert_eq!(selected.len(), 3);
     }
 }
 
@@ -799,12 +861,12 @@ pub async fn get_outlier_faces(
         return Ok(Json(vec![]));
     }
 
-    let faces_for_centroid: Vec<(i64, Vec<f32>)> = rows
+    let faces_for_centroid: Vec<(i64, Vec<f32>, f32)> = rows
         .iter()
-        .map(|(face_id, _, b, ..)| (*face_id, decode_embedding(b)))
+        .map(|(face_id, _, b, conf, ..)| (*face_id, decode_embedding(b), *conf))
         .collect();
     let (centroid, _) = compute_refined_centroid(&faces_for_centroid);
-    let embs: Vec<Vec<f32>> = faces_for_centroid.into_iter().map(|(_, e)| e).collect();
+    let embs: Vec<Vec<f32>> = faces_for_centroid.into_iter().map(|(_, e, _)| e).collect();
 
     let mut scored: Vec<OutlierFace> = rows
         .iter()
@@ -851,8 +913,8 @@ pub async fn get_centroid_faces(
     use crate::face::cluster::cosine_distance;
     use crate::face::embedder::decode_embedding;
 
-    let rows: Vec<(i64, i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT f.id, f.photo_id, f.embedding
+    let rows: Vec<(i64, i64, Vec<u8>, f32)> = sqlx::query_as(
+        "SELECT f.id, f.photo_id, f.embedding, COALESCE(f.confidence, 0.0)
          FROM person_faces pf
          JOIN faces f ON f.id = pf.face_id
          WHERE pf.person_id = ? AND f.embedding IS NOT NULL",
@@ -876,9 +938,9 @@ pub async fn get_centroid_faces(
         }));
     }
 
-    let faces: Vec<(i64, Vec<f32>)> = rows
+    let faces: Vec<(i64, Vec<f32>, f32)> = rows
         .iter()
-        .map(|(face_id, _, bytes)| (*face_id, decode_embedding(bytes)))
+        .map(|(face_id, _, bytes, conf)| (*face_id, decode_embedding(bytes), *conf))
         .collect();
 
     let (centroid, selected_ids) = compute_refined_centroid(&faces);
@@ -886,7 +948,7 @@ pub async fn get_centroid_faces(
     // Compute distances from all faces to the refined centroid
     let mut all_dists: Vec<f32> = faces
         .iter()
-        .map(|(_, emb)| cosine_distance(&centroid, emb))
+        .map(|(_, emb, _)| cosine_distance(&centroid, emb))
         .collect();
     all_dists.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
@@ -894,7 +956,7 @@ pub async fn get_centroid_faces(
     let pct = |p: f32| all_dists[((p * n as f32) as usize).min(n - 1)];
 
     let face_to_photo: std::collections::HashMap<i64, i64> =
-        rows.iter().map(|(fid, pid, _)| (*fid, *pid)).collect();
+        rows.iter().map(|(fid, pid, _, _)| (*fid, *pid)).collect();
 
     let photo_ids: Vec<i64> = selected_ids
         .iter()
