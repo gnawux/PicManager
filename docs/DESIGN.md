@@ -1079,9 +1079,9 @@ Response：`{ photo_ids: [N, ...], emb_count: N, centroid_size: N, min_dist: f, 
 |--------|------|-----------|----------|------|
 | GET | `/api/photos` | — | `PhotoList` JSON | 500 |
 | GET | `/api/photos/gps-points` | — | GPS 坐标列表 JSON | 500 |
-| POST | `/api/photos/batch-update` | `{"photo_ids":[...],"taken_at":"...","timezone_offset":480}` | `{"updated":N}` | 500 |
+| POST | `/api/photos/batch-update` | `{"photo_ids":[...],"taken_at":"...","timezone_offset":480,"rotation_delta":90,"flip_h_toggle":true,"flip_v_toggle":true}` | `{"updated":N}` | 500 |
 | GET | `/api/photos/{id}` | — | 单张照片详情 JSON | 404 / 500 |
-| PATCH | `/api/photos/{id}` | `{"taken_at":"...","timezone_offset":480}` | 200 | 404 / 500 |
+| PATCH | `/api/photos/{id}` | `{"taken_at":"...","timezone_offset":480,"rotation_delta":90,"flip_h_toggle":true,"flip_v_toggle":true}` | 200 | 404 / 500 |
 | GET | `/api/photos/{id}/thumb` | — | JPEG bytes | 404 / 500 |
 | GET | `/api/photos/{id}/file` | — | 原始文件字节（MIME 由 format 推断） | 404 |
 | GET | `/api/photos/{id}/faces` | — | `FaceResponse[]` JSON | 500 |

@@ -131,12 +131,30 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('edit-save-btn').addEventListener('click', saveDetailEdit);
   document.getElementById('edit-cancel-btn').addEventListener('click', cancelDetailEdit);
 
+  // Detail rotation buttons
+  document.getElementById('detail-rotate-left-btn').addEventListener('click', () => {
+    const d = state.currentDetail; if (d) applyPhotoTransform(d.id, -90, false, false);
+  });
+  document.getElementById('detail-rotate-right-btn').addEventListener('click', () => {
+    const d = state.currentDetail; if (d) applyPhotoTransform(d.id, 90, false, false);
+  });
+  document.getElementById('detail-flip-v-btn').addEventListener('click', () => {
+    const d = state.currentDetail; if (d) applyPhotoTransform(d.id, 0, false, true);
+  });
+  document.getElementById('detail-flip-h-btn').addEventListener('click', () => {
+    const d = state.currentDetail; if (d) applyPhotoTransform(d.id, 0, true, false);
+  });
+
   // Batch select
   document.getElementById('select-toggle-btn').addEventListener('click', toggleSelectMode);
   document.getElementById('batch-deselect-btn').addEventListener('click', () => {
     clearSelection();
     toggleSelectMode(); // exit select mode
   });
+  document.getElementById('batch-rotate-left-btn').addEventListener('click',  () => applyBatchTransform(-90, false, false));
+  document.getElementById('batch-rotate-right-btn').addEventListener('click', () => applyBatchTransform(90, false, false));
+  document.getElementById('batch-flip-v-btn').addEventListener('click',       () => applyBatchTransform(0, false, true));
+  document.getElementById('batch-flip-h-btn').addEventListener('click',       () => applyBatchTransform(0, true, false));
   document.getElementById('batch-time-btn').addEventListener('click', () => {
     document.getElementById('batch-taken-at').value = '';
     document.getElementById('batch-timezone').value = '';
@@ -258,6 +276,46 @@ async function saveBatchTime() {
   });
   document.getElementById('batch-time-modal').classList.add('hidden');
   loadPhotos();
+}
+
+async function applyPhotoTransform(id, rotDelta, flipH, flipV) {
+  const body = {};
+  if (rotDelta) body.rotation_delta = rotDelta;
+  if (flipH) body.flip_h_toggle = true;
+  if (flipV) body.flip_v_toggle = true;
+  const resp = await fetch(`/api/photos/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) return;
+  const t = Date.now();
+  // Refresh thumbnail in the photo grid
+  const card = document.querySelector(`#photo-grid .photo-card img[src^="/api/photos/${id}/thumb"]`);
+  if (card) card.src = `/api/photos/${id}/thumb?t=${t}`;
+  // Refresh detail modal image
+  const detailImg = document.getElementById('detail-img');
+  if (detailImg && detailImg.src.includes(`/api/photos/${id}/`)) {
+    detailImg.src = `/api/photos/${id}/thumb?t=${t}`;
+  }
+}
+
+async function applyBatchTransform(rotDelta, flipH, flipV) {
+  if (state.selected.size === 0) return;
+  const body = { photo_ids: [...state.selected] };
+  if (rotDelta) body.rotation_delta = rotDelta;
+  if (flipH) body.flip_h_toggle = true;
+  if (flipV) body.flip_v_toggle = true;
+  await fetch('/api/photos/batch-update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const t = Date.now();
+  state.selected.forEach(id => {
+    const img = document.querySelector(`#photo-grid .photo-card img[src^="/api/photos/${id}/thumb"]`);
+    if (img) img.src = `/api/photos/${id}/thumb?t=${t}`;
+  });
 }
 
 // ── Photo detail modal ────────────────────────────────────────────────────────

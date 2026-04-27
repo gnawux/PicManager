@@ -113,6 +113,9 @@ pub async fn get_photo(
 pub struct PatchPhotoBody {
     pub taken_at: Option<String>,
     pub timezone_offset: Option<i64>,
+    pub rotation_delta: Option<i32>,
+    pub flip_h_toggle: Option<bool>,
+    pub flip_v_toggle: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,6 +123,9 @@ pub struct BatchUpdateBody {
     pub photo_ids: Vec<i64>,
     pub taken_at: Option<String>,
     pub timezone_offset: Option<i64>,
+    pub rotation_delta: Option<i32>,
+    pub flip_h_toggle: Option<bool>,
+    pub flip_v_toggle: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +163,36 @@ pub async fn patch_photo(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     }
+    let mut transform_changed = false;
+    if let Some(delta) = body.rotation_delta {
+        sqlx::query("UPDATE photos SET rotation = ((rotation + ?) % 360 + 360) % 360 WHERE id = ?")
+            .bind(delta)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        transform_changed = true;
+    }
+    if body.flip_h_toggle == Some(true) {
+        sqlx::query("UPDATE photos SET flip_h = 1 - flip_h WHERE id = ?")
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        transform_changed = true;
+    }
+    if body.flip_v_toggle == Some(true) {
+        sqlx::query("UPDATE photos SET flip_v = 1 - flip_v WHERE id = ?")
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        transform_changed = true;
+    }
+    if transform_changed {
+        let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
+        let _ = tokio::fs::remove_file(&cache_path).await;
+    }
     Ok(StatusCode::OK)
 }
 
@@ -167,6 +203,9 @@ pub async fn batch_update_photos(
     if body.photo_ids.is_empty() {
         return Ok(Json(BatchUpdateResponse { updated: 0 }));
     }
+    let has_transform = body.rotation_delta.is_some()
+        || body.flip_h_toggle == Some(true)
+        || body.flip_v_toggle == Some(true);
     let mut updated: u64 = 0;
     for &id in &body.photo_ids {
         if let Some(ref taken_at) = body.taken_at {
@@ -184,6 +223,34 @@ pub async fn batch_update_photos(
                 .execute(&state.pool)
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if let Some(delta) = body.rotation_delta {
+            sqlx::query(
+                "UPDATE photos SET rotation = ((rotation + ?) % 360 + 360) % 360 WHERE id = ?",
+            )
+            .bind(delta)
+            .bind(id)
+            .execute(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if body.flip_h_toggle == Some(true) {
+            sqlx::query("UPDATE photos SET flip_h = 1 - flip_h WHERE id = ?")
+                .bind(id)
+                .execute(&state.pool)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if body.flip_v_toggle == Some(true) {
+            sqlx::query("UPDATE photos SET flip_v = 1 - flip_v WHERE id = ?")
+                .bind(id)
+                .execute(&state.pool)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        }
+        if has_transform {
+            let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
+            let _ = tokio::fs::remove_file(&cache_path).await;
         }
         updated += 1;
     }
@@ -259,13 +326,15 @@ pub async fn get_thumb(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let row: Option<(String,)> = sqlx::query_as("SELECT path FROM photos WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await
-        .unwrap_or(None);
+    let row: Option<(String, i32, i32, i32)> = sqlx::query_as(
+        "SELECT path, rotation, flip_h, flip_v FROM photos WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
 
-    let Some((path,)) = row else {
+    let Some((path, rotation, flip_h, flip_v)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -276,7 +345,7 @@ pub async fn get_thumb(
         if cache_path.exists() {
             std::fs::read(&cache_path).map_err(|e| anyhow::anyhow!(e))
         } else {
-            let bytes = generate_thumb(&path, thumb_size)?;
+            let bytes = generate_thumb(&path, thumb_size, rotation, flip_h != 0, flip_v != 0)?;
             if let Some(parent) = cache_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -323,12 +392,29 @@ pub async fn get_photo_file(
     }
 }
 
-fn generate_thumb(path: &str, size: u32) -> anyhow::Result<Vec<u8>> {
+pub(crate) fn apply_transform(
+    img: image::DynamicImage,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
+) -> image::DynamicImage {
+    let img = match (rotation % 360 + 360) % 360 {
+        90  => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        _   => img,
+    };
+    let img = if flip_h { img.fliph() } else { img };
+    if flip_v { img.flipv() } else { img }
+}
+
+fn generate_thumb(path: &str, size: u32, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
     use image::{ImageFormat, ImageReader};
     use std::io::Cursor;
 
     let img = ImageReader::open(path)?.decode()?;
     let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
+    let thumb = apply_transform(thumb, rotation, flip_h, flip_v);
 
     let mut buf = Vec::new();
     thumb.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;
@@ -363,14 +449,37 @@ mod tests {
     #[test]
     fn generate_thumb_returns_jpeg_bytes() {
         let f = fixture("with_exif.jpg");
-        let bytes = generate_thumb(f.to_str().unwrap(), 300).unwrap();
+        let bytes = generate_thumb(f.to_str().unwrap(), 300, 0, false, false).unwrap();
         assert!(!bytes.is_empty());
         assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
     }
 
     #[test]
     fn generate_thumb_missing_file_returns_error() {
-        let result = generate_thumb("/no/such/file.jpg", 300);
+        let result = generate_thumb("/no/such/file.jpg", 300, 0, false, false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn apply_transform_rotation_180_is_involutory() {
+        let f = fixture("with_exif.jpg");
+        let img = image::open(&f).unwrap();
+        let rotated = apply_transform(img.clone(), 180, false, false);
+        let back = apply_transform(rotated, 180, false, false);
+        assert_eq!(img.width(), back.width());
+        assert_eq!(img.height(), back.height());
+    }
+
+    #[test]
+    fn apply_transform_four_rotations_returns_original_size() {
+        let f = fixture("with_exif.jpg");
+        let img = image::open(&f).unwrap();
+        let (w, h) = (img.width(), img.height());
+        let r = apply_transform(img, 90, false, false);
+        let r = apply_transform(r, 90, false, false);
+        let r = apply_transform(r, 90, false, false);
+        let r = apply_transform(r, 90, false, false);
+        assert_eq!(r.width(), w);
+        assert_eq!(r.height(), h);
     }
 }

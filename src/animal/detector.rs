@@ -130,7 +130,7 @@ fn run_inference(
             }
 
             // YOLOv8 bbox: cx, cy, w, h normalized to 640
-            let cx = flat[0 * n + i];
+            let cx = flat[i];
             let cy = flat[1 * n + i];
             let bw = flat[2 * n + i];
             let bh = flat[3 * n + i];

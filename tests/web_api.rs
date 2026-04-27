@@ -1800,3 +1800,202 @@ async fn centroid_faces_empty_when_no_embeddings() {
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(json["photo_ids"].as_array().unwrap().is_empty());
 }
+
+// ── Step 33a: photo rotation API ────────────────────────────────────────────
+
+#[tokio::test]
+async fn rotate_single_photo_updates_rotation() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/rot.jpg', 'sha_rot', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "rotation_delta": 90 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (rotation,): (i32,) = sqlx::query_as("SELECT rotation FROM photos WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rotation, 90);
+}
+
+#[tokio::test]
+async fn rotate_wraps_at_360() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/rot2.jpg', 'sha_rot2', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Set rotation to 270 first
+    sqlx::query("UPDATE photos SET rotation = 270 WHERE id = ?")
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "rotation_delta": 90 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (rotation,): (i32,) = sqlx::query_as("SELECT rotation FROM photos WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(rotation, 0);
+}
+
+#[tokio::test]
+async fn flip_h_toggles_twice_returns_original() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/flip.jpg', 'sha_flip', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "flip_h_toggle": true });
+    // First toggle
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Second toggle
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (flip_h,): (i32,) = sqlx::query_as("SELECT flip_h FROM photos WHERE id = ?")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(flip_h, 0);
+}
+
+#[tokio::test]
+async fn rotate_does_not_touch_taken_at() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, taken_at)
+         VALUES ('/tmp/rot3.jpg', 'sha_rot3', 'jpeg', 'imported', '2024-01-01T12:00:00') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "rotation_delta": 180, "flip_v_toggle": true });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let (taken_at, rotation, flip_v): (Option<String>, i32, i32) =
+        sqlx::query_as("SELECT taken_at, rotation, flip_v FROM photos WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(taken_at.as_deref(), Some("2024-01-01T12:00:00"));
+    assert_eq!(rotation, 180);
+    assert_eq!(flip_v, 1);
+}
+
+#[tokio::test]
+async fn batch_rotate_updates_all_photos() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let id1: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/br1.jpg', 'sha_br1', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let id2: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status)
+         VALUES ('/tmp/br2.jpg', 'sha_br2', 'jpeg', 'imported') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "photo_ids": [id1, id2], "rotation_delta": 270 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/photos/batch-update")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    for id in [id1, id2] {
+        let (rotation,): (i32,) = sqlx::query_as("SELECT rotation FROM photos WHERE id = ?")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rotation, 270);
+    }
+}

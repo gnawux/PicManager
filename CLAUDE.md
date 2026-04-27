@@ -175,8 +175,11 @@ docs/
 | 32g | 质心算法：置信度优先过滤（≥0.85 → ≥0.70 → 全部，至少10张），排除暗光/畸变照片；GET /api/people/{id}/centroid-faces 返回距离分布统计（min/p25/median/p75/max）；离群阈值 0.20→0.50；合并建议上限 5→10 |
 | 32h | 前端 UI 优化：建议合并/可能误入面板默认折叠；质心照片 meta 浅黄底色；centroid-stats 移入 outlier panel；离群脸诊断模态窗（min_dist=0 全量排序，最多40张）；调试模态窗多选+创建子人物；面包屑父节点可点击导航；#people-detail-empty CSS 特异性修复 |
 | 32i | 文档更新：REQUIREMENTS.md 更新聚类辅助功能节（新增质心算法说明、诊断功能描述），DESIGN.md 更新 4 个 API 接口（含 centroid-faces） |
+| 33a | DB migration 0011（rotation/flip_h/flip_v 列）；PATCH /api/photos/{id} + batch-update 支持 rotation_delta/flip_h_toggle/flip_v_toggle；apply_transform + generate_thumb 应用变换；删除旧缩略图缓存（TDD，5 个新测试 + 2 个单元测试） |
+| 33b | 前端：详情模态框 + 批量操作栏各增 4 个旋转/翻转按钮；applyPhotoTransform / applyBatchTransform，成功后立即刷新缩略图 |
+| 33c | 文档更新：REQUIREMENTS.md 新增旋转/翻转需求，DESIGN.md 更新 PATCH / batch-update API 字段 |
 
-当前测试数：**264 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**271 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
