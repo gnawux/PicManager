@@ -1238,14 +1238,16 @@ async function openCentroidDebugModal(personId) {
   const selectAllBtn = document.getElementById('centroid-debug-select-all');
   if (!modal || !list) return;
 
-  const selected = new Set(); // face_id → photo_id mapping for selected cards
+  const selected = new Set();
   const facePhotoMap = new Map();
 
   const updateSelUI = () => {
     const n = selected.size;
-    selCount.textContent = n ? `已选 ${n} 张` : '未选中';
-    createBtn.disabled = n === 0;
-    selectAllBtn.textContent = selected.size === facePhotoMap.size ? '取消全选' : '全选';
+    document.getElementById('centroid-debug-sel-count').textContent = n ? `已选 ${n} 张` : '未选中';
+    const cb = document.getElementById('centroid-debug-create-child');
+    if (cb) cb.disabled = n === 0;
+    const sa = document.getElementById('centroid-debug-select-all');
+    if (sa) sa.textContent = (n > 0 && n === facePhotoMap.size) ? '取消全选' : '全选';
   };
 
   list.innerHTML = '<span style="color:#aaa;font-size:13px">加载中…</span>';
@@ -1319,11 +1321,10 @@ async function openCentroidDebugModal(personId) {
     list.appendChild(card);
   }
 
-  // Wire up select-all and create-child buttons (replace old listeners by cloning)
-  const newSelectAll = selectAllBtn.cloneNode(true);
-  selectAllBtn.replaceWith(newSelectAll);
-  newSelectAll.addEventListener('click', () => {
-    if (selected.size === facePhotoMap.size) {
+  // Wire up toolbar buttons via onclick (overwrites any previous handler)
+  document.getElementById('centroid-debug-select-all').onclick = () => {
+    const allSelected = selected.size > 0 && selected.size === facePhotoMap.size;
+    if (allSelected) {
       selected.clear();
       list.querySelectorAll('img').forEach(img => { img.style.border = '2px solid #ddd'; img.style.opacity = '1'; });
     } else {
@@ -1331,18 +1332,16 @@ async function openCentroidDebugModal(personId) {
       list.querySelectorAll('img').forEach(img => { img.style.border = '3px solid #a78bfa'; img.style.opacity = '0.85'; });
     }
     updateSelUI();
-  });
+  };
 
-  const newCreateBtn = createBtn.cloneNode(true);
-  createBtn.replaceWith(newCreateBtn);
-  newCreateBtn.addEventListener('click', async () => {
+  document.getElementById('centroid-debug-create-child').onclick = async () => {
     if (selected.size === 0) return;
     const photoIds = [...selected].map(fid => facePhotoMap.get(fid));
     modal.classList.add('hidden');
     await createSubPerson(photoIds);
     await loadCentroidPhotoIds(personId);
     loadOutlierFaces(personId);
-  });
+  };
 }
 
 document.addEventListener('DOMContentLoaded', () => {
