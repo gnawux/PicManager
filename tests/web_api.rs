@@ -1801,6 +1801,55 @@ async fn centroid_faces_empty_when_no_embeddings() {
     assert!(json["photo_ids"].as_array().unwrap().is_empty());
 }
 
+// ── Step 34b: face thumb orientation transform ───────────────────────────────
+
+#[tokio::test]
+async fn face_thumb_applies_orientation_rotated_photo() {
+    let (_app, pool, tmp) = test_app_with_pool().await;
+
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/with_exif.jpg");
+
+    // Insert photo with rotation=90 so the effective image is portrait
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, rotation, flip_h, flip_v, exif_orientation)
+         VALUES (?, 'sha_rot90', 'jpeg', 'imported', 90, 0, 0, 1) RETURNING id",
+    )
+    .bind(fixture.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // Face bbox in display (rotated) space: top-left corner
+    let face_id: i64 = sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence)
+         VALUES (?, 5, 5, 80, 80, 0.9) RETURNING id",
+    )
+    .bind(photo_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let mut config = picmanager::config::Config::default();
+    config.thumb_cache_dir = tmp.path().to_path_buf();
+    let app = picmanager::web::router(pool.clone(), config);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/faces/{face_id}/thumb"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..2], &[0xFF, 0xD8], "should return valid JPEG");
+}
+
 // ── Step 34a: EXIF orientation storage ──────────────────────────────────────
 
 #[tokio::test]

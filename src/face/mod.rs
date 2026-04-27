@@ -9,22 +9,76 @@ pub use embedder::Embedder;
 use image::DynamicImage;
 use sqlx::SqlitePool;
 
+/// Apply a rotation (clockwise degrees: 0/90/180/270) and optional flips to an image.
+pub(crate) fn apply_transform(
+    img: DynamicImage,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
+) -> DynamicImage {
+    let img = match (rotation % 360 + 360) % 360 {
+        90  => img.rotate90(),
+        180 => img.rotate180(),
+        270 => img.rotate270(),
+        _   => img,
+    };
+    let img = if flip_h { img.fliph() } else { img };
+    if flip_v { img.flipv() } else { img }
+}
+
+/// Apply EXIF Orientation (1–8) to an image, correcting its display orientation.
+/// Orientation 1 (normal) is a no-op.
+pub(crate) fn apply_exif_orientation(img: DynamicImage, orientation: u8) -> DynamicImage {
+    let (rot, flip_h): (i32, bool) = match orientation {
+        2 => (0,   true),
+        3 => (180, false),
+        4 => (180, true),
+        5 => (90,  true),
+        6 => (90,  false),
+        7 => (270, true),
+        8 => (270, false),
+        _ => (0,   false), // 1 = normal
+    };
+    apply_transform(img, rot, flip_h, false)
+}
+
 /// Detect faces in `img`, persist them to the `faces` table, and (if the
 /// embedding model is available) fill in 512-D embeddings.  All failures
 /// are warned — never propagated.
 /// Returns the number of faces detected and persisted.
+///
+/// The image is pre-processed with the photo's effective orientation
+/// (EXIF Orientation + DB rotation/flip) so that face coordinates are
+/// stored in display space.
 pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) -> usize {
-    let img_owned = img.clone();
+    // Fetch orientation data and build an effectively-oriented image.
+    let oriented = {
+        let row: Option<(i32, i32, i32, i32)> = sqlx::query_as(
+            "SELECT exif_orientation, rotation, flip_h, flip_v FROM photos WHERE id = ?",
+        )
+        .bind(photo_id)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some((exif_orient, db_rot, db_flip_h, db_flip_v)) = row {
+            let oriented = apply_exif_orientation(img.clone(), exif_orient as u8);
+            apply_transform(oriented, db_rot, db_flip_h != 0, db_flip_v != 0)
+        } else {
+            img.clone()
+        }
+    };
+
     let (faces, embeddings): (Vec<FaceRegion>, Vec<Option<Vec<f32>>>) =
         tokio::task::spawn_blocking(move || {
-            let faces = detector::detect(&img_owned);
+            let faces = detector::detect(&oriented);
             if faces.is_empty() {
                 return (vec![], vec![]);
             }
             let emb = embedder::Embedder::load(std::path::Path::new("")).ok();
             let embeddings = faces
                 .iter()
-                .map(|face| emb.as_ref().and_then(|e| e.extract(&img_owned, face).ok()))
+                .map(|face| emb.as_ref().and_then(|e| e.extract(&oriented, face).ok()))
                 .collect();
             (faces, embeddings)
         })
@@ -88,7 +142,51 @@ pub(crate) async fn save_faces(pool: &SqlitePool, photo_id: i64, faces: &[FaceRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::DynamicImage;
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[test]
+    fn apply_exif_orientation_1_is_noop() {
+        let img = DynamicImage::new_rgb8(100, 60);
+        let out = apply_exif_orientation(img, 1);
+        assert_eq!(out.width(), 100);
+        assert_eq!(out.height(), 60);
+    }
+
+    #[test]
+    fn apply_exif_orientation_6_rotates_90cw() {
+        // EXIF 6 = 90° CW: landscape (W×H) → portrait (H×W)
+        let img = DynamicImage::new_rgb8(100, 60);
+        let out = apply_exif_orientation(img, 6);
+        assert_eq!(out.width(), 60);
+        assert_eq!(out.height(), 100);
+    }
+
+    #[test]
+    fn apply_exif_orientation_8_rotates_270cw() {
+        // EXIF 8 = 270° CW: landscape (W×H) → portrait (H×W)
+        let img = DynamicImage::new_rgb8(100, 60);
+        let out = apply_exif_orientation(img, 8);
+        assert_eq!(out.width(), 60);
+        assert_eq!(out.height(), 100);
+    }
+
+    #[test]
+    fn apply_exif_orientation_3_rotates_180() {
+        // EXIF 3 = 180°: dimensions unchanged
+        let img = DynamicImage::new_rgb8(100, 60);
+        let out = apply_exif_orientation(img, 3);
+        assert_eq!(out.width(), 100);
+        assert_eq!(out.height(), 60);
+    }
+
+    #[test]
+    fn apply_exif_orientation_unknown_value_is_noop() {
+        let img = DynamicImage::new_rgb8(80, 40);
+        let out = apply_exif_orientation(img, 9);
+        assert_eq!(out.width(), 80);
+        assert_eq!(out.height(), 40);
+    }
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()

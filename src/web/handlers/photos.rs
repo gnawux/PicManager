@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use crate::web::AppState;
+use crate::face::{apply_transform, apply_exif_orientation};
 
 #[derive(Debug, Serialize)]
 pub struct PhotoDetail {
@@ -326,15 +327,15 @@ pub async fn get_thumb(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let row: Option<(String, i32, i32, i32)> = sqlx::query_as(
-        "SELECT path, rotation, flip_h, flip_v FROM photos WHERE id = ?",
+    let row: Option<(String, i32, i32, i32, i32)> = sqlx::query_as(
+        "SELECT path, rotation, flip_h, flip_v, exif_orientation FROM photos WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)
     .await
     .unwrap_or(None);
 
-    let Some((path, rotation, flip_h, flip_v)) = row else {
+    let Some((path, rotation, flip_h, flip_v, exif_orient)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -345,7 +346,7 @@ pub async fn get_thumb(
         if cache_path.exists() {
             std::fs::read(&cache_path).map_err(|e| anyhow::anyhow!(e))
         } else {
-            let bytes = generate_thumb(&path, thumb_size, rotation, flip_h != 0, flip_v != 0)?;
+            let bytes = generate_thumb(&path, thumb_size, exif_orient as u8, rotation, flip_h != 0, flip_v != 0)?;
             if let Some(parent) = cache_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -392,28 +393,13 @@ pub async fn get_photo_file(
     }
 }
 
-pub(crate) fn apply_transform(
-    img: image::DynamicImage,
-    rotation: i32,
-    flip_h: bool,
-    flip_v: bool,
-) -> image::DynamicImage {
-    let img = match (rotation % 360 + 360) % 360 {
-        90  => img.rotate90(),
-        180 => img.rotate180(),
-        270 => img.rotate270(),
-        _   => img,
-    };
-    let img = if flip_h { img.fliph() } else { img };
-    if flip_v { img.flipv() } else { img }
-}
-
-fn generate_thumb(path: &str, size: u32, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
+fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
     use image::{ImageFormat, ImageReader};
     use std::io::Cursor;
 
     let img = ImageReader::open(path)?.decode()?;
     let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
+    let thumb = apply_exif_orientation(thumb, exif_orient);
     let thumb = apply_transform(thumb, rotation, flip_h, flip_v);
 
     let mut buf = Vec::new();
@@ -449,14 +435,14 @@ mod tests {
     #[test]
     fn generate_thumb_returns_jpeg_bytes() {
         let f = fixture("with_exif.jpg");
-        let bytes = generate_thumb(f.to_str().unwrap(), 300, 0, false, false).unwrap();
+        let bytes = generate_thumb(f.to_str().unwrap(), 300, 1, 0, false, false).unwrap();
         assert!(!bytes.is_empty());
         assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
     }
 
     #[test]
     fn generate_thumb_missing_file_returns_error() {
-        let result = generate_thumb("/no/such/file.jpg", 300, 0, false, false);
+        let result = generate_thumb("/no/such/file.jpg", 300, 1, 0, false, false);
         assert!(result.is_err());
     }
 

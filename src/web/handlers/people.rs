@@ -7,6 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use crate::web::AppState;
 use crate::web::handlers::photos::{PhotoRow, Pagination};
+use crate::face::{apply_transform, apply_exif_orientation};
 
 #[derive(Debug, Serialize)]
 pub struct PersonRow {
@@ -380,8 +381,9 @@ pub async fn get_face_thumb(
     State(state): State<AppState>,
     Path(face_id): Path<i64>,
 ) -> Response {
-    let row: Option<(i64, i64, i64, i64, String)> = sqlx::query_as(
-        "SELECT f.x, f.y, f.width, f.height, p.path
+    let row: Option<(i64, i64, i64, i64, String, i32, i32, i32, i32)> = sqlx::query_as(
+        "SELECT f.x, f.y, f.width, f.height, p.path,
+                p.exif_orientation, p.rotation, p.flip_h, p.flip_v
          FROM faces f JOIN photos p ON p.id = f.photo_id
          WHERE f.id = ?",
     )
@@ -390,7 +392,7 @@ pub async fn get_face_thumb(
     .await
     .unwrap_or(None);
 
-    let Some((x, y, w, h, photo_path)) = row else {
+    let Some((x, y, w, h, photo_path, exif_orient, rotation, flip_h, flip_v)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -400,7 +402,7 @@ pub async fn get_face_thumb(
         if cache_path.exists() {
             return std::fs::read(&cache_path).map_err(|e| anyhow::anyhow!(e));
         }
-        let bytes = crop_face(&photo_path, x, y, w, h)?;
+        let bytes = crop_face(&photo_path, exif_orient as u8, rotation, flip_h != 0, flip_v != 0, x, y, w, h)?;
         if let Some(parent) = cache_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -418,11 +420,23 @@ pub async fn get_face_thumb(
     }
 }
 
-fn crop_face(path: &str, x: i64, y: i64, w: i64, h: i64) -> anyhow::Result<Vec<u8>> {
+fn crop_face(
+    path: &str,
+    exif_orient: u8,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
+    x: i64,
+    y: i64,
+    w: i64,
+    h: i64,
+) -> anyhow::Result<Vec<u8>> {
     use image::{ImageFormat, ImageReader};
     use std::io::Cursor;
 
     let img = ImageReader::open(path)?.decode()?;
+    let img = apply_exif_orientation(img, exif_orient);
+    let img = apply_transform(img, rotation, flip_h, flip_v);
     let iw = img.width() as i64;
     let ih = img.height() as i64;
 
