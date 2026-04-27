@@ -1801,6 +1801,27 @@ async fn centroid_faces_empty_when_no_embeddings() {
     assert!(json["photo_ids"].as_array().unwrap().is_empty());
 }
 
+// ── Step 34a: EXIF orientation storage ──────────────────────────────────────
+
+#[tokio::test]
+async fn import_stores_exif_orientation() {
+    let (_, pool, tmp) = test_app_with_pool().await;
+    let lib = tmp.path().join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+
+    picmanager::importer::import_dir(&pool, &fixtures, &lib, true).await.unwrap();
+
+    let rows: Vec<(i32,)> = sqlx::query_as("SELECT exif_orientation FROM photos")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert!(!rows.is_empty(), "photos should be imported");
+    for (orient,) in &rows {
+        assert!((1..=8).contains(orient), "exif_orientation must be 1-8, got {orient}");
+    }
+}
+
 // ── Step 33a: photo rotation API ────────────────────────────────────────────
 
 #[tokio::test]

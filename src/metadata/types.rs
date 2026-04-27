@@ -37,6 +37,8 @@ pub struct PhotoMeta {
     pub camera: Option<String>,
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
+    /// EXIF Orientation tag value (1–8); 1 = normal. Absent → 1.
+    pub exif_orientation: u8,
 }
 
 #[cfg(test)]

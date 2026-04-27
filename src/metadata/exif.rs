@@ -16,8 +16,23 @@ pub fn extract_from_file(path: &Path) -> Result<PhotoMeta> {
     let taken_at = exif.as_ref().and_then(parse_datetime);
     let camera = exif.as_ref().and_then(parse_camera);
     let (gps_lat, gps_lon) = exif.as_ref().map(parse_gps).unwrap_or((None, None));
+    let exif_orientation = exif.as_ref().map(parse_orientation).unwrap_or(1);
 
-    Ok(PhotoMeta { format: fmt, taken_at, camera, gps_lat, gps_lon })
+    Ok(PhotoMeta { format: fmt, taken_at, camera, gps_lat, gps_lon, exif_orientation })
+}
+
+/// Read EXIF Orientation tag; returns 1 (normal) if absent or invalid.
+fn parse_orientation(exif: &exif::Exif) -> u8 {
+    let field = match exif.get_field(Tag::Orientation, In::PRIMARY) {
+        Some(f) => f,
+        None => return 1,
+    };
+    if let exif::Value::Short(ref v) = field.value {
+        let val = v.first().copied().unwrap_or(1);
+        if (1..=8).contains(&val) { val as u8 } else { 1 }
+    } else {
+        1
+    }
 }
 
 fn detect_format(path: &Path) -> Result<super::types::ImageFormat> {
@@ -188,6 +203,20 @@ mod tests {
         std::fs::write(tmp.path(), b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00").unwrap();
         let result = extract_from_file(tmp.path());
         assert!(matches!(result, Err(AppError::UnsupportedFormat(_))));
+    }
+
+    #[test]
+    fn exif_orientation_defaults_to_1_when_absent() {
+        // no_exif.jpg has no EXIF data at all
+        let meta = extract_from_file(&fixture("no_exif.jpg")).unwrap();
+        assert_eq!(meta.exif_orientation, 1, "absent orientation should default to 1");
+    }
+
+    #[test]
+    fn exif_orientation_is_valid_for_fixture_with_exif() {
+        // with_exif.jpg is a standard-orientation fixture, should return 1
+        let meta = extract_from_file(&fixture("with_exif.jpg")).unwrap();
+        assert!((1..=8).contains(&meta.exif_orientation), "orientation must be 1-8");
     }
 
     // --- fallback field tests ---
