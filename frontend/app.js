@@ -100,6 +100,16 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('merge-confirm-btn').addEventListener('click', confirmMerge);
   document.getElementById('merge-search').addEventListener('input', filterMergeList);
 
+  // Generic merge confirmation modal
+  document.getElementById('merge-confirm-ok-btn').addEventListener('click', () => {
+    document.getElementById('merge-confirm-modal').classList.add('hidden');
+    if (_mergeConfirmCallback) { const cb = _mergeConfirmCallback; _mergeConfirmCallback = null; cb(); }
+  });
+  document.getElementById('merge-confirm-cancel-btn').addEventListener('click', () => {
+    document.getElementById('merge-confirm-modal').classList.add('hidden');
+    _mergeConfirmCallback = null;
+  });
+
   // People batch bar
   document.getElementById('people-batch-merge-btn').addEventListener('click', openPeopleNameMergeDialog);
   document.getElementById('people-batch-ignore-btn').addEventListener('click', () => batchUpdatePeopleStatus('ignored'));
@@ -1468,17 +1478,23 @@ async function loadMergeSuggestions(personId, person) {
     mergeBtn.textContent = '合并';
     mergeBtn.className = 'btn-ghost';
     mergeBtn.style.cssText = 'font-size:10px;padding:1px 5px;width:100%';
-    mergeBtn.addEventListener('click', async () => {
-      mergeBtn.disabled = true;
-      await fetch('/api/people/merge', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_id: s.person_id, target_id: personId }),
-      });
-      card.remove();
-      if (list.children.length === 0) panel.classList.add('hidden');
-      await loadPersonDetailPage(personId);
-      loadPeopleList();
+    mergeBtn.addEventListener('click', () => {
+      const sourceName = s.name || '未命名';
+      showMergeConfirm(
+        `将「${sourceName}」（${s.photo_count} 张）合并入当前人物？`,
+        async () => {
+          mergeBtn.disabled = true;
+          await fetch('/api/people/merge', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source_id: s.person_id, target_id: personId }),
+          });
+          card.remove();
+          if (list.children.length === 0) panel.classList.add('hidden');
+          await loadPersonDetailPage(personId);
+          loadPeopleList();
+        }
+      );
     });
 
     card.append(img, nameEl, meta, mergeBtn);
@@ -2096,6 +2112,16 @@ async function savePersonName() {
   }
 }
 
+// ── Generic merge confirmation ────────────────────────────────────────────────
+
+let _mergeConfirmCallback = null;
+
+function showMergeConfirm(message, onConfirm) {
+  document.getElementById('merge-confirm-message').textContent = message;
+  _mergeConfirmCallback = onConfirm;
+  document.getElementById('merge-confirm-modal').classList.remove('hidden');
+}
+
 // ── Duplicate name detection ─────────────────────────────────────────────────
 
 let _dupNameResolve = null;
@@ -2423,15 +2449,24 @@ function filterMergeList() {
   renderMergeList(filtered);
 }
 
-async function confirmMerge() {
+function confirmMerge() {
   if (!state.mergeTargetId) return;
-  await fetch('/api/people/merge', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ source_id: state.currentPersonId, target_id: state.mergeTargetId }),
-  });
+  const target = state.allPeople.find(p => p.id === state.mergeTargetId);
+  const source = state.allPeople.find(p => p.id === state.currentPersonId);
+  const targetName = target ? (target.name || '未命名') : '未知';
+  const sourceName = source ? (source.name || '未命名') : '未知';
   document.getElementById('merge-modal').classList.add('hidden');
-  loadPeopleList();
-  showPersonDetail(state.mergeTargetId);
+  showMergeConfirm(
+    `将「${sourceName}」并入「${targetName}」？`,
+    async () => {
+      await fetch('/api/people/merge', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source_id: state.currentPersonId, target_id: state.mergeTargetId }),
+      });
+      loadPeopleList();
+      showPersonDetail(state.mergeTargetId);
+    }
+  );
 }
 
 // ── Animals ───────────────────────────────────────────────────────────────────

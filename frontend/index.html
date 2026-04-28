@@ -375,6 +375,19 @@
     </div>
   </dialog>
 
+  <!-- Generic merge confirmation dialog -->
+  <div id="merge-confirm-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:360px">
+      <h2>确认合并</h2>
+      <p id="merge-confirm-message" style="margin-bottom:8px;line-height:1.5"></p>
+      <p style="font-size:11px;color:#e74c3c;margin-bottom:16px">合并后不可撤销</p>
+      <div style="display:flex;gap:8px">
+        <button id="merge-confirm-ok-btn" style="background:#c0392b;color:#fff">确认合并</button>
+        <button id="merge-confirm-cancel-btn" class="btn-ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Face thumbnail lightbox -->
   <div id="face-lightbox" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;align-items:center;justify-content:center;cursor:zoom-out">
     <img id="face-lightbox-img" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 32px rgba(0,0,0,0.5)" />
