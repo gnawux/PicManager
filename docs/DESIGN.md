@@ -666,6 +666,13 @@ pub fn decode_embedding(bytes: &[u8]) -> Vec<f32>
 pub async fn run_job(pool: &SqlitePool, scope: Option<Vec<i64>>) -> Result<i64>
 pub async fn scope_for_missing(pool: &SqlitePool) -> Result<Vec<i64>>
 // Returns IDs of imported photos that have no entry in the faces table.
+pub async fn scope_for_rotated_with_faces(pool: &SqlitePool) -> Result<Vec<i64>>
+// Returns IDs of imported photos with user rotation/flip set AND existing face records.
+// Used by `picmanager faces analyze --rotated-only` to repair stale embeddings.
+pub(crate) async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64)
+// Clears cover_face_id references, deletes faces, reopens image, calls analyze_one.
+// Must clear cover_face_id first; otherwise FK constraint causes DELETE to fail silently.
+// Called by execute_job and by PATCH /api/photos/{id} after rotation/flip changes.
 pub(crate) async fn execute_job(pool: &SqlitePool, job_id: i64, scope: Option<Vec<i64>>) -> Result<()>
 ```
 
@@ -998,7 +1005,10 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 **`POST /api/people/cluster`**：异步触发 DBSCAN 重聚类，返回 `{ "job_id": ... }`。
 
-**`POST /api/people/merge`**：`{ "source_id": 2, "target_id": 1 }` — 将 source 的所有 person_faces 并入 target，删除 source。
+**`POST /api/people/merge`**：`{ "source_id": 2, "target_id": 1 }` — 将 source 的所有 person_faces 并入 target，删除 source。操作在事务内完成，分两种情况：
+- **普通合并**（source 不是 target 的祖先）：将 source 的子节点改到 target 下，移人脸，删 source。
+- **父→子合并**（source 是 target 的祖先，用递归 CTE 检测）：先将 target.parent_id 改为 source.parent_id（target 升级到 source 的位置），再将 source 的其余子节点改到 target 下，移人脸，删 source。避免产生 parent_id 自引用的孤儿节点。
+前端在两处合并入口（建议合并面板、合并到…对话框）均显示包含源/目标名称的确认弹窗，防止误操作。
 
 **`POST /api/people/{id}/reparent`**：`{ "new_parent_id": 3 }` — `new_parent_id` 为 null 时提升为顶级。
 
@@ -1084,6 +1094,8 @@ Response：`{ photo_ids: [N, ...], emb_count: N, centroid_size: N, min_dist: f, 
 | POST | `/api/photos/batch-update` | `{"photo_ids":[...],"taken_at":"...","timezone_offset":480,"rotation_delta":90,"flip_h_toggle":true,"flip_v_toggle":true}` | `{"updated":N}` | 500 |
 | GET | `/api/photos/{id}` | — | 单张照片详情 JSON | 404 / 500 |
 | PATCH | `/api/photos/{id}` | `{"taken_at":"...","timezone_offset":480,"rotation_delta":90,"flip_h_toggle":true,"flip_v_toggle":true}` | 200 | 404 / 500 |
+
+rotation_delta/flip_h_toggle/flip_v_toggle 生效时，除删除缩略图缓存外，还会在后台（`tokio::spawn`）调用 `reanalyze_one_photo` 以更新人脸 embedding 和 bbox 坐标到新的显示空间。batch-update 同理，对所有 photo_ids 依次重分析。
 | GET | `/api/photos/{id}/thumb` | — | JPEG bytes | 404 / 500 |
 | GET | `/api/photos/{id}/file` | — | 原始文件字节（MIME 由 format 推断） | 404 |
 | GET | `/api/photos/{id}/faces` | — | `FaceResponse[]` JSON | 500 |

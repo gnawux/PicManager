@@ -181,8 +181,11 @@ docs/
 | 34a | DB migration 0012（exif_orientation 列）；metadata::exif 读取 EXIF Orientation tag；PhotoMeta 新增 exif_orientation 字段；导入时写入 DB（TDD，3 个新测试） |
 | 34b | face/mod.rs：apply_exif_orientation（EXIF 1-8 → rotation/flip_h）+ apply_transform（从 photos.rs 迁入）；analyze_one 检测前读 DB 方向字段并变换到显示空间；photos.rs generate_thumb 同样应用 EXIF + DB 两层变换；people.rs crop_face 同样应用两层变换后裁剪（TDD，5 个单元测试 + 1 个集成测试） |
 | 34c | 文档更新：REQUIREMENTS.md 新增方向感知检测需求，DESIGN.md/ARCHITECTURE.md 同步更新，CLAUDE.md 记录 image crate 不自动应用 EXIF Orientation |
+| 35a | fix: 人物合并父→子节点时子节点升级到父节点位置（递归 CTE 祖先检测 + 事务）；migration 0013 修复已有自引用孤儿节点 |
+| 35b | fix: 照片旋转/翻转后自动后台触发人脸重分析；提取 reanalyze_one_photo（修复 cover_face_id FK 静默失败 bug）；`picmanager faces analyze --rotated-only` 修复历史数据 |
+| 35c | feat: 人物合并操作（建议合并面板 + 合并到…对话框）加通用确认弹窗，显示源→目标名称及不可撤销提示 |
 
-当前测试数：**280 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**285 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
@@ -560,6 +563,67 @@ let result: Vec<_> = kept.into_iter().map(|i| candidates[i].0.clone()).collect()
 ```
 
 **检查清单：** 每当新增带 `overflow: hidden` 的 grid item 时，确认其 grid 容器已设置 `grid-auto-rows: max-content`。
+
+### people.parent_id 自引用孤儿节点（合并父节点到子节点）
+
+**症状**：将人物 P 合并到它的子节点 C 后，C 从列表中消失——它既不是顶级节点（parent_id ≠ NULL），也无法从根追溯到它（P 已删除）。
+
+**根因**：旧版 `merge_people` 先执行 `UPDATE people SET parent_id = C WHERE parent_id = P`，再删除 P。由于 C 本身的 parent_id 也是 P，这条 UPDATE 会把 C 的 parent_id 改为 C 自身（自引用循环）。P 删除后 C 就彻底悬挂。
+
+**修法（已实现）**：合并前用递归 CTE 检查 source 是否为 target 的祖先：
+```sql
+WITH RECURSIVE ancestors(id) AS (
+    SELECT parent_id FROM people WHERE id = $target AND parent_id IS NOT NULL
+    UNION ALL
+    SELECT p.parent_id FROM people p
+    JOIN ancestors a ON p.id = a.id
+    WHERE p.parent_id IS NOT NULL
+)
+SELECT COUNT(*) FROM ancestors WHERE id = $source
+```
+若 source 是祖先，先把 target.parent_id 改为 source.parent_id（提升），再把 source 的其余子节点改到 target 下，最后删 source。整个操作在事务内完成。
+
+**修复已有孤儿**：migration 0013 在服务启动时自动修复：
+```sql
+UPDATE people SET parent_id = NULL WHERE id = parent_id;
+```
+
+**禁止**：不要在 merge 里直接 `UPDATE people SET parent_id = target WHERE parent_id = source` 而不排除 target 自身。
+
+### cover_face_id FK 约束导致人脸删除静默失败
+
+**症状**：`execute_job` 或 `reanalyze_one_photo` 调用后，faces 表里的旧记录没有被删除，新旧人脸数据同时存在，embedding 未更新。
+
+**根因**：`people.cover_face_id INTEGER REFERENCES faces(id)` 没有 `ON DELETE` 动作（等价于 RESTRICT）。SQLite 开启 `PRAGMA foreign_keys = ON` 后，直接 `DELETE FROM faces WHERE photo_id = ?` 会因 FK 约束失败。代码使用了 `.ok()` 吞掉了错误，人脸未删、analyze_one 重新插入，导致重复行。
+
+**修法（已实现）**：删除 faces 之前，先把引用了这些人脸的 cover_face_id 清零：
+```rust
+sqlx::query(
+    "UPDATE people SET cover_face_id = NULL \
+     WHERE cover_face_id IN (SELECT id FROM faces WHERE photo_id = ?)",
+)
+.bind(photo_id).execute(pool).await.ok();
+// 之后再 DELETE FROM faces WHERE photo_id = ?
+```
+
+**禁止**：不要直接删除 faces 而不先处理 cover_face_id 引用。
+
+### 旋转/翻转照片后 face embedding 失效
+
+**症状**：用户对照片做旋转/翻转后，人脸聚类出现同一人分属多个人物，或人脸缩略图方向不对。
+
+**根因**：`analyze_one` 在调用时读取当时的 `rotation/flip_h/flip_v` 值，在显示空间检测并存储 bbox + embedding。用户之后旋转照片时，只更新了 DB 字段和缩略图缓存，已存储的 embedding 仍是旧方向下的结果，与新显示方向不一致。
+
+**修法（已实现）**：`PATCH /api/photos/{id}` 和 `batch-update` 检测到 transform 变更后，后台 `tokio::spawn` 调用 `face::job::reanalyze_one_photo(pool, photo_id)`，该函数：
+1. 清除 cover_face_id 引用
+2. 删除旧人脸记录
+3. 以新方向重新检测 + 提取 embedding
+
+**历史数据修复**：对在此修复前已旋转的照片，运行：
+```bash
+picmanager faces analyze --rotated-only
+```
+该命令仅处理 `rotation != 0 OR flip_h != 0 OR flip_v != 0` 且有人脸记录的照片。
 
 ### 测试样本照片（tests/samples/）
 
