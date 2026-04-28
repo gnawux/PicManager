@@ -193,6 +193,11 @@ pub async fn patch_photo(
     if transform_changed {
         let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
         let _ = tokio::fs::remove_file(&cache_path).await;
+        // Re-analyze faces in the new display orientation (fire-and-forget).
+        let pool2 = state.pool.clone();
+        tokio::spawn(async move {
+            crate::face::job::reanalyze_one_photo(&pool2, id).await;
+        });
     }
     Ok(StatusCode::OK)
 }
@@ -254,6 +259,15 @@ pub async fn batch_update_photos(
             let _ = tokio::fs::remove_file(&cache_path).await;
         }
         updated += 1;
+    }
+    if has_transform {
+        let pool2 = state.pool.clone();
+        let ids = body.photo_ids.clone();
+        tokio::spawn(async move {
+            for id in ids {
+                crate::face::job::reanalyze_one_photo(&pool2, id).await;
+            }
+        });
     }
     Ok(Json(BatchUpdateResponse { updated }))
 }

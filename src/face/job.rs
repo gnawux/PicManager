@@ -52,14 +52,13 @@ pub(crate) async fn execute_job(
     let scope_set: Option<HashSet<i64>> = scope.map(|ids| ids.into_iter().collect());
 
     let rows = sqlx::query(
-        "SELECT id, path FROM photos WHERE import_status = 'imported'",
+        "SELECT id FROM photos WHERE import_status = 'imported'",
     )
     .fetch_all(pool)
     .await?;
 
     for row in rows {
         let photo_id: i64 = row.get("id");
-        let path: String = row.get("path");
 
         if let Some(ids) = &scope_set {
             if !ids.contains(&photo_id) {
@@ -67,16 +66,7 @@ pub(crate) async fn execute_job(
             }
         }
 
-        sqlx::query("DELETE FROM faces WHERE photo_id = ?")
-            .bind(photo_id)
-            .execute(pool)
-            .await
-            .ok();
-
-        match image::open(&path) {
-            Ok(img) => { crate::face::analyze_one(pool, photo_id, &img).await; }
-            Err(_) => tracing::warn!("could not open {path} for face re-analysis"),
-        }
+        reanalyze_one_photo(pool, photo_id).await;
 
         sqlx::query(
             "UPDATE face_jobs SET processed = processed + 1 WHERE id = ?",
@@ -97,11 +87,66 @@ pub(crate) async fn execute_job(
     Ok(())
 }
 
+/// Delete all faces for `photo_id` and re-run detection + embedding.
+/// Clears `people.cover_face_id` references first to satisfy FK constraints.
+/// Called both by `execute_job` and by the photo PATCH handler after a
+/// user-applied rotation/flip changes the display-space orientation.
+pub(crate) async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64) {
+    // people.cover_face_id has no ON DELETE action → clear it before deleting
+    // faces to avoid a FK violation that would silently leave stale data.
+    sqlx::query(
+        "UPDATE people SET cover_face_id = NULL \
+         WHERE cover_face_id IN (SELECT id FROM faces WHERE photo_id = ?)",
+    )
+    .bind(photo_id)
+    .execute(pool)
+    .await
+    .ok();
+
+    sqlx::query("DELETE FROM faces WHERE photo_id = ?")
+        .bind(photo_id)
+        .execute(pool)
+        .await
+        .ok();
+
+    let path: Option<String> = sqlx::query_scalar(
+        "SELECT path FROM photos WHERE id = ? AND import_status = 'imported'",
+    )
+    .bind(photo_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+
+    let Some(path) = path else { return };
+
+    match image::open(&path) {
+        Ok(img) => { crate::face::analyze_one(pool, photo_id, &img).await; }
+        Err(_) => tracing::warn!("could not open {path} for face re-analysis after transform"),
+    }
+}
+
 /// Returns the IDs of all imported photos that have no entry in the `faces` table.
 pub async fn scope_for_missing(pool: &SqlitePool) -> Result<Vec<i64>> {
     let ids = sqlx::query_scalar(
         "SELECT id FROM photos WHERE import_status = 'imported' \
          AND NOT EXISTS (SELECT 1 FROM faces WHERE faces.photo_id = photos.id)",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(ids)
+}
+
+/// Returns the IDs of imported photos that have a user-applied rotation or flip
+/// AND at least one face record.  These photos had their faces analyzed before
+/// the transform was applied, so their embeddings/bboxes are in the wrong
+/// orientation space and need to be recomputed.
+pub async fn scope_for_rotated_with_faces(pool: &SqlitePool) -> Result<Vec<i64>> {
+    let ids = sqlx::query_scalar(
+        "SELECT p.id FROM photos p
+         WHERE p.import_status = 'imported'
+           AND (p.rotation != 0 OR p.flip_h != 0 OR p.flip_v != 0)
+           AND EXISTS (SELECT 1 FROM faces f WHERE f.photo_id = p.id)",
     )
     .fetch_all(pool)
     .await?;
@@ -232,6 +277,94 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(processed, 1, "only one photo should have been processed");
+    }
+
+    #[tokio::test]
+    async fn reanalyze_one_photo_deletes_existing_faces() {
+        let pool = test_pool().await;
+        insert_photo(&pool, 1, "imported").await;
+        sqlx::query(
+            "INSERT INTO faces (photo_id, x, y, width, height, confidence) \
+             VALUES (1, 0, 0, 50, 50, 0.9)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        reanalyze_one_photo(&pool, 1).await;
+
+        // In test mode the detector is disabled, so faces end up empty.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE photo_id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn reanalyze_one_photo_clears_cover_face_id() {
+        let pool = test_pool().await;
+        insert_photo(&pool, 1, "imported").await;
+        let face_id: i64 = sqlx::query_scalar(
+            "INSERT INTO faces (photo_id, x, y, width, height, confidence) \
+             VALUES (1, 0, 0, 50, 50, 0.9) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let person_id: i64 =
+            sqlx::query_scalar("INSERT INTO people (name, cover_face_id) VALUES ('A', ?) RETURNING id")
+                .bind(face_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        reanalyze_one_photo(&pool, 1).await;
+
+        let cover: Option<i64> =
+            sqlx::query_scalar("SELECT cover_face_id FROM people WHERE id = ?")
+                .bind(person_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(cover.is_none(), "cover_face_id must be cleared before face deletion");
+    }
+
+    #[tokio::test]
+    async fn scope_for_rotated_with_faces_returns_only_affected() {
+        let pool = test_pool().await;
+        // photo 1: rotated, has face → should appear
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status, rotation) \
+             VALUES (1, 'p1', 'h1', 'jpeg', 'imported', 90)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO faces (photo_id, x, y, width, height) VALUES (1, 0, 0, 10, 10)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // photo 2: rotated, no faces → should NOT appear
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status, rotation) \
+             VALUES (2, 'p2', 'h2', 'jpeg', 'imported', 180)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // photo 3: no rotation, has face → should NOT appear
+        insert_photo(&pool, 3, "imported").await;
+        sqlx::query("INSERT INTO faces (photo_id, x, y, width, height) VALUES (3, 0, 0, 10, 10)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let ids = scope_for_rotated_with_faces(&pool).await.unwrap();
+        assert_eq!(ids, vec![1]);
     }
 
     #[tokio::test]

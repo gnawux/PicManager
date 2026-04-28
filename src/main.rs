@@ -67,6 +67,9 @@ enum FacesAction {
         /// 指定照片 ID（逗号分隔），省略则分析全库
         #[arg(long, value_delimiter = ',')]
         photo_ids: Vec<i64>,
+        /// 只重分析已旋转/翻转且有人脸记录的照片（修复方向变更后 embedding 失效的情况）
+        #[arg(long)]
+        rotated_only: bool,
     },
 }
 
@@ -145,8 +148,20 @@ async fn main() -> anyhow::Result<()> {
             picmanager::web::serve(pool, config).await?;
         }
         Command::Faces { action } => match action {
-            FacesAction::Analyze { photo_ids } => {
-                let scope = if photo_ids.is_empty() { None } else { Some(photo_ids) };
+            FacesAction::Analyze { photo_ids, rotated_only } => {
+                let scope = if rotated_only {
+                    let ids = face::job::scope_for_rotated_with_faces(&pool).await?;
+                    println!("找到 {} 张旋转后未重分析的照片", ids.len());
+                    if ids.is_empty() {
+                        println!("无需重分析，退出。");
+                        return Ok(());
+                    }
+                    Some(ids)
+                } else if photo_ids.is_empty() {
+                    None
+                } else {
+                    Some(photo_ids)
+                };
                 let job_id = face::job::run_job(&pool, scope).await?;
                 println!("人脸分析任务已启动（job_id={job_id}），等待完成…");
                 // Poll until done
