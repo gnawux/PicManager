@@ -261,6 +261,10 @@ async fn import_with_progress(
 
                 let geo_str = if processed < total {
                     "等待中".to_string()
+                } else if geo_total == 0 && !done {
+                    // Import done but geo phase hasn't written geo_total yet
+                    // (group_by_location_scoped is running its initial DB query).
+                    "地理编码中…".to_string()
                 } else if geo_total == 0 {
                     "无 GPS".to_string()
                 } else {
