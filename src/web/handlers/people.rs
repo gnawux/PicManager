@@ -680,9 +680,12 @@ pub async fn get_merge_suggestions(
             .push((*fid, decode_embedding(bytes), *conf));
     }
 
-    // Compute distances using refined centroids
+    // Compute distances using refined centroids.
+    // Skip persons where every face is below CENTROID_LOW_CONF: their centroid
+    // is computed from unreliable embeddings and any distance value would be noisy.
     let mut scored: Vec<(i64, f32)> = person_faces
         .into_iter()
+        .filter(|(_, faces)| faces.iter().any(|(_, _, c)| *c >= CENTROID_LOW_CONF))
         .map(|(pid, faces)| {
             let (centroid, _) = compute_refined_centroid(&faces);
             let dist = cosine_distance(&target_centroid, &centroid);

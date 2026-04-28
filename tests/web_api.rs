@@ -1555,11 +1555,16 @@ async fn insert_photo_plain(pool: &SqlitePool, suffix: &str) -> i64 {
 }
 
 async fn insert_face_emb(pool: &SqlitePool, photo_id: i64, emb: &[u8]) -> i64 {
+    insert_face_emb_with_conf(pool, photo_id, emb, 0.95).await
+}
+
+async fn insert_face_emb_with_conf(pool: &SqlitePool, photo_id: i64, emb: &[u8], conf: f32) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO faces (photo_id, x, y, width, height, confidence, embedding) \
-         VALUES (?, 0, 0, 50, 50, 0.95, ?) RETURNING id"
+         VALUES (?, 0, 0, 50, 50, ?, ?) RETURNING id"
     )
     .bind(photo_id)
+    .bind(conf)
     .bind(emb)
     .fetch_one(pool).await.unwrap()
 }
@@ -1696,6 +1701,44 @@ async fn merge_suggestions_empty_when_only_one_person() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn merge_suggestions_excludes_low_confidence_cluster() {
+    // Bob has an embedding identical to Alice's but every face is below the
+    // CENTROID_LOW_CONF (0.70) threshold → its centroid is unreliable and
+    // it must NOT appear in Alice's suggestions.
+    // Carol is farther away but has normal confidence → should still appear.
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let alice_id = create_named_person(&pool, "Alice").await;
+    let p_alice = insert_photo_plain(&pool, "lc_alice").await;
+    link_face(&pool, alice_id, insert_face_emb(&pool, p_alice, &unit_emb(8, 0)).await).await;
+
+    // Bob: same direction as Alice, but low confidence
+    let bob_id = create_named_person(&pool, "Bob").await;
+    let p_bob = insert_photo_plain(&pool, "lc_bob").await;
+    link_face(&pool, bob_id,
+        insert_face_emb_with_conf(&pool, p_bob, &unit_emb(8, 0), 0.40).await).await;
+
+    // Carol: different direction, normal confidence
+    let carol_id = create_named_person(&pool, "Carol").await;
+    let p_carol = insert_photo_plain(&pool, "lc_carol").await;
+    link_face(&pool, carol_id, insert_face_emb(&pool, p_carol, &unit_emb(8, 1)).await).await;
+
+    let resp = app
+        .oneshot(Request::builder()
+            .uri(&format!("/api/people/{alice_id}/merge-suggestions"))
+            .body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let arr = serde_json::from_slice::<serde_json::Value>(&bytes).unwrap();
+    let arr = arr.as_array().unwrap();
+
+    let ids: Vec<i64> = arr.iter().map(|s| s["person_id"].as_i64().unwrap()).collect();
+    assert!(!ids.contains(&bob_id), "low-confidence cluster must be excluded from suggestions");
+    assert!(ids.contains(&carol_id), "normal-confidence cluster must still be suggested");
 }
 
 // ── outlier faces tests ───────────────────────────────────────────────────────
