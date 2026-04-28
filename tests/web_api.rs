@@ -1586,6 +1586,62 @@ async fn link_face(pool: &SqlitePool, person_id: i64, face_id: i64) {
         .execute(pool).await.unwrap();
 }
 
+// ── people list confidence filter tests ──────────────────────────────────────
+
+#[tokio::test]
+async fn list_people_hides_unnamed_all_low_confidence() {
+    // Unnamed person with only low-confidence faces must not appear in the
+    // default active list, but should still appear with status=all.
+    let (_app, pool, tmp) = test_app_with_pool().await;
+
+    // Named person with low-confidence face → must appear (name overrides filter)
+    let named_id: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('Alice') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let p1 = insert_photo_plain(&pool, "cf1").await;
+    link_face(&pool, named_id,
+        insert_face_emb_with_conf(&pool, p1, &unit_emb(4, 0), 0.30).await).await;
+
+    // Unnamed person with only low-confidence face → must be hidden
+    let low_id: i64 = sqlx::query_scalar("INSERT INTO people DEFAULT VALUES RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let p2 = insert_photo_plain(&pool, "cf2").await;
+    link_face(&pool, low_id,
+        insert_face_emb_with_conf(&pool, p2, &unit_emb(4, 1), 0.40).await).await;
+
+    // Unnamed person with a high-confidence face → must appear
+    let high_id: i64 = sqlx::query_scalar("INSERT INTO people DEFAULT VALUES RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let p3 = insert_photo_plain(&pool, "cf3").await;
+    link_face(&pool, high_id,
+        insert_face_emb_with_conf(&pool, p3, &unit_emb(4, 2), 0.80).await).await;
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app = picmanager::web::router(pool.clone(), config);
+
+    let resp = app.clone()
+        .oneshot(Request::builder().uri("/api/people").body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let arr: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let ids: Vec<i64> = arr.as_array().unwrap()
+        .iter().map(|p| p["id"].as_i64().unwrap()).collect();
+
+    assert!(ids.contains(&named_id), "named person must appear regardless of confidence");
+    assert!(!ids.contains(&low_id), "unnamed all-low-confidence person must be hidden");
+    assert!(ids.contains(&high_id), "unnamed person with high-confidence face must appear");
+
+    // status=all must still return the low-confidence person
+    let resp2 = app
+        .oneshot(Request::builder().uri("/api/people?status=all").body(Body::empty()).unwrap())
+        .await.unwrap();
+    let bytes2 = axum::body::to_bytes(resp2.into_body(), usize::MAX).await.unwrap();
+    let arr2: serde_json::Value = serde_json::from_slice(&bytes2).unwrap();
+    let ids2: Vec<i64> = arr2.as_array().unwrap()
+        .iter().map(|p| p["id"].as_i64().unwrap()).collect();
+    assert!(ids2.contains(&low_id), "status=all must bypass the confidence filter");
+}
+
 // ── merge suggestions tests ───────────────────────────────────────────────────
 
 #[tokio::test]

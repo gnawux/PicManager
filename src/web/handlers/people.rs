@@ -230,11 +230,23 @@ pub async fn list_people(
                 .await
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         } else {
-            sqlx::query_as(&format!("{BASE} WHERE p.status = ? GROUP BY p.id"))
-                .bind(status_filter)
-                .fetch_all(&state.pool)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+            // Unnamed people whose every face is below CENTROID_LOW_CONF are
+            // unreliable detections; hide them from the active list.
+            sqlx::query_as(&format!(
+                "{BASE} WHERE p.status = ?
+                   AND (p.name IS NOT NULL
+                        OR EXISTS (
+                            SELECT 1 FROM person_faces pf3
+                            JOIN faces f3 ON f3.id = pf3.face_id
+                            WHERE pf3.person_id = p.id
+                              AND f3.confidence >= 0.70
+                        ))
+                 GROUP BY p.id"
+            ))
+            .bind(status_filter)
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         }
     };
 
