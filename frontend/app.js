@@ -1479,22 +1479,23 @@ async function loadMergeSuggestions(personId, person) {
     mergeBtn.className = 'btn-ghost';
     mergeBtn.style.cssText = 'font-size:10px;padding:1px 5px;width:100%';
     mergeBtn.addEventListener('click', () => {
-      const sourceName = s.name || '未命名';
-      showMergeConfirm(
-        `将「${sourceName}」（${s.photo_count} 张）合并入当前人物？`,
-        async () => {
-          mergeBtn.disabled = true;
-          await fetch('/api/people/merge', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ source_id: s.person_id, target_id: personId }),
-          });
-          card.remove();
-          if (list.children.length === 0) panel.classList.add('hidden');
-          await loadPersonDetailPage(personId);
-          loadPeopleList();
-        }
-      );
+      const doMerge = async () => {
+        mergeBtn.disabled = true;
+        await fetch('/api/people/merge', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_id: s.person_id, target_id: personId }),
+        });
+        card.remove();
+        if (list.children.length === 0) panel.classList.add('hidden');
+        await loadPersonDetailPage(personId);
+        loadPeopleList();
+      };
+      if (s.name) {
+        showMergeConfirm(`将「${s.name}」（${s.photo_count} 张）合并入当前人物？`, doMerge);
+      } else {
+        doMerge();
+      }
     });
 
     card.append(img, nameEl, meta, mergeBtn);
@@ -2451,22 +2452,23 @@ function filterMergeList() {
 
 function confirmMerge() {
   if (!state.mergeTargetId) return;
-  const target = state.allPeople.find(p => p.id === state.mergeTargetId);
   const source = state.allPeople.find(p => p.id === state.currentPersonId);
-  const targetName = target ? (target.name || '未命名') : '未知';
-  const sourceName = source ? (source.name || '未命名') : '未知';
+  const target = state.allPeople.find(p => p.id === state.mergeTargetId);
   document.getElementById('merge-modal').classList.add('hidden');
-  showMergeConfirm(
-    `将「${sourceName}」并入「${targetName}」？`,
-    async () => {
-      await fetch('/api/people/merge', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ source_id: state.currentPersonId, target_id: state.mergeTargetId }),
-      });
-      loadPeopleList();
-      showPersonDetail(state.mergeTargetId);
-    }
-  );
+  const doMerge = async () => {
+    await fetch('/api/people/merge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_id: state.currentPersonId, target_id: state.mergeTargetId }),
+    });
+    loadPeopleList();
+    showPersonDetail(state.mergeTargetId);
+  };
+  if (source?.name) {
+    const targetName = target ? (target.name || '未命名') : '未知';
+    showMergeConfirm(`将「${source.name}」并入「${targetName}」？`, doMerge);
+  } else {
+    doMerge();
+  }
 }
 
 // ── Animals ───────────────────────────────────────────────────────────────────
