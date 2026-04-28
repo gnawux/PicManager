@@ -329,6 +329,67 @@ pub async fn merge_people(
     State(state): State<AppState>,
     Json(body): Json<MergeBody>,
 ) -> Result<StatusCode, StatusCode> {
+    // Detect whether source is an ancestor of target.  If so, naively
+    // re-parenting target's children to source would produce a self-referencing
+    // parent_id on target, making it invisible in the tree.  Instead we promote
+    // target to source's position first.
+    let source_is_ancestor: bool = sqlx::query_scalar::<_, i64>(
+        "WITH RECURSIVE ancestors(id) AS (
+             SELECT parent_id FROM people WHERE id = ? AND parent_id IS NOT NULL
+             UNION ALL
+             SELECT p.parent_id FROM people p
+             JOIN ancestors a ON p.id = a.id
+             WHERE p.parent_id IS NOT NULL
+         )
+         SELECT COUNT(*) FROM ancestors WHERE id = ?",
+    )
+    .bind(body.target_id)
+    .bind(body.source_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        > 0;
+
+    let mut tx = state
+        .pool
+        .begin()
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if source_is_ancestor {
+        // Promote target to source's position in the tree:
+        // 1. target inherits source's parent
+        sqlx::query(
+            "UPDATE people
+             SET parent_id = (SELECT parent_id FROM people WHERE id = ?)
+             WHERE id = ?",
+        )
+        .bind(body.source_id)
+        .bind(body.target_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        // 2. source's other children become children of target
+        sqlx::query(
+            "UPDATE people SET parent_id = ? WHERE parent_id = ? AND id != ?",
+        )
+        .bind(body.target_id)
+        .bind(body.source_id)
+        .bind(body.target_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    } else {
+        // Normal merge: re-parent source's children to target
+        sqlx::query("UPDATE people SET parent_id = ? WHERE parent_id = ?")
+            .bind(body.target_id)
+            .bind(body.source_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    }
+
     // Move all person_faces from source to target (skip duplicates)
     sqlx::query(
         "INSERT OR IGNORE INTO person_faces (person_id, face_id)
@@ -336,22 +397,18 @@ pub async fn merge_people(
     )
     .bind(body.target_id)
     .bind(body.source_id)
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    // Re-parent any children of source to target
-    sqlx::query("UPDATE people SET parent_id = ? WHERE parent_id = ?")
-        .bind(body.target_id)
-        .bind(body.source_id)
-        .execute(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // Delete source
     sqlx::query("DELETE FROM people WHERE id = ?")
         .bind(body.source_id)
-        .execute(&state.pool)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    tx.commit()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 

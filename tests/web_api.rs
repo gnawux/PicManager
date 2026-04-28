@@ -551,6 +551,103 @@ async fn post_people_merge_and_reparent() {
 }
 
 #[tokio::test]
+async fn merge_parent_into_child_promotes_child() {
+    // G → P → C  (G top-level, P child of G, C child of P)
+    // Merging P (source) into C (target) should promote C to G's level.
+    let (_app, pool, tmp) = test_app_with_pool().await;
+
+    let g_id: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('G') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let p_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name, parent_id) VALUES ('P', ?) RETURNING id",
+    )
+    .bind(g_id).fetch_one(&pool).await.unwrap();
+    let c_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name, parent_id) VALUES ('C', ?) RETURNING id",
+    )
+    .bind(p_id).fetch_one(&pool).await.unwrap();
+
+    // Give P a face so we can verify it moves to C
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) VALUES ('/x.jpg','sh1','jpeg','imported') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    let face_id: i64 = sqlx::query_scalar(
+        "INSERT INTO faces (photo_id, x, y, width, height, confidence) VALUES (?,0,0,50,50,0.9) RETURNING id",
+    ).bind(photo_id).fetch_one(&pool).await.unwrap();
+    sqlx::query("INSERT INTO person_faces (person_id, face_id) VALUES (?, ?)")
+        .bind(p_id).bind(face_id).execute(&pool).await.unwrap();
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app = picmanager::web::router(pool.clone(), config);
+
+    let body = serde_json::json!({ "source_id": p_id, "target_id": c_id });
+    let resp = app
+        .oneshot(Request::builder().uri("/api/people/merge").method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string())).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // P must be gone
+    let p_exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM people WHERE id = ?")
+        .bind(p_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(p_exists, 0);
+
+    // C must be promoted to G's level
+    let c_parent: Option<i64> = sqlx::query_scalar("SELECT parent_id FROM people WHERE id = ?")
+        .bind(c_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(c_parent, Some(g_id), "C should be promoted to G's level");
+
+    // P's face must have moved to C
+    let fc: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM person_faces WHERE person_id = ?")
+        .bind(c_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(fc, 1);
+}
+
+#[tokio::test]
+async fn merge_parent_into_child_reparents_siblings() {
+    // G → P → {C, D}  (D is sibling of C under P)
+    // After merging P→C: C promoted to G's level, D becomes child of C.
+    let (_app, pool, tmp) = test_app_with_pool().await;
+
+    let g_id: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('G') RETURNING id")
+        .fetch_one(&pool).await.unwrap();
+    let p_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name, parent_id) VALUES ('P', ?) RETURNING id",
+    )
+    .bind(g_id).fetch_one(&pool).await.unwrap();
+    let c_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name, parent_id) VALUES ('C', ?) RETURNING id",
+    )
+    .bind(p_id).fetch_one(&pool).await.unwrap();
+    let d_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name, parent_id) VALUES ('D', ?) RETURNING id",
+    )
+    .bind(p_id).fetch_one(&pool).await.unwrap();
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app = picmanager::web::router(pool.clone(), config);
+
+    let body = serde_json::json!({ "source_id": p_id, "target_id": c_id });
+    let resp = app
+        .oneshot(Request::builder().uri("/api/people/merge").method("POST")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string())).unwrap())
+        .await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // C promoted to G's level
+    let c_parent: Option<i64> = sqlx::query_scalar("SELECT parent_id FROM people WHERE id = ?")
+        .bind(c_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(c_parent, Some(g_id));
+
+    // D re-parented to C
+    let d_parent: Option<i64> = sqlx::query_scalar("SELECT parent_id FROM people WHERE id = ?")
+        .bind(d_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(d_parent, Some(c_id), "D (sibling) should be re-parented under C");
+}
+
+#[tokio::test]
 async fn get_face_thumb_returns_jpeg() {
     let (_app, pool, tmp) = test_app_with_pool().await;
 
