@@ -97,7 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // People view
-  document.getElementById('fill-meta-btn').addEventListener('click', fillMissingMeta);
+  document.getElementById('fill-faces-btn').addEventListener('click', fillMissingFaces);
+  document.getElementById('fill-geo-btn').addEventListener('click', fillMissingGeo);
   document.getElementById('integrate-faces-btn').addEventListener('click', triggerIntegrate);
   document.getElementById('recluster-btn').addEventListener('click', () => {
     document.getElementById('recluster-confirm-dialog').showModal();
@@ -2546,57 +2547,74 @@ function removePersonCard(personId, card) {
   setTimeout(() => card.remove(), 250);
 }
 
-async function fillMissingMeta() {
-  const btn = document.getElementById('fill-meta-btn');
-  const statusEl = document.getElementById('fill-meta-status');
+async function fillMissingFaces() {
+  const btn = document.getElementById('fill-faces-btn');
+  const statusEl = document.getElementById('fill-faces-status');
   btn.disabled = true;
   statusEl.textContent = '启动中…';
 
-  const [faceRes, geoRes] = await Promise.all([
-    fetchJSON('/api/faces/analyze', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ missing_only: true }) }),
-    fetchJSON('/api/geo/regeocode', { method: 'POST' }),
-  ]);
+  const faceRes = await fetchJSON('/api/faces/analyze', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ missing_only: true }),
+  });
 
-  if (!faceRes && !geoRes) {
+  if (!faceRes) {
     statusEl.textContent = '启动失败';
     btn.disabled = false;
     return;
   }
 
-  const faceJobId = faceRes && faceRes.job_id;
-  let geoCount = geoRes ? geoRes.count : 0;
-  let geoStatus = geoRes ? geoRes.status : 'done';
-
-  function updateStatus(faceText, geoText) {
-    statusEl.textContent = `人脸：${faceText} | 地理：${geoText}`;
-  }
-
+  const faceJobId = faceRes.job_id;
   const pollId = setInterval(async () => {
-    const [faceJob, geoSt] = await Promise.all([
-      faceJobId ? fetchJSON(`/api/faces/jobs/${faceJobId}`) : Promise.resolve(null),
-      fetchJSON('/api/geo/regeocode/status'),
-    ]);
-
-    const faceText = faceJob
+    const faceJob = faceJobId ? await fetchJSON(`/api/faces/jobs/${faceJobId}`) : null;
+    const text = faceJob
       ? (faceJob.status === 'running'
           ? `${faceJob.processed}/${faceJob.total ?? '?'}`
           : faceJob.status === 'done' ? '完成' : '失败')
-      : (faceRes ? '完成' : '跳过');
-
-    const geoRunning = geoSt && geoSt.running;
-    const geoText = geoRunning
-      ? `处理中（${geoCount} 张待处理）`
-      : (geoStatus === 'already_running' ? '已在运行' : `完成（${geoCount} 张）`);
-
-    const faceDone = !faceJob || faceJob.status !== 'running';
-    if (faceDone && !geoRunning) {
+      : '完成';
+    statusEl.textContent = text;
+    if (!faceJob || faceJob.status !== 'running') {
       clearInterval(pollId);
       btn.disabled = false;
-      updateStatus(faceText, geoText);
-      if (state.currentView === 'locations') loadGeoHierarchy();
       if (state.currentView === 'people') loadPeopleList();
-    } else {
-      updateStatus(faceText, geoText);
+    }
+  }, 2000);
+}
+
+async function fillMissingGeo() {
+  const btn = document.getElementById('fill-geo-btn');
+  const statusEl = document.getElementById('fill-geo-status');
+  btn.disabled = true;
+  statusEl.textContent = '启动中…';
+
+  const geoRes = await fetchJSON('/api/geo/regeocode', { method: 'POST' });
+
+  if (!geoRes) {
+    statusEl.textContent = '启动失败';
+    btn.disabled = false;
+    return;
+  }
+
+  const geoCount = geoRes.count ?? 0;
+  const geoStatus = geoRes.status;
+
+  if (geoStatus === 'already_running') {
+    statusEl.textContent = '已在运行中';
+    btn.disabled = false;
+    return;
+  }
+
+  statusEl.textContent = `处理中（${geoCount} 张待处理）`;
+
+  const pollId = setInterval(async () => {
+    const geoSt = await fetchJSON('/api/geo/regeocode/status');
+    const running = geoSt && geoSt.running;
+    if (!running) {
+      clearInterval(pollId);
+      btn.disabled = false;
+      statusEl.textContent = `完成（${geoCount} 张）`;
+      if (state.currentView === 'locations') loadGeoHierarchy();
     }
   }, 2000);
 }
