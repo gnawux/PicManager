@@ -3,7 +3,7 @@ pub mod handlers;
 
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, patch, post},
 };
 use sqlx::SqlitePool;
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
@@ -11,6 +11,7 @@ use crate::config::Config;
 use embed::static_handler;
 use handlers::{
     albums::{list_albums, list_album_photos, merge_albums},
+    collections::{list_collections, create_collection, rename_collection, delete_collection, add_photos, remove_photos, list_collection_photos},
     animals::{list_species, list_species_photos, list_photo_animals},
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
@@ -51,6 +52,9 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/albums", get(list_albums))
         .route("/api/albums/{id}/photos", get(list_album_photos))
         .route("/api/albums/merge", post(merge_albums))
+        .route("/api/collections", get(list_collections).post(create_collection))
+        .route("/api/collections/{id}", patch(rename_collection).delete(delete_collection))
+        .route("/api/collections/{id}/photos", get(list_collection_photos).post(add_photos).delete(remove_photos))
         .route("/api/geo/hierarchy", get(get_geo_hierarchy))
         .route("/api/geo/photos", get(get_geo_photos))
         .route("/api/geo/regeocode", post(start_regeocode))

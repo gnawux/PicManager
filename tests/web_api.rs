@@ -2265,3 +2265,120 @@ async fn batch_rotate_updates_all_photos() {
         assert_eq!(rotation, 270);
     }
 }
+
+// ── collections CRUD tests ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn list_collections_returns_empty_initially() {
+    let app = test_app().await;
+    let resp = app
+        .oneshot(Request::builder().uri("/api/collections").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let arr: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(arr.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn create_collection_returns_id_and_name() {
+    let app = test_app().await;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/collections")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"夏日回忆"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let obj: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(obj["id"].as_i64().unwrap() > 0);
+    assert_eq!(obj["name"].as_str().unwrap(), "夏日回忆");
+}
+
+#[tokio::test]
+async fn rename_collection_changes_name() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let cid: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('旧名字', 'curated') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = _tmp.path().to_path_buf(); c };
+    let app2 = picmanager::web::router(pool.clone(), config);
+    let resp = app2
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri(format!("/api/collections/{cid}"))
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"name":"新名字"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let name: (String,) = sqlx::query_as("SELECT name FROM albums WHERE id = ?")
+        .bind(cid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(name.0, "新名字");
+    let _ = app;
+}
+
+#[tokio::test]
+async fn delete_collection_removes_album_and_memberships() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let cid: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('要删除', 'curated') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let pid = insert_photo_plain(&pool, "dc1").await;
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(pid)
+        .bind(cid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app2 = picmanager::web::router(pool.clone(), config);
+    let resp = app2
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/collections/{cid}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM albums WHERE id = ?")
+        .bind(cid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0, "album record removed");
+
+    let count2: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photo_albums WHERE album_id = ?")
+        .bind(cid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count2.0, 0, "photo_albums cascade deleted");
+    let _ = app;
+}
