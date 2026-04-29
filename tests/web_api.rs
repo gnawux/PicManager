@@ -2266,6 +2266,171 @@ async fn batch_rotate_updates_all_photos() {
     }
 }
 
+// ── collections photo membership tests ───────────────────────────────────────
+
+async fn make_collection(pool: &SqlitePool, name: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES (?, 'curated') RETURNING id",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn add_photos_to_collection_ok() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let cid = make_collection(&pool, "test").await;
+    let pid1 = insert_photo_plain(&pool, "ap1").await;
+    let pid2 = insert_photo_plain(&pool, "ap2").await;
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app2 = picmanager::web::router(pool.clone(), config);
+    let resp = app2
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/collections/{cid}/photos"))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"photo_ids":[{pid1},{pid2}]}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let obj: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(obj["added"].as_u64().unwrap(), 2);
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photo_albums WHERE album_id = ?")
+        .bind(cid).fetch_one(&pool).await.unwrap();
+    assert_eq!(count.0, 2);
+    let _ = app;
+}
+
+#[tokio::test]
+async fn add_photos_deduplicates() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let cid = make_collection(&pool, "dedup").await;
+    let pid = insert_photo_plain(&pool, "dedup1").await;
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(pid).bind(cid).execute(&pool).await.unwrap();
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app2 = picmanager::web::router(pool.clone(), config);
+    let resp = app2
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/collections/{cid}/photos"))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"photo_ids":[{pid}]}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let obj: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(obj["added"].as_u64().unwrap(), 0, "already in collection, nothing added");
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photo_albums WHERE album_id = ?")
+        .bind(cid).fetch_one(&pool).await.unwrap();
+    assert_eq!(count.0, 1, "still only one row");
+    let _ = app;
+}
+
+#[tokio::test]
+async fn remove_photos_from_collection_ok() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let cid = make_collection(&pool, "remove").await;
+    let pid1 = insert_photo_plain(&pool, "rm1").await;
+    let pid2 = insert_photo_plain(&pool, "rm2").await;
+    for pid in [pid1, pid2] {
+        sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+            .bind(pid).bind(cid).execute(&pool).await.unwrap();
+    }
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app2 = picmanager::web::router(pool.clone(), config);
+    let resp = app2
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/collections/{cid}/photos"))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"photo_ids":[{pid1}]}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let obj: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(obj["removed"].as_u64().unwrap(), 1);
+
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM photo_albums WHERE album_id = ?")
+        .bind(cid).fetch_one(&pool).await.unwrap();
+    assert_eq!(count.0, 1, "one photo still in collection");
+    let _ = app;
+}
+
+#[tokio::test]
+async fn remove_nonexistent_photos_returns_zero() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let cid = make_collection(&pool, "empty").await;
+    let pid = insert_photo_plain(&pool, "ne1").await;
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app2 = picmanager::web::router(pool.clone(), config);
+    let resp = app2
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/collections/{cid}/photos"))
+                .header("content-type", "application/json")
+                .body(Body::from(format!(r#"{{"photo_ids":[{pid}]}}"#)))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let obj: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(obj["removed"].as_u64().unwrap(), 0);
+    let _ = app;
+}
+
+#[tokio::test]
+async fn list_collection_photos_paginated() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let cid = make_collection(&pool, "paged").await;
+    for i in 0..5u64 {
+        let pid = insert_photo_plain(&pool, &format!("pg{i}")).await;
+        sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+            .bind(pid).bind(cid).execute(&pool).await.unwrap();
+    }
+
+    let config = { let mut c = picmanager::config::Config::default(); c.thumb_cache_dir = tmp.path().to_path_buf(); c };
+    let app2 = picmanager::web::router(pool.clone(), config);
+    let resp = app2
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/collections/{cid}/photos?page=1&per_page=3"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let obj: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(obj["total"].as_i64().unwrap(), 5);
+    assert_eq!(obj["photos"].as_array().unwrap().len(), 3);
+    let _ = app;
+}
+
 // ── collections CRUD tests ────────────────────────────────────────────────────
 
 #[tokio::test]
