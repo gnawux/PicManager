@@ -38,6 +38,15 @@
         <h2>相册</h2>
         <ul id="album-list"></ul>
       </section>
+
+      <section id="collections-section" class="albums-panel">
+        <h2 style="display:flex;align-items:center;justify-content:space-between">
+          <span>精选集</span>
+          <button id="create-collection-btn" title="新建精选集"
+                  style="padding:2px 8px;font-size:13px;background:#45475a;color:#cdd6f4">＋</button>
+        </h2>
+        <ul id="collection-list"></ul>
+      </section>
     </aside>
 
     <main class="content">
@@ -384,6 +393,32 @@
       <div style="display:flex;gap:8px">
         <button id="merge-confirm-ok-btn" style="background:#c0392b;color:#fff">确认合并</button>
         <button id="merge-confirm-cancel-btn" class="btn-ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Create collection dialog -->
+  <div id="create-collection-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:360px">
+      <h2>新建精选集</h2>
+      <input id="create-collection-name" type="text" placeholder="精选集名称…"
+             style="display:block;width:100%;padding:6px;border:1px solid #ccc;border-radius:6px;margin:12px 0 16px" />
+      <div style="display:flex;gap:8px">
+        <button id="create-collection-ok-btn">创建</button>
+        <button id="create-collection-cancel-btn" class="btn-ghost">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename collection dialog -->
+  <div id="rename-collection-modal" class="modal hidden">
+    <div class="modal-inner" style="max-width:360px">
+      <h2>重命名精选集</h2>
+      <input id="rename-collection-name" type="text" placeholder="精选集名称…"
+             style="display:block;width:100%;padding:6px;border:1px solid #ccc;border-radius:6px;margin:12px 0 16px" />
+      <div style="display:flex;gap:8px">
+        <button id="rename-collection-ok-btn">保存</button>
+        <button id="rename-collection-cancel-btn" class="btn-ghost">取消</button>
       </div>
     </div>
   </div>

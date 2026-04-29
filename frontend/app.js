@@ -5,6 +5,8 @@ const state = {
   perPage: 50,
   total: 0,
   albumId: null,
+  collectionId: null,   // currently viewed collection
+  inCollection: false,  // true when showing a curated collection
   importPollId: null,
   photos: [],       // current page photos for the Photos tab
   detailPhotos: [], // photos used for prev/next navigation in the open detail modal
@@ -45,7 +47,40 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   loadAlbums();
+  loadCollections();
   loadPhotos();
+
+  // Collections sidebar
+  document.getElementById('create-collection-btn').addEventListener('click', () => {
+    document.getElementById('create-collection-name').value = '';
+    document.getElementById('create-collection-modal').classList.remove('hidden');
+    document.getElementById('create-collection-name').focus();
+  });
+  document.getElementById('create-collection-ok-btn').addEventListener('click', async () => {
+    const name = document.getElementById('create-collection-name').value.trim();
+    if (!name) return;
+    await createCollection(name);
+    document.getElementById('create-collection-modal').classList.add('hidden');
+  });
+  document.getElementById('create-collection-cancel-btn').addEventListener('click', () => {
+    document.getElementById('create-collection-modal').classList.add('hidden');
+  });
+  document.getElementById('create-collection-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('create-collection-ok-btn').click();
+  });
+  document.getElementById('rename-collection-ok-btn').addEventListener('click', async () => {
+    const name = document.getElementById('rename-collection-name').value.trim();
+    const id = parseInt(document.getElementById('rename-collection-modal').dataset.collectionId);
+    if (!name || !id) return;
+    await renameCollection(id, name);
+    document.getElementById('rename-collection-modal').classList.add('hidden');
+  });
+  document.getElementById('rename-collection-cancel-btn').addEventListener('click', () => {
+    document.getElementById('rename-collection-modal').classList.add('hidden');
+  });
+  document.getElementById('rename-collection-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('rename-collection-ok-btn').click();
+  });
 
   document.getElementById('import-btn').addEventListener('click', startImport);
   document.getElementById('prev-btn').addEventListener('click', () => changePage(-1));
@@ -197,9 +232,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ── Photos ────────────────────────────────────────────────────────────────────
 async function loadPhotos() {
-  const url = state.albumId
-    ? `/api/albums/${state.albumId}/photos?page=${state.page}&per_page=${state.perPage}`
-    : `/api/photos?page=${state.page}&per_page=${state.perPage}`;
+  let url;
+  if (state.inCollection && state.collectionId) {
+    url = `/api/collections/${state.collectionId}/photos?page=${state.page}&per_page=${state.perPage}`;
+  } else if (state.albumId) {
+    url = `/api/albums/${state.albumId}/photos?page=${state.page}&per_page=${state.perPage}`;
+  } else {
+    url = `/api/photos?page=${state.page}&per_page=${state.perPage}`;
+  }
 
   const data = await fetchJSON(url);
   if (!data) return;
@@ -661,10 +701,97 @@ function collapseAlbumCategory(kind) {
 
 function selectAlbum(albumId, li) {
   document.querySelectorAll('#album-list .album-entry').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('#collection-list .album-entry').forEach(el => el.classList.remove('active'));
   li.classList.add('active');
   state.albumId = albumId;
+  state.collectionId = null;
+  state.inCollection = false;
   state.page = 1;
   loadPhotos();
+}
+
+function selectCollection(collectionId, li) {
+  document.querySelectorAll('#album-list .album-entry').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('#collection-list .album-entry').forEach(el => el.classList.remove('active'));
+  li.classList.add('active');
+  state.collectionId = collectionId;
+  state.inCollection = true;
+  state.albumId = null;
+  state.page = 1;
+  loadPhotos();
+}
+
+// ── Collections ───────────────────────────────────────────────────────────────
+async function loadCollections() {
+  const collections = await fetchJSON('/api/collections');
+  if (!collections) return;
+  const ul = document.getElementById('collection-list');
+  ul.innerHTML = '';
+  collections.forEach(c => {
+    const li = document.createElement('li');
+    li.className = 'album-entry';
+    if (state.inCollection && state.collectionId === c.id) li.classList.add('active');
+    li.innerHTML = `
+      <span class="collection-name" style="flex:1;overflow:hidden;text-overflow:ellipsis">${c.name}</span>
+      <span class="count">${c.photo_count}</span>
+      <button class="collection-rename-btn btn-ghost" title="改名"
+              style="padding:1px 5px;font-size:11px;background:transparent;color:#6c7086;flex-shrink:0">✎</button>
+      <button class="collection-delete-btn btn-ghost" title="删除"
+              style="padding:1px 5px;font-size:11px;background:transparent;color:#6c7086;flex-shrink:0">×</button>`;
+    li.style.display = 'flex';
+    li.style.alignItems = 'center';
+    li.style.gap = '2px';
+    li.addEventListener('click', e => {
+      if (e.target.closest('.collection-rename-btn') || e.target.closest('.collection-delete-btn')) return;
+      selectCollection(c.id, li);
+    });
+    li.querySelector('.collection-rename-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      const modal = document.getElementById('rename-collection-modal');
+      modal.dataset.collectionId = c.id;
+      document.getElementById('rename-collection-name').value = c.name;
+      modal.classList.remove('hidden');
+      document.getElementById('rename-collection-name').focus();
+    });
+    li.querySelector('.collection-delete-btn').addEventListener('click', e => {
+      e.stopPropagation();
+      deleteCollection(c.id, c.name);
+    });
+    ul.appendChild(li);
+  });
+}
+
+async function createCollection(name) {
+  const result = await fetch('/api/collections', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!result.ok) return;
+  loadCollections();
+}
+
+async function renameCollection(id, name) {
+  if (!name) return;
+  await fetch(`/api/collections/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  loadCollections();
+}
+
+async function deleteCollection(id, name) {
+  if (!confirm(`删除精选集"${name}"？照片本身不受影响。`)) return;
+  await fetch(`/api/collections/${id}`, { method: 'DELETE' });
+  if (state.inCollection && state.collectionId === id) {
+    state.inCollection = false;
+    state.collectionId = null;
+    state.albumId = null;
+    state.page = 1;
+    loadPhotos();
+  }
+  loadCollections();
 }
 
 // ── Import ────────────────────────────────────────────────────────────────────
