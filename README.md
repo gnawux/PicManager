@@ -92,6 +92,8 @@ picmanager dedup
 
 Scans all imported photos for visual similarity (perceptual hash, Hamming distance ≤ 10), then presents each duplicate group interactively. Enter the photo IDs to keep; the rest are soft-deleted (marked `deleted` in the database — no files are removed from disk).
 
+After running `dedup`, open the Web UI and click the 🔍 button in the **维护操作** row to review and confirm each duplicate group.
+
 ### Start the Web server
 
 ```bash
