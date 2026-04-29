@@ -210,6 +210,46 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   document.getElementById('batch-time-save-btn').addEventListener('click', saveBatchTime);
 
+  // Collection batch operations
+  document.getElementById('batch-add-collection-btn').addEventListener('click', () => showAddToCollectionModal([...state.selected]));
+  document.getElementById('batch-remove-collection-btn').addEventListener('click', async () => {
+    if (state.inCollection && state.collectionId) {
+      await removePhotosFromCollection(state.collectionId, [...state.selected]);
+      clearSelection();
+      toggleSelectMode();
+      loadPhotos();
+    }
+  });
+  document.getElementById('add-to-collection-cancel-btn').addEventListener('click', () => {
+    document.getElementById('add-to-collection-modal').classList.add('hidden');
+  });
+  document.getElementById('add-to-collection-create-btn').addEventListener('click', async () => {
+    const name = document.getElementById('add-to-collection-new-name').value.trim();
+    if (!name) return;
+    const resp = await fetch('/api/collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!resp.ok) return;
+    const col = await resp.json();
+    const photoIds = JSON.parse(document.getElementById('add-to-collection-modal').dataset.photoIds || '[]');
+    await addPhotosToCollection(col.id, photoIds);
+    document.getElementById('add-to-collection-modal').classList.add('hidden');
+    loadCollections();
+  });
+
+  // "添加整个相册到精选集" toolbar button
+  document.getElementById('add-album-to-collection-btn').addEventListener('click', async () => {
+    if (!state.albumId && !state.inCollection) return;
+    const srcAlbumId = state.albumId;
+    // Fetch all photos from this album (up to 5000 – reasonable limit)
+    const data = await fetchJSON(`/api/albums/${srcAlbumId}/photos?page=1&per_page=5000`);
+    if (!data) return;
+    const photoIds = data.photos.map(p => p.id);
+    showAddToCollectionModal(photoIds);
+  });
+
   // Animals view
   document.getElementById('animal-back-btn').addEventListener('click', showAnimalSpeciesList);
   document.getElementById('animal-prev-btn').addEventListener('click', () => changeAnimalPage(-1));
@@ -305,6 +345,8 @@ function updateBatchBar() {
   if (n > 0) {
     bar.classList.remove('hidden');
     document.getElementById('batch-count').textContent = `已选 ${n} 张`;
+    document.getElementById('batch-add-collection-btn').classList.toggle('hidden', state.inCollection);
+    document.getElementById('batch-remove-collection-btn').classList.toggle('hidden', !state.inCollection);
   } else {
     bar.classList.add('hidden');
   }
@@ -707,6 +749,8 @@ function selectAlbum(albumId, li) {
   state.collectionId = null;
   state.inCollection = false;
   state.page = 1;
+  // Show "添加整个相册" only when a specific album (not "all") is selected
+  document.getElementById('add-album-to-collection-btn').classList.toggle('hidden', !albumId);
   loadPhotos();
 }
 
@@ -718,6 +762,7 @@ function selectCollection(collectionId, li) {
   state.inCollection = true;
   state.albumId = null;
   state.page = 1;
+  document.getElementById('add-album-to-collection-btn').classList.add('hidden');
   loadPhotos();
 }
 
@@ -792,6 +837,52 @@ async function deleteCollection(id, name) {
     loadPhotos();
   }
   loadCollections();
+}
+
+async function showAddToCollectionModal(photoIds) {
+  const modal = document.getElementById('add-to-collection-modal');
+  modal.dataset.photoIds = JSON.stringify(photoIds);
+  document.getElementById('add-to-collection-new-name').value = '';
+  const collections = await fetchJSON('/api/collections');
+  const ul = document.getElementById('add-to-collection-list');
+  ul.innerHTML = '';
+  if (!collections || collections.length === 0) {
+    ul.innerHTML = '<li style="padding:8px;color:#888;font-size:12px">暂无精选集，请在下方新建</li>';
+  } else {
+    collections.forEach(c => {
+      const li = document.createElement('li');
+      li.style.cssText = 'padding:7px 10px;cursor:pointer;border-bottom:1px solid #f0f0f0';
+      li.textContent = `${c.name} (${c.photo_count} 张)`;
+      li.addEventListener('mouseover', () => li.style.background = '#f5f5f5');
+      li.addEventListener('mouseout', () => li.style.background = '');
+      li.addEventListener('click', async () => {
+        await addPhotosToCollection(c.id, photoIds);
+        modal.classList.add('hidden');
+        loadCollections();
+        if (state.inCollection && state.collectionId === c.id) loadPhotos();
+      });
+      ul.appendChild(li);
+    });
+  }
+  modal.classList.remove('hidden');
+}
+
+async function addPhotosToCollection(collectionId, photoIds) {
+  if (!photoIds.length) return;
+  await fetch(`/api/collections/${collectionId}/photos`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ photo_ids: photoIds }),
+  });
+}
+
+async function removePhotosFromCollection(collectionId, photoIds) {
+  if (!photoIds.length) return;
+  await fetch(`/api/collections/${collectionId}/photos`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ photo_ids: photoIds }),
+  });
 }
 
 // ── Import ────────────────────────────────────────────────────────────────────
