@@ -1,5 +1,6 @@
 use reqwest::Client;
 use sqlx::SqlitePool;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
 use std::time::Duration;
 
@@ -64,8 +65,9 @@ pub async fn group_by_location(pool: &SqlitePool) -> Result<()> {
         .unwrap_or_else(|_| Client::new());
 
     let mut need_rate_limit = false;
+    let mut session_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for (photo_id, lat, lon) in photos {
-        let city = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit).await;
+        let city = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache).await;
         let Some(city) = city else { continue };
         ensure_location_album(pool, photo_id, &city).await?;
     }
@@ -80,18 +82,26 @@ struct GeoInfo {
 }
 
 /// Returns a city name for the given coordinates.
-/// Checks the geocache first; falls back to the Nominatim API on a cache miss.
+/// Checks the in-memory session cache first, then the DB geocache, then Nominatim.
 /// `need_rate_limit` is set to true after an actual API call is made so the
 /// caller can sleep before the next call.
+/// `session_cache` is an in-memory L1 cache scoped to one import/geocoding session;
+/// it eliminates DB round-trips for repeated coordinates within the same run.
 async fn cached_or_fetch(
     pool: &SqlitePool,
     client: &Client,
     lat: f64,
     lon: f64,
     need_rate_limit: &mut bool,
+    session_cache: &mut HashMap<(String, String), Option<String>>,
 ) -> Option<String> {
     let lat_key = coord_key(lat);
     let lon_key = coord_key(lon);
+
+    // L1: in-memory cache — no DB round-trip for coordinates seen earlier this session.
+    if let Some(cached) = session_cache.get(&(lat_key.clone(), lon_key.clone())) {
+        return cached.clone();
+    }
 
     // Read city, state, and country to distinguish permanent failures from transient ones.
     let row: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
@@ -110,6 +120,7 @@ async fn cached_or_fetch(
         if !truly_empty {
             // Complete entry (state set), or a partial result (only country known) — use as-is.
             if state.is_some() || city.is_none() {
+                session_cache.insert((lat_key, lon_key), city.clone());
                 return city;
             }
             // city is set but state is NULL → stale entry written before municipality fix.
@@ -151,6 +162,7 @@ async fn cached_or_fetch(
         .bind(&city).bind(&state).bind(&county).bind(&country)
         .execute(pool)
         .await;
+        session_cache.insert((lat_key, lon_key), city.clone());
         return city;
     }
 
@@ -180,6 +192,7 @@ async fn cached_or_fetch(
     .execute(pool)
     .await;
 
+    session_cache.insert((lat_key, lon_key), city.clone());
     city
 }
 
@@ -266,8 +279,9 @@ pub async fn group_by_location_scoped(
         .unwrap_or_else(|_| Client::new());
 
     let mut need_rate_limit = false;
+    let mut session_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for (photo_id, lat, lon) in photos {
-        let city = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit).await;
+        let city = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache).await;
         if let Some(city) = city {
             ensure_location_album(pool, photo_id, &city).await?;
         }
