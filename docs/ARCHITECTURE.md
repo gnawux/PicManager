@@ -82,6 +82,7 @@ picmanager/
 │           ├── photos.rs    # GET /api/photos、GET /api/photos/:id/thumb、GET/PATCH /api/photos/:id、POST /api/photos/batch-update、GET /api/photos/gps-points
 │           ├── dedup.rs     # GET /api/dedup、POST /api/dedup/:id/resolve
 │           ├── albums.rs    # GET /api/albums、GET /api/albums/:id/photos、POST /api/albums/merge
+│           ├── collections.rs # GET/POST /api/collections、PATCH/DELETE /api/collections/:id、GET/POST/DELETE /api/collections/:id/photos
 │           ├── faces.rs     # POST /api/faces/analyze（支持 missing_only）、GET /api/faces/jobs/:id、GET /api/photos/:id/faces
 │           ├── people.rs    # GET /api/people（含 status 过滤）、GET /api/people/tree、POST /api/people/cluster/merge、PATCH /api/people/:id、POST /api/people/batch-update、GET /api/people/:id、POST /api/people/:id/reparent、GET /api/faces/:id/thumb
 │           ├── geo.rs       # GET /api/geo/hierarchy、POST /api/geo/regeocode、GET /api/geo/regeocode/status

@@ -71,6 +71,7 @@ src/
       photos.rs            list_photos, get_thumb, get_photo_file, get_photo, patch_photo, batch_update_photos, get_gps_points
       dedup.rs             list_dedup_groups, resolve_group
       albums.rs            list_albums, list_album_photos, merge_albums
+      collections.rs       list_collections, create_collection, rename_collection, delete_collection, add_photos, remove_photos, list_collection_photos
       faces.rs             start_analyze (支持 missing_only), get_job_status, list_photo_faces
       people.rs            list_people, get_person_photos, get_people_tree, cluster_people, merge_people, patch_person, batch_update_people, reparent_person, get_face_thumb
       geo.rs               get_geo_hierarchy, start_regeocode, get_regeocode_status
@@ -1107,6 +1108,13 @@ rotation_delta/flip_h_toggle/flip_v_toggle 生效时，除删除缩略图缓存�
 | GET | `/api/albums` | — | `AlbumRow[]` JSON | 500 |
 | GET | `/api/albums/{id}/photos` | — | 分页照片 JSON | 404 / 500 |
 | POST | `/api/albums/merge` | `{"source":id,"target":id}` | 200 | 404 / 500 |
+| GET | `/api/collections` | — | `CollectionRow[]` JSON（kind='curated'，按 created_at 降序） | 500 |
+| POST | `/api/collections` | `{"name":"..."}` | 201 `{"id":N,"name":"..."}` | 400 / 500 |
+| PATCH | `/api/collections/{id}` | `{"name":"..."}` | 200 | 400 / 404 / 500 |
+| DELETE | `/api/collections/{id}` | — | 204 | 404 / 500 |
+| GET | `/api/collections/{id}/photos` | `?page=N&per_page=N` | 分页照片 JSON（taken_at 排序） | 404 / 500 |
+| POST | `/api/collections/{id}/photos` | `{"photo_ids":[...]}` | `{"added":N}` | 404 / 500 |
+| DELETE | `/api/collections/{id}/photos` | `{"photo_ids":[...]}` | `{"removed":N}` | 404 / 500 |
 | GET | `/api/faces/{id}/thumb` | — | JPEG bytes（人脸裁剪图） | 404 / 500 |
 | GET | `/api/geo/hierarchy` | — | 地理层级嵌套 JSON | 500 |
 | GET | `/api/geo/photos` | `?country=X&state=Y&city=Z&page=N&per_page=N` | `{total,photos[]}` | 500 |

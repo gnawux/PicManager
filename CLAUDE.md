@@ -63,6 +63,7 @@ src/
       photos.rs        GET /api/photos, GET /api/photos/{id}/thumb, GET /api/photos/{id}/file, GET /api/photos/{id}, PATCH /api/photos/{id}, POST /api/photos/batch-update, GET /api/photos/gps-points
       dedup.rs         GET /api/dedup, POST /api/dedup/{group_id}/resolve
       albums.rs        GET /api/albums（含 latest_photo_at 字段）, GET /api/albums/{id}/photos, POST /api/albums/merge
+      collections.rs   GET /api/collections, POST /api/collections, PATCH/DELETE /api/collections/{id}, GET/POST/DELETE /api/collections/{id}/photos
       faces.rs         POST /api/faces/analyze, GET /api/faces/jobs/{id}, GET /api/photos/{id}/faces
       people.rs        GET /api/people（含 status/name_exact 过滤）, PATCH /api/people/{id}, POST /api/people/batch-update, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
       geo.rs           GET /api/geo/hierarchy
@@ -184,8 +185,13 @@ docs/
 | 35a | fix: 人物合并父→子节点时子节点升级到父节点位置（递归 CTE 祖先检测 + 事务）；migration 0013 修复已有自引用孤儿节点 |
 | 35b | fix: 照片旋转/翻转后自动后台触发人脸重分析；提取 reanalyze_one_photo（修复 cover_face_id FK 静默失败 bug）；`picmanager faces analyze --rotated-only` 修复历史数据 |
 | 35c | feat: 人物合并操作（建议合并面板 + 合并到…对话框）加通用确认弹窗，显示源→目标名称及不可撤销提示 |
+| 36a | feat: 精选集后端 CRUD（GET/POST /api/collections，PATCH/DELETE /api/collections/{id}）；albums 表复用 kind='curated'；REQUIREMENTS.md 新增精选集节；4 个 TDD 测试 |
+| 36b | feat: 精选集照片成员管理（POST/DELETE /api/collections/{id}/photos，GET /api/collections/{id}/photos）；5 个 TDD 测试 |
+| 36c | feat: 前端精选集侧边栏（创建/改名/删除）；loadCollections/selectCollection；loadPhotos 支持 inCollection 状态 |
+| 36d | feat: 前端批量加入/移除精选集；add-to-collection picker 弹窗；工具栏"精选"按钮（整相册加入） |
+| 36e | docs: DESIGN.md 新增 7 个 API 端点，ARCHITECTURE.md 新增 collections.rs，CLAUDE.md 更新 |
 
-当前测试数：**285 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**296 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
