@@ -37,6 +37,7 @@ pub struct ImportProgress {
     pub skipped: AtomicUsize,
     pub errors: AtomicUsize,
     pub faces_found: AtomicUsize,
+    pub gps_found: AtomicUsize,
     pub geo_total: AtomicUsize,
     pub geo_done: AtomicUsize,
 }
@@ -109,12 +110,13 @@ pub async fn import_dir_batch(
 
     for path in &pending {
         let (outcome, sha256_opt, err_opt) = match import_one(pool, path, library_path, copy_only).await {
-            Ok(Some((photo_id, face_count))) => {
+            Ok(Some((photo_id, face_count, has_gps))) => {
                 summary.imported += 1;
                 newly_imported_ids.push(photo_id);
                 progress.imported.fetch_add(1, Relaxed);
                 progress.processed.fetch_add(1, Relaxed);
                 progress.faces_found.fetch_add(face_count, Relaxed);
+                if has_gps { progress.gps_found.fetch_add(1, Relaxed); }
                 (LogStatus::Imported, None, None)
             }
             Ok(None) => {
@@ -181,13 +183,14 @@ async fn import_dir_inner(
 
     for path in &paths {
         match import_one(pool, path, library_path, copy_only).await {
-            Ok(Some((photo_id, face_count))) => {
+            Ok(Some((photo_id, face_count, has_gps))) => {
                 summary.imported += 1;
                 newly_imported_ids.push(photo_id);
                 if let Some(p) = &progress {
                     p.imported.fetch_add(1, Relaxed);
                     p.processed.fetch_add(1, Relaxed);
                     p.faces_found.fetch_add(face_count, Relaxed);
+                    if has_gps { p.gps_found.fetch_add(1, Relaxed); }
                 }
             }
             Ok(None) => {
@@ -229,13 +232,13 @@ async fn import_dir_inner(
     Ok(summary)
 }
 
-/// Returns `Some((photo_id, face_count))` if newly imported, `None` if skipped.
+/// Returns `Some((photo_id, face_count, has_gps))` if newly imported, `None` if skipped.
 async fn import_one(
     pool: &SqlitePool,
     path: &Path,
     library_path: &Path,
     copy_only: bool,
-) -> Result<Option<(i64, usize)>> {
+) -> Result<Option<(i64, usize, bool)>> {
     let sha256 = compute_sha256(path)?;
     let decision = decide(pool, &sha256).await?;
 
@@ -289,7 +292,7 @@ async fn import_one(
         crate::animal::detect_and_save(pool, photo_id, &img).await;
     }
 
-    Ok(Some((photo_id, face_count)))
+    Ok(Some((photo_id, face_count, meta.gps_lat.is_some())))
 }
 
 #[cfg(test)]
