@@ -547,7 +547,8 @@ pub fn dcthash_distance(a: u64, b: u64) -> u32
 // (a ^ b).count_ones()
 
 pub fn is_degenerate(phash: &str) -> bool
-// set bits < MIN_HASH_BITS(10) 时为退化 hash，排除全黑/纯色图
+// set bits < MIN_HASH_BITS(10) 或 > HASH_TOTAL_BITS - MIN_HASH_BITS(54) 时为退化 hash
+// 对称双侧检测：过稀疏（全黑/纯色）和过密集（系统性左亮右暗梯度）均排除
 
 pub const SIMILARITY_THRESHOLD: u32 = 10;     // 连拍（≤ 60 s）Layer 1 阈值
 pub const SIMILARITY_THRESHOLD_FAR: u32 = 8;  // 非连拍 Layer 1 阈值
@@ -566,30 +567,33 @@ pub const DCT_THRESHOLD: u32 = 8;             // Layer 2 DCT 阈值
 
 **时间感知阈值**：`time_threshold(ts_a, ts_b)` 根据 `taken_at` 差值返回 `SIMILARITY_THRESHOLD`（≤ 60 s，连拍）或 `SIMILARITY_THRESHOLD_FAR`（> 60 s）。`taken_at` 为 NULL 时使用严格阈值。
 
-**退化 hash 过滤**：set bits < 10 的 hash（全黑、纯色图）在 Layer 1 前直接跳过，防止与任何稀疏 hash 产生假阳性组。
+**退化 hash 过滤**：set bits < 10 或 > 54 的 hash 在 Layer 1 前直接跳过。过稀疏（全黑/纯色图）或过密集（系统性梯度图像）的 hash 因 XOR 距离先天偏小而产生假阳性。
 
-**DCT 验证**：Layer 2 仅对通过 Layer 1 的候选对调用，`scan_full` 中用 `HashMap<usize, Option<u64>>` 按 `parsed` 索引缓存 DCT hash 避免重复计算。图像文件无法打开时（如测试中的合成路径）跳过 Layer 2 不过滤。
+**DCT 验证**：Layer 2 仅对通过 Layer 1 的候选对调用，用 `HashMap<i64, Option<u64>>` 按照片 ID 缓存 DCT hash 避免重复计算。图像文件无法打开时跳过 Layer 2 不过滤。
+
+**Union-Find 聚类**：所有匹配对收集完成后，用 Union-Find（带路径压缩）将传递相似的照片合并为连通分量。连拍序列（A≈B, B≈C）形成一个组而非 C(n,2) 对组。`scan_full` 调用 `write_clusters`，`scan` 调用 `write_clusters_incremental`（合并已有 pending 组）。
 
 #### scan()（增量）
 
-1. 查询 `dedup_scanned_at IS NULL AND import_status='imported' AND phash IS NOT NULL`（新照片，含 `path`）
+1. 查询 `dedup_scanned_at IS NULL AND import_status='imported' AND phash IS NOT NULL`（新照片，含 `path/taken_at/id`）
 2. 若无新照片 → 立即返回 0（无 DB 写操作）
-3. 查询所有已扫描照片（`dedup_scanned_at IS NOT NULL`，含 `path`）
-4. 比较「新 × 已有」和「新 × 新」，调用 `maybe_create_group()`
+3. 查询所有已扫描照片（`dedup_scanned_at IS NOT NULL`，含 `path/taken_at/id`）
+4. 比较「新 × 已有」和「新 × 新」，调用 `should_pair()` 过滤
    - Layer 1：`is_degenerate` → `hamming_distance` → `time_threshold`
    - Layer 2：`compute_dcthash` 验证（两者均 Some 时才过滤）
-5. `UPDATE photos SET dedup_scanned_at = datetime('now') WHERE id IN (...)`（仅新照片）
-6. 返回新增组数
+5. 收集所有候选对，调用 `write_clusters_incremental(pool, &pairs)` 写入 DB
+6. `UPDATE photos SET dedup_scanned_at = datetime('now') WHERE id IN (...)`（仅新照片）
+7. 返回新增/扩展组数
 
 #### scan_full()（全量多索引分桶）
 
-1. `UPDATE photos SET dedup_scanned_at = NULL`（重置所有）
-2. 加载全部有效 pHash 及 `path`，解码为 8 字节数组，跳过退化 hash
-3. 构建 4 个倒排索引：`segment_i → HashMap<u16, Vec<idx>>`（4 × 16-bit 分段）
-4. 对每张照片，枚举各分段的 Hamming 距离 ≤ 2 的 137 个邻值，在对应索引中查候选
-5. 用 `HashSet<(idx_a, idx_b)>` 去重，验证全 64-bit 距离 ≤ `time_threshold()`（Layer 1）
-6. Layer 1 通过后调用 `dct_verify()`（Layer 2，带缓存）
-7. 两层均通过的对调用 `create_group_if_absent()`
+1. 删除所有 pending 状态的旧组（`DELETE FROM dedup_groups WHERE status='pending'`）
+2. `UPDATE photos SET dedup_scanned_at = NULL`（重置所有）
+3. 加载全部有效 pHash 及 `path/taken_at/id`，解码为 8 字节数组，跳过退化 hash
+4. 构建 4 个倒排索引：`segment_i → HashMap<u16, Vec<idx>>`（4 × 16-bit 分段）
+5. 对每张照片，枚举各分段的 Hamming 距离 ≤ 2 的 137 个邻值，在对应索引中查候选
+6. 用 `HashSet<(min_id, max_id)>` 去重，调用 `should_pair()` 验证（Layer 1 + Layer 2）
+7. 收集所有候选对，调用 `write_clusters(pool, &pairs)` 写入 DB（Union-Find 聚类）
 8. 打时间戳，返回新增组数
 
 **正确性保证（鸽巢原理）**：64-bit 距离 ≤ 10 → 4 个 16-bit 分段中至少一个距离 ≤ 2（否则总距离 ≥ 12）。
