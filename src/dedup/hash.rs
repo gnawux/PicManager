@@ -108,8 +108,11 @@ pub fn hamming_distance(a: &str, b: &str) -> Option<u32> {
 pub const SIMILARITY_THRESHOLD: u32 = 10;
 
 /// Stricter threshold for photos taken more than NEARBY_SECS apart.
-/// Reduces false positives from structurally similar but visually unrelated images.
-pub const SIMILARITY_THRESHOLD_FAR: u32 = 8;
+/// Only matches near-identical hashes (processed copies, re-encoded duplicates).
+/// dist=0-2: same content (original + app-edited copy, same photo from different source)
+/// dist=3-8: structural similarity only (same scene type, same outdoor activity, etc.)
+/// Threshold of 3 catches genuine far duplicates while rejecting false positives.
+pub const SIMILARITY_THRESHOLD_FAR: u32 = 3;
 
 /// Photos taken within this many seconds are compared with the relaxed threshold.
 pub const NEARBY_SECS: i64 = 60;

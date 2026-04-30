@@ -30,7 +30,8 @@ pub async fn scan(pool: &SqlitePool) -> Result<usize> {
     .fetch_all(pool)
     .await?;
 
-    let mut pairs: Vec<(i64, i64)> = Vec::new();
+    let mut burst_pairs: Vec<(i64, i64)> = Vec::new();
+    let mut far_pairs: Vec<(i64, i64)> = Vec::new();
     let mut dct_cache: HashMap<i64, Option<u64>> = HashMap::new();
 
     for (id_a, hash_a, ts_a, path_a) in &new_rows {
@@ -40,7 +41,7 @@ pub async fn scan(pool: &SqlitePool) -> Result<usize> {
                 hash_b, ts_b.as_deref(), path_b, *id_b,
                 &mut dct_cache,
             ) {
-                pairs.push((*id_a, *id_b));
+                push_pair(*id_a, *id_b, ts_a.as_deref(), ts_b.as_deref(), &mut burst_pairs, &mut far_pairs);
             }
         }
     }
@@ -54,12 +55,12 @@ pub async fn scan(pool: &SqlitePool) -> Result<usize> {
                 hash_b, ts_b.as_deref(), path_b, *id_b,
                 &mut dct_cache,
             ) {
-                pairs.push((*id_a, *id_b));
+                push_pair(*id_a, *id_b, ts_a.as_deref(), ts_b.as_deref(), &mut burst_pairs, &mut far_pairs);
             }
         }
     }
 
-    let groups_created = write_clusters_incremental(pool, &pairs).await?;
+    let groups_created = write_clusters_incremental(pool, &burst_pairs, &far_pairs).await?;
 
     let ids: Vec<i64> = new_rows.iter().map(|(id, _, _, _)| *id).collect();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
@@ -126,7 +127,8 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
 
     let mut checked: HashSet<(usize, usize)> = HashSet::new();
     let mut dct_cache: HashMap<i64, Option<u64>> = HashMap::new();
-    let mut pairs: Vec<(i64, i64)> = Vec::new();
+    let mut burst_pairs: Vec<(i64, i64)> = Vec::new();
+    let mut far_pairs: Vec<(i64, i64)> = Vec::new();
 
     for (idx_a, (id_a, bytes_a, ts_a, path_a)) in parsed.iter().enumerate() {
         for (seg_i, seg_val_a) in extract_segments(bytes_a).iter().enumerate() {
@@ -149,7 +151,7 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
                             _ => true,
                         };
                         if dct_ok {
-                            pairs.push((*id_a, *id_b));
+                            push_pair(*id_a, *id_b, ts_a.as_deref(), ts_b.as_deref(), &mut burst_pairs, &mut far_pairs);
                         }
                     }
                 }
@@ -157,7 +159,7 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
         }
     }
 
-    let groups_created = write_clusters(pool, &pairs).await?;
+    let groups_created = write_clusters(pool, &burst_pairs, &far_pairs).await?;
 
     sqlx::query(
         "UPDATE photos SET dedup_scanned_at = datetime('now')
@@ -172,17 +174,19 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
 // --- cluster writers ---
 
 /// Write pairs as clusters (connected components) into the DB.
-/// Used by scan_full where there are no pre-existing pending groups.
-async fn write_clusters(pool: &SqlitePool, pairs: &[(i64, i64)]) -> Result<usize> {
-    if pairs.is_empty() {
-        return Ok(0);
-    }
-    let mut uf = UnionFind::new();
-    for &(a, b) in pairs {
-        uf.union(a, b);
-    }
+/// Burst pairs use their own Union-Find; far pairs use a separate Union-Find
+/// that excludes photos already in a burst cluster, preventing structural-similarity
+/// chains from contaminating genuine burst-shot groups.
+async fn write_clusters(
+    pool: &SqlitePool,
+    burst_pairs: &[(i64, i64)],
+    far_pairs: &[(i64, i64)],
+) -> Result<usize> {
+    let (burst_comps, in_burst) = burst_components(burst_pairs);
+    let far_comps = far_components(far_pairs, &in_burst);
+
     let mut groups_created = 0;
-    for (_, mut members) in uf.components() {
+    for (_, mut members) in burst_comps.into_iter().chain(far_comps) {
         if members.len() < 2 {
             continue;
         }
@@ -205,16 +209,20 @@ async fn write_clusters(pool: &SqlitePool, pairs: &[(i64, i64)]) -> Result<usize
 
 /// Write pairs as clusters into the DB, merging with any pre-existing pending groups.
 /// Used by the incremental scan where old photos may already belong to groups.
-async fn write_clusters_incremental(pool: &SqlitePool, pairs: &[(i64, i64)]) -> Result<usize> {
-    if pairs.is_empty() {
+/// Burst and far pairs use separate Union-Finds (see write_clusters for rationale).
+async fn write_clusters_incremental(
+    pool: &SqlitePool,
+    burst_pairs: &[(i64, i64)],
+    far_pairs: &[(i64, i64)],
+) -> Result<usize> {
+    if burst_pairs.is_empty() && far_pairs.is_empty() {
         return Ok(0);
     }
-    let mut uf = UnionFind::new();
-    for &(a, b) in pairs {
-        uf.union(a, b);
-    }
+    let (burst_comps, in_burst) = burst_components(burst_pairs);
+    let far_comps = far_components(far_pairs, &in_burst);
+
     let mut groups_created = 0;
-    for (_, mut members) in uf.components() {
+    for (_, mut members) in burst_comps.into_iter().chain(far_comps) {
         if members.len() < 2 {
             continue;
         }
@@ -285,6 +293,47 @@ async fn write_clusters_incremental(pool: &SqlitePool, pairs: &[(i64, i64)]) -> 
         }
     }
     Ok(groups_created)
+}
+
+// --- cluster helpers ---
+
+/// Route a matched pair into the burst or far bucket based on taken_at timestamps.
+fn push_pair(
+    id_a: i64, id_b: i64,
+    ts_a: Option<&str>, ts_b: Option<&str>,
+    burst: &mut Vec<(i64, i64)>,
+    far: &mut Vec<(i64, i64)>,
+) {
+    if is_burst_pair(ts_a, ts_b) { burst.push((id_a, id_b)); } else { far.push((id_a, id_b)); }
+}
+
+/// Build Union-Find components for burst pairs and return (components, set of burst photo IDs).
+fn burst_components(pairs: &[(i64, i64)]) -> (HashMap<i64, Vec<i64>>, HashSet<i64>) {
+    let mut uf = UnionFind::new();
+    for &(a, b) in pairs { uf.union(a, b); }
+    let comps = uf.components();
+    let mut in_burst = HashSet::new();
+    for ms in comps.values() { for &m in ms { in_burst.insert(m); } }
+    (comps, in_burst)
+}
+
+/// Build Union-Find components for far pairs, skipping pairs where either photo
+/// is already in a burst cluster (prevents structural similarity from contaminating
+/// genuine burst-shot groups).
+fn far_components(pairs: &[(i64, i64)], in_burst: &HashSet<i64>) -> HashMap<i64, Vec<i64>> {
+    let mut uf = UnionFind::new();
+    for &(a, b) in pairs {
+        if !in_burst.contains(&a) && !in_burst.contains(&b) { uf.union(a, b); }
+    }
+    uf.components()
+}
+
+/// Returns true if both timestamps are known and within NEARBY_SECS of each other.
+fn is_burst_pair(ts_a: Option<&str>, ts_b: Option<&str>) -> bool {
+    match (ts_a, ts_b) {
+        (Some(a), Some(b)) => parse_secs_diff(a, b) <= NEARBY_SECS,
+        _ => false,
+    }
 }
 
 // --- shared helpers ---
@@ -473,6 +522,15 @@ mod tests {
         .last_insert_rowid()
     }
 
+    async fn insert_photo_at(pool: &SqlitePool, path: &str, phash: &str, taken_at: &str) -> i64 {
+        sqlx::query(
+            "INSERT INTO photos (path, sha256, format, phash, import_status, taken_at) \
+             VALUES (?, ?, 'jpeg', ?, 'imported', ?)",
+        )
+        .bind(path).bind(path).bind(phash).bind(taken_at)
+        .execute(pool).await.unwrap().last_insert_rowid()
+    }
+
     async fn insert_scanned_photo(pool: &SqlitePool, path: &str, phash: &str) -> i64 {
         sqlx::query(
             "INSERT INTO photos (path, sha256, format, phash, import_status, dedup_scanned_at, taken_at) \
@@ -575,6 +633,13 @@ mod tests {
         let a = [0u8; 8];
         let b: [u8; 8] = [0xFF, 0x07, 0, 0, 0, 0, 0, 0];
         assert_eq!(hamming_bytes(&a, &b), 11);
+    }
+
+    #[test]
+    fn is_burst_pair_within_60s() {
+        assert!(is_burst_pair(Some("2020-01-01 12:00:00"), Some("2020-01-01 12:01:00")));
+        assert!(!is_burst_pair(Some("2020-01-01 12:00:00"), Some("2020-01-01 12:01:01")));
+        assert!(!is_burst_pair(None, Some("2020-01-01 12:00:00")));
     }
 
     #[test]
@@ -753,6 +818,26 @@ mod tests {
         let bucketed = scan_full(&pool_bucketed).await.unwrap();
         let brute = scan(&pool_brute).await.unwrap();
         assert_eq!(bucketed, brute, "bucketed and brute-force must agree");
+    }
+
+    #[tokio::test]
+    async fn burst_cluster_isolated_from_far_structural_similarity() {
+        // A and B are burst shots (1 second apart, identical hash).
+        // C has the same hash but is from a year later → far pair.
+        // Expected: {A, B} is a burst cluster; C is not added because A and B
+        // are in the burst cluster (far pair involving burst photos is skipped).
+        let pool = test_pool().await;
+        let h = compute_phash(&fixture("with_exif.jpg")).unwrap();
+        insert_photo_at(&pool, "/a.jpg", &h, "2020-01-01 12:00:00").await;
+        insert_photo_at(&pool, "/b.jpg", &h, "2020-01-01 12:00:01").await;
+        insert_photo_at(&pool, "/c.jpg", &h, "2021-06-01 09:00:00").await;
+        scan(&pool).await.unwrap();
+        // Only 1 group: the burst cluster {A, B}. C is not in any group.
+        assert_eq!(group_count(&pool).await, 1);
+        let (group_id,): (i64,) =
+            sqlx::query_as("SELECT id FROM dedup_groups WHERE status = 'pending'")
+                .fetch_one(&pool).await.unwrap();
+        assert_eq!(member_count(&pool, group_id).await, 2);
     }
 
     #[tokio::test]

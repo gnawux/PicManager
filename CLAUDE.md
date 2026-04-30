@@ -192,8 +192,9 @@ docs/
 | 36e | docs: DESIGN.md 新增 7 个 API 端点，ARCHITECTURE.md 新增 collections.rs，CLAUDE.md 更新 |
 | 37a | fix(dedup): 两层去重架构 + 时间感知阈值；degenerate hash 过滤（对称双侧）；DCT pHash Layer 2 验证 |
 | 37b | fix(dedup): Union-Find 聚类 — 连拍 n 张合并为 1 组而非 C(n,2) 对组；scan_full 扫前清除旧 pending 组 |
+| 37c | fix(dedup): SIMILARITY_THRESHOLD_FAR 3→8；连拍/远距离独立 Union-Find 防止连拍组被结构相似链污染 |
 
-当前测试数：**302 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**309 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
@@ -211,6 +212,8 @@ docs/
 - 时间感知阈值：`taken_at` 差值 ≤ 60 s 用宽松阈值（10），否则用严格阈值（8）；NULL 当作远距离处理
 - `is_degenerate` 双侧对称：set bits < 10（过稀疏）或 > 54（过密集）均视为退化，两者都会产生假阳性
 - `scan_full` 扫描前先 `DELETE dedup_groups WHERE status='pending'`，清除上次扫描的旧结果再重建
+- `SIMILARITY_THRESHOLD_FAR = 3`（远距离对阈值）：只匹配 dist ≤ 3 的远距离对（原图 + App 处理副本），防止结构相似的户外照片被链式合并成大组
+- 连拍对与远距离对独立 Union-Find：连拍照片所在的簇不会被远距离结构相似对污染（`burst_components` + `far_components`）
 
 ### image crate 不自动应用 EXIF Orientation
 
