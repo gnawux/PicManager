@@ -11,7 +11,7 @@ A family photo management tool built in Rust. Automatically organizes photos, de
 | Import photos from a directory | ✓ |
 | EXIF metadata extraction (time, camera, GPS) | ✓ |
 | Exact duplicate detection (SHA-256) | ✓ |
-| Perceptual duplicate detection (dHash) | ✓ |
+| Perceptual duplicate detection (two-layer: Gradient pHash + DCT pHash) | ✓ |
 | Dedup confirmation workflow (keep / soft-delete) | ✓ |
 | Import state tracking (skip already-imported) | ✓ |
 | Format detection (JPEG / PNG / GIF / WebP / HEIC / ARW) | ✓ |
@@ -90,7 +90,11 @@ Supported formats: JPEG, PNG, GIF, WebP, HEIC (incl. Apple Live Photo), ARW (Son
 picmanager dedup
 ```
 
-Scans all imported photos for visual similarity (perceptual hash, Hamming distance ≤ 10), then presents each duplicate group interactively. Enter the photo IDs to keep; the rest are soft-deleted (marked `deleted` in the database — no files are removed from disk).
+Scans all imported photos for visual similarity using a two-layer algorithm:
+1. **Layer 1** — Gradient pHash, Hamming distance ≤ 10 (≤ 8 for photos taken more than 60 s apart)
+2. **Layer 2** — DCT pHash verification, Hamming distance ≤ 8, eliminates false positives such as screenshots matched against natural photos
+
+The rest are soft-deleted (marked `deleted` in the database — no files are removed from disk).
 
 After running `dedup`, open the Web UI and click the 🔍 button in the **维护操作** row to review and confirm each duplicate group.
 

@@ -190,10 +190,22 @@ docs/
 | 36c | feat: 前端精选集侧边栏（创建/改名/删除）；loadCollections/selectCollection；loadPhotos 支持 inCollection 状态 |
 | 36d | feat: 前端批量加入/移除精选集；add-to-collection picker 弹窗；工具栏"精选"按钮（整相册加入） |
 | 36e | docs: DESIGN.md 新增 7 个 API 端点，ARCHITECTURE.md 新增 collections.rs，CLAUDE.md 更新 |
+| 37 | fix(dedup): 两层去重架构 + 时间感知阈值；degenerate hash 过滤；DCT pHash Layer 2 验证 |
 
-当前测试数：**296 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**302 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
+
+### 两层去重架构（dedup）
+
+**Layer 1**（`dedup/hash.rs` + `candidate.rs`）：`image_hasher::HashAlg::Gradient` 64-bit pHash，O(n log n) 多索引分桶粗筛。
+
+**Layer 2**（`dedup/hash.rs::compute_dcthash`）：自实现 DCT pHash — 图像缩至 32×32 灰度，Row-wise + Column-wise DCT-II，取左上 8×8 低频系数，各值与均值比较生成 64-bit hash。仅对 Layer 1 候选对调用，`scan_full` 中按 `parsed` 索引缓存避免重复计算。
+
+**关键行为**：
+- Layer 2 图像读取失败时返回 `None` → 跳过第二层（不过滤），防止误判；测试中合成路径正是依赖此行为
+- `different.jpg` vs `with_exif.jpg` 的 DCT 距离为 6，但此对的 Gradient 距离 > 10，根本不进入 Layer 2，与 `DCT_THRESHOLD=8` 无冲突
+- 时间感知阈值：`taken_at` 差值 ≤ 60 s 用宽松阈值（10），否则用严格阈值（8）；NULL 当作远距离处理
 
 ### image crate 不自动应用 EXIF Orientation
 

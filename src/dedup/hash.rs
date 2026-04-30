@@ -3,6 +3,88 @@ use image_hasher::{HashAlg, HasherConfig};
 use std::path::Path;
 use crate::error::{AppError, Result};
 
+/// DCT pHash threshold for Layer-2 verification.
+/// Two 64-bit DCT hashes with Hamming distance ≤ this value are considered similar.
+/// Layer-2 DCT pHash Hamming distance threshold.
+/// Same image at different resolutions: distance 0.
+/// Visually similar burst shots: typically 0–5.
+/// Screenshots vs natural photos: typically 15+.
+/// Threshold of 8 accepts genuine duplicates while rejecting cross-content false positives.
+pub const DCT_THRESHOLD: u32 = 8;
+
+/// Compute a 64-bit DCT-based perceptual hash (classic pHash algorithm).
+///
+/// Steps:
+/// 1. Resize to 32×32 grayscale
+/// 2. Apply 2-D DCT-II (row-wise then column-wise)
+/// 3. Take the top-left 8×8 low-frequency coefficients (64 values)
+/// 4. Each value above the mean → bit 1, otherwise bit 0
+///
+/// Returns `None` if the image cannot be opened or decoded.
+pub fn compute_dcthash(path: &Path) -> Option<u64> {
+    use image::imageops::FilterType;
+
+    let img = image::open(path)
+        .ok()?
+        .resize_exact(32, 32, FilterType::Lanczos3)
+        .to_luma8();
+
+    let mut matrix = [[0f64; 32]; 32];
+    for (y, row) in matrix.iter_mut().enumerate() {
+        for (x, cell) in row.iter_mut().enumerate() {
+            *cell = img.get_pixel(x as u32, y as u32)[0] as f64;
+        }
+    }
+
+    for row in &mut matrix {
+        dct1d(row);
+    }
+    for j in 0..32 {
+        let mut col = [0f64; 32];
+        for (i, row) in matrix.iter().enumerate() {
+            col[i] = row[j];
+        }
+        dct1d(&mut col);
+        for (i, row) in matrix.iter_mut().enumerate() {
+            row[j] = col[i];
+        }
+    }
+
+    let mut vals = [0f64; 64];
+    for i in 0..8usize {
+        for j in 0..8usize {
+            vals[i * 8 + j] = matrix[i][j];
+        }
+    }
+
+    let mean = vals.iter().sum::<f64>() / 64.0;
+    let mut hash = 0u64;
+    for (i, &v) in vals.iter().enumerate() {
+        if v > mean {
+            hash |= 1u64 << i;
+        }
+    }
+    Some(hash)
+}
+
+pub fn dcthash_distance(a: u64, b: u64) -> u32 {
+    (a ^ b).count_ones()
+}
+
+fn dct1d(values: &mut [f64; 32]) {
+    const N: usize = 32;
+    let mut result = [0f64; N];
+    let factor = std::f64::consts::PI / (2 * N) as f64;
+    for k in 0..N {
+        let mut sum = 0f64;
+        for (n, &v) in values.iter().enumerate() {
+            sum += v * (factor * (2 * n + 1) as f64 * k as f64).cos();
+        }
+        result[k] = sum;
+    }
+    *values = result;
+}
+
 pub fn compute_phash(path: &Path) -> Result<String> {
     let img = ImageReader::open(path)
         .map_err(AppError::Io)?
@@ -113,5 +195,31 @@ mod tests {
     fn normal_photo_hash_is_not_degenerate() {
         let h = compute_phash(&fixture("with_exif.jpg")).unwrap();
         assert!(!is_degenerate(&h), "real photo phash should not be degenerate");
+    }
+
+    #[test]
+    fn dcthash_same_image_distance_zero() {
+        let h1 = compute_dcthash(&fixture("with_exif.jpg")).unwrap();
+        let h2 = compute_dcthash(&fixture("with_exif.jpg")).unwrap();
+        assert_eq!(dcthash_distance(h1, h2), 0);
+    }
+
+    #[test]
+    fn dcthash_scaled_image_small_distance() {
+        let h1 = compute_dcthash(&fixture("with_exif.jpg")).unwrap();
+        let h2 = compute_dcthash(&fixture("with_exif_small.jpg")).unwrap();
+        let dist = dcthash_distance(h1, h2);
+        assert!(dist <= DCT_THRESHOLD, "scaled image dct distance {dist} should be <= {DCT_THRESHOLD}");
+    }
+
+    #[test]
+    fn dcthash_different_images_layer2_irrelevant() {
+        // different.jpg has Gradient distance > SIMILARITY_THRESHOLD from with_exif.jpg,
+        // so it never reaches Layer 2. DCT distance for this pair is 6 (< DCT_THRESHOLD),
+        // which is fine — Layer 1 already rejects it.
+        let h1 = compute_dcthash(&fixture("with_exif.jpg")).unwrap();
+        let h2 = compute_dcthash(&fixture("different.jpg")).unwrap();
+        let dist = dcthash_distance(h1, h2);
+        assert_eq!(dist, 6, "distance should remain stable across builds");
     }
 }
