@@ -78,6 +78,18 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
         .execute(pool)
         .await?;
 
+    // Clear pending groups so the rescan starts with a clean slate.
+    // Resolved groups (user-confirmed decisions) are preserved.
+    sqlx::query(
+        "DELETE FROM dedup_members WHERE group_id IN \
+         (SELECT id FROM dedup_groups WHERE status = 'pending')",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query("DELETE FROM dedup_groups WHERE status = 'pending'")
+        .execute(pool)
+        .await?;
+
     let all_rows: Vec<(i64, String, Option<String>, String)> = sqlx::query_as(
         "SELECT id, phash, taken_at, path FROM photos WHERE phash IS NOT NULL AND import_status = 'imported'",
     )
