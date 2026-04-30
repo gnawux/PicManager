@@ -21,7 +21,16 @@ pub fn hamming_distance(a: &str, b: &str) -> Option<u32> {
     Some(ha.dist(&hb))
 }
 
+/// Hamming distance threshold for photos taken within NEARBY_SECS of each other.
+/// Burst shots taken seconds apart can legitimately differ by up to 10 bits.
 pub const SIMILARITY_THRESHOLD: u32 = 10;
+
+/// Stricter threshold for photos taken more than NEARBY_SECS apart.
+/// Reduces false positives from structurally similar but visually unrelated images.
+pub const SIMILARITY_THRESHOLD_FAR: u32 = 8;
+
+/// Photos taken within this many seconds are compared with the relaxed threshold.
+pub const NEARBY_SECS: i64 = 60;
 
 /// Minimum number of set bits a pHash must have to be considered reliable.
 /// Hashes with fewer set bits than this threshold are degenerate: they arise

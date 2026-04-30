@@ -1,14 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use sqlx::SqlitePool;
 use crate::error::Result;
-use super::hash::{hamming_distance, is_degenerate, SIMILARITY_THRESHOLD};
+use super::hash::{hamming_distance, is_degenerate, NEARBY_SECS, SIMILARITY_THRESHOLD, SIMILARITY_THRESHOLD_FAR};
 
 /// Incremental scan: compare only photos that have not been scanned yet
 /// against all previously scanned photos (and against each other).
 /// Returns the number of new dedup groups created.
 pub async fn scan(pool: &SqlitePool) -> Result<usize> {
-    let new_rows: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, phash FROM photos
+    let new_rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, phash, taken_at FROM photos
          WHERE phash IS NOT NULL AND import_status = 'imported' AND dedup_scanned_at IS NULL",
     )
     .fetch_all(pool)
@@ -18,8 +18,8 @@ pub async fn scan(pool: &SqlitePool) -> Result<usize> {
         return Ok(0);
     }
 
-    let old_rows: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, phash FROM photos
+    let old_rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, phash, taken_at FROM photos
          WHERE phash IS NOT NULL AND import_status = 'imported' AND dedup_scanned_at IS NOT NULL",
     )
     .fetch_all(pool)
@@ -27,23 +27,23 @@ pub async fn scan(pool: &SqlitePool) -> Result<usize> {
 
     let mut groups_created = 0usize;
 
-    for (id_a, hash_a) in &new_rows {
-        for (id_b, hash_b) in &old_rows {
+    for (id_a, hash_a, ts_a) in &new_rows {
+        for (id_b, hash_b, ts_b) in &old_rows {
             groups_created +=
-                maybe_create_group(pool, *id_a, hash_a, *id_b, hash_b).await?;
+                maybe_create_group(pool, *id_a, hash_a, ts_a.as_deref(), *id_b, hash_b, ts_b.as_deref()).await?;
         }
     }
 
     for i in 0..new_rows.len() {
         for j in (i + 1)..new_rows.len() {
-            let (id_a, hash_a) = &new_rows[i];
-            let (id_b, hash_b) = &new_rows[j];
+            let (id_a, hash_a, ts_a) = &new_rows[i];
+            let (id_b, hash_b, ts_b) = &new_rows[j];
             groups_created +=
-                maybe_create_group(pool, *id_a, hash_a, *id_b, hash_b).await?;
+                maybe_create_group(pool, *id_a, hash_a, ts_a.as_deref(), *id_b, hash_b, ts_b.as_deref()).await?;
         }
     }
 
-    let ids: Vec<i64> = new_rows.iter().map(|(id, _)| *id).collect();
+    let ids: Vec<i64> = new_rows.iter().map(|(id, _, _)| *id).collect();
     let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
     let sql = format!(
         "UPDATE photos SET dedup_scanned_at = datetime('now') WHERE id IN ({placeholders})"
@@ -69,8 +69,8 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
         .execute(pool)
         .await?;
 
-    let all_rows: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, phash FROM photos WHERE phash IS NOT NULL AND import_status = 'imported'",
+    let all_rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, phash, taken_at FROM photos WHERE phash IS NOT NULL AND import_status = 'imported'",
     )
     .fetch_all(pool)
     .await?;
@@ -80,15 +80,15 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
     }
 
     // Parse each hash string into 8 raw bytes; skip degenerate or unparseable hashes.
-    let parsed: Vec<(i64, [u8; 8])> = all_rows
+    let parsed: Vec<(i64, [u8; 8], Option<String>)> = all_rows
         .iter()
-        .filter(|(_, s)| !is_degenerate(s))
-        .filter_map(|(id, s)| Some((*id, hash_bytes(s)?)))
+        .filter(|(_, s, _)| !is_degenerate(s))
+        .filter_map(|(id, s, ts)| Some((*id, hash_bytes(s)?, ts.clone())))
         .collect();
 
     // Build 4 inverted indexes: segment_index → segment_value → [position in `parsed`].
     let mut tables: [HashMap<u16, Vec<usize>>; 4] = Default::default();
-    for (idx, (_, bytes)) in parsed.iter().enumerate() {
+    for (idx, (_, bytes, _)) in parsed.iter().enumerate() {
         for (seg_i, seg_val) in extract_segments(bytes).iter().enumerate() {
             tables[seg_i].entry(*seg_val).or_default().push(idx);
         }
@@ -97,7 +97,7 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
     let mut checked: HashSet<(usize, usize)> = HashSet::new();
     let mut groups_created = 0usize;
 
-    for (idx_a, (id_a, bytes_a)) in parsed.iter().enumerate() {
+    for (idx_a, (id_a, bytes_a, ts_a)) in parsed.iter().enumerate() {
         for (seg_i, seg_val_a) in extract_segments(bytes_a).iter().enumerate() {
             for neighbor in u16_neighbors(*seg_val_a, 2) {
                 let Some(candidates) = tables[seg_i].get(&neighbor) else { continue };
@@ -108,8 +108,9 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
                     if !checked.insert((idx_a, idx_b)) {
                         continue;
                     }
-                    let (id_b, bytes_b) = &parsed[idx_b];
-                    if hamming_bytes(bytes_a, bytes_b) <= SIMILARITY_THRESHOLD {
+                    let (id_b, bytes_b, ts_b) = &parsed[idx_b];
+                    let threshold = time_threshold(ts_a.as_deref(), ts_b.as_deref());
+                    if hamming_bytes(bytes_a, bytes_b) <= threshold {
                         groups_created += create_group_if_absent(pool, *id_a, *id_b).await?;
                     }
                 }
@@ -133,8 +134,10 @@ async fn maybe_create_group(
     pool: &SqlitePool,
     id_a: i64,
     hash_a: &str,
+    ts_a: Option<&str>,
     id_b: i64,
     hash_b: &str,
+    ts_b: Option<&str>,
 ) -> Result<usize> {
     if is_degenerate(hash_a) || is_degenerate(hash_b) {
         return Ok(0);
@@ -143,10 +146,42 @@ async fn maybe_create_group(
         Some(d) => d,
         None => return Ok(0),
     };
-    if dist > SIMILARITY_THRESHOLD {
+    if dist > time_threshold(ts_a, ts_b) {
         return Ok(0);
     }
     create_group_if_absent(pool, id_a, id_b).await
+}
+
+/// Returns the applicable Hamming distance threshold based on how far apart two photos were taken.
+/// Photos within NEARBY_SECS use the relaxed threshold (burst shots can differ significantly);
+/// photos further apart use the stricter threshold to reduce false positives.
+fn time_threshold(ts_a: Option<&str>, ts_b: Option<&str>) -> u32 {
+    let secs = match (ts_a, ts_b) {
+        (Some(a), Some(b)) => parse_secs_diff(a, b),
+        _ => i64::MAX,
+    };
+    if secs <= NEARBY_SECS { SIMILARITY_THRESHOLD } else { SIMILARITY_THRESHOLD_FAR }
+}
+
+/// Parse two SQLite datetime strings ("YYYY-MM-DD HH:MM:SS") and return absolute difference in seconds.
+fn parse_secs_diff(a: &str, b: &str) -> i64 {
+    fn to_secs(s: &str) -> Option<i64> {
+        // Expected format: "YYYY-MM-DD HH:MM:SS"
+        let s = s.trim();
+        if s.len() < 19 { return None; }
+        let yr: i64 = s[0..4].parse().ok()?;
+        let mo: i64 = s[5..7].parse().ok()?;
+        let dy: i64 = s[8..10].parse().ok()?;
+        let hr: i64 = s[11..13].parse().ok()?;
+        let mn: i64 = s[14..16].parse().ok()?;
+        let sc: i64 = s[17..19].parse().ok()?;
+        // Rough seconds-since-epoch (good enough for diff comparison)
+        Some(((yr * 365 + mo * 30 + dy) * 86400) + hr * 3600 + mn * 60 + sc)
+    }
+    match (to_secs(a), to_secs(b)) {
+        (Some(sa), Some(sb)) => (sa - sb).abs(),
+        _ => i64::MAX,
+    }
 }
 
 async fn create_group_if_absent(pool: &SqlitePool, id_a: i64, id_b: i64) -> Result<usize> {
@@ -242,7 +277,7 @@ mod tests {
 
     async fn insert_photo(pool: &SqlitePool, path: &str, phash: Option<&str>) -> i64 {
         sqlx::query(
-            "INSERT INTO photos (path, sha256, format, phash, import_status) VALUES (?, ?, 'jpeg', ?, 'imported')",
+            "INSERT INTO photos (path, sha256, format, phash, import_status, taken_at) VALUES (?, ?, 'jpeg', ?, 'imported', datetime('now'))",
         )
         .bind(path)
         .bind(path)
@@ -255,8 +290,8 @@ mod tests {
 
     async fn insert_scanned_photo(pool: &SqlitePool, path: &str, phash: &str) -> i64 {
         sqlx::query(
-            "INSERT INTO photos (path, sha256, format, phash, import_status, dedup_scanned_at)
-             VALUES (?, ?, 'jpeg', ?, 'imported', datetime('now'))",
+            "INSERT INTO photos (path, sha256, format, phash, import_status, dedup_scanned_at, taken_at)
+             VALUES (?, ?, 'jpeg', ?, 'imported', datetime('now'), datetime('now'))",
         )
         .bind(path)
         .bind(path)
