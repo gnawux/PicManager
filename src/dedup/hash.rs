@@ -23,6 +23,25 @@ pub fn hamming_distance(a: &str, b: &str) -> Option<u32> {
 
 pub const SIMILARITY_THRESHOLD: u32 = 10;
 
+/// Minimum number of set bits a pHash must have to be considered reliable.
+/// Hashes with fewer set bits than this threshold are degenerate: they arise
+/// from very dark or near-uniform images where the Gradient algorithm finds
+/// almost no pixel transitions.  Such sparse hashes cause false-positive dedup
+/// matches because their Hamming distance to any other sparse hash is small
+/// purely by chance, not due to visual similarity.
+/// Keeping MIN_HASH_BITS == SIMILARITY_THRESHOLD is principled: a hash with
+/// fewer set bits than the threshold would match an all-zero hash, which is
+/// meaningless.
+pub const MIN_HASH_BITS: u32 = SIMILARITY_THRESHOLD;
+
+/// Returns true if the hash is too sparse to be used reliably for dedup.
+pub fn is_degenerate(phash: &str) -> bool {
+    use image_hasher::ImageHash;
+    let Ok(h) = ImageHash::<Box<[u8]>>::from_base64(phash) else { return true };
+    let bits: u32 = h.as_bytes().iter().map(|b| b.count_ones()).sum();
+    bits < MIN_HASH_BITS
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +84,25 @@ mod tests {
     #[test]
     fn invalid_base64_returns_none() {
         assert!(hamming_distance("not_valid!!!", "also_not").is_none());
+    }
+
+    #[test]
+    fn all_zero_hash_is_degenerate() {
+        // "AAAAAAAAAAA" decodes to 8 zero bytes — 0 set bits.
+        assert!(is_degenerate("AAAAAAAAAAA"));
+    }
+
+    #[test]
+    fn sparse_hash_is_degenerate() {
+        // Real observed false-positive hashes from dark/uniform photos.
+        assert!(is_degenerate("LAAAAAQFAQE")); // 8 bits set
+        assert!(is_degenerate("EgEAAAAEAAE")); // 5 bits set
+        assert!(is_degenerate("AAAAgEAAAAA")); // 2 bits set
+    }
+
+    #[test]
+    fn normal_photo_hash_is_not_degenerate() {
+        let h = compute_phash(&fixture("with_exif.jpg")).unwrap();
+        assert!(!is_degenerate(&h), "real photo phash should not be degenerate");
     }
 }

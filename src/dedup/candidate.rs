@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use sqlx::SqlitePool;
 use crate::error::Result;
-use super::hash::{hamming_distance, SIMILARITY_THRESHOLD};
+use super::hash::{hamming_distance, is_degenerate, SIMILARITY_THRESHOLD};
 
 /// Incremental scan: compare only photos that have not been scanned yet
 /// against all previously scanned photos (and against each other).
@@ -79,9 +79,10 @@ pub async fn scan_full(pool: &SqlitePool) -> Result<usize> {
         return Ok(0);
     }
 
-    // Parse each hash string into 8 raw bytes; skip anything that fails to parse.
+    // Parse each hash string into 8 raw bytes; skip degenerate or unparseable hashes.
     let parsed: Vec<(i64, [u8; 8])> = all_rows
         .iter()
+        .filter(|(_, s)| !is_degenerate(s))
         .filter_map(|(id, s)| Some((*id, hash_bytes(s)?)))
         .collect();
 
@@ -135,6 +136,9 @@ async fn maybe_create_group(
     id_b: i64,
     hash_b: &str,
 ) -> Result<usize> {
+    if is_degenerate(hash_a) || is_degenerate(hash_b) {
+        return Ok(0);
+    }
     let dist = match hamming_distance(hash_a, hash_b) {
         Some(d) => d,
         None => return Ok(0),
@@ -361,8 +365,9 @@ mod tests {
     #[tokio::test]
     async fn identical_hashes_creates_one_group() {
         let pool = test_pool().await;
-        insert_photo(&pool, "/a.jpg", Some("AAAA")).await;
-        insert_photo(&pool, "/b.jpg", Some("AAAA")).await;
+        let h = compute_phash(&fixture("with_exif.jpg")).unwrap();
+        insert_photo(&pool, "/a.jpg", Some(&h)).await;
+        insert_photo(&pool, "/b.jpg", Some(&h)).await;
         let groups = scan(&pool).await.unwrap();
         assert_eq!(groups, 1);
     }
@@ -393,8 +398,9 @@ mod tests {
     #[tokio::test]
     async fn new_photo_matched_against_existing_scanned() {
         let pool = test_pool().await;
-        insert_scanned_photo(&pool, "/a.jpg", "AAAA").await;
-        insert_photo(&pool, "/b.jpg", Some("AAAA")).await;
+        let h = compute_phash(&fixture("with_exif.jpg")).unwrap();
+        insert_scanned_photo(&pool, "/a.jpg", &h).await;
+        insert_photo(&pool, "/b.jpg", Some(&h)).await;
         let groups = scan(&pool).await.unwrap();
         assert_eq!(groups, 1);
     }
