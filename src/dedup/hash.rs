@@ -115,22 +115,27 @@ pub const SIMILARITY_THRESHOLD_FAR: u32 = 8;
 pub const NEARBY_SECS: i64 = 60;
 
 /// Minimum number of set bits a pHash must have to be considered reliable.
-/// Hashes with fewer set bits than this threshold are degenerate: they arise
-/// from very dark or near-uniform images where the Gradient algorithm finds
-/// almost no pixel transitions.  Such sparse hashes cause false-positive dedup
-/// matches because their Hamming distance to any other sparse hash is small
-/// purely by chance, not due to visual similarity.
-/// Keeping MIN_HASH_BITS == SIMILARITY_THRESHOLD is principled: a hash with
-/// fewer set bits than the threshold would match an all-zero hash, which is
-/// meaningless.
+/// The check is symmetric: hashes with fewer than MIN_HASH_BITS set bits OR
+/// fewer than MIN_HASH_BITS *unset* bits are both degenerate.
+///
+/// Too-sparse (< 10 set bits): very dark / near-uniform images — the Gradient
+/// algorithm finds almost no pixel transitions, so the hash is near-all-zero
+/// and will falsely match any other sparse hash.
+///
+/// Too-dense (< 10 unset bits, i.e. > 54 set bits): very bright / high-contrast
+/// images where nearly all transitions are "ascending" — the hash is near-all-one
+/// and will falsely match any other dense hash by the same XOR argument.
 pub const MIN_HASH_BITS: u32 = SIMILARITY_THRESHOLD;
 
-/// Returns true if the hash is too sparse to be used reliably for dedup.
+/// Total hash bits for a 64-bit pHash (8 bytes × 8 bits).
+const HASH_TOTAL_BITS: u32 = 64;
+
+/// Returns true if the hash is too sparse or too dense to be used reliably for dedup.
 pub fn is_degenerate(phash: &str) -> bool {
     use image_hasher::ImageHash;
     let Ok(h) = ImageHash::<Box<[u8]>>::from_base64(phash) else { return true };
     let bits: u32 = h.as_bytes().iter().map(|b| b.count_ones()).sum();
-    bits < MIN_HASH_BITS
+    bits < MIN_HASH_BITS || bits > HASH_TOTAL_BITS - MIN_HASH_BITS
 }
 
 #[cfg(test)]
@@ -189,6 +194,16 @@ mod tests {
         assert!(is_degenerate("LAAAAAQFAQE")); // 8 bits set
         assert!(is_degenerate("EgEAAAAEAAE")); // 5 bits set
         assert!(is_degenerate("AAAAgEAAAAA")); // 2 bits set
+    }
+
+    #[test]
+    fn dense_hash_is_degenerate() {
+        // Real observed false-positive hashes from high-contrast photos (near-all-ones).
+        // "////fx9v3/8" and similar strings from the DB have > 54 set bits.
+        assert!(is_degenerate("////fx9v3/8")); // photo 209 in DB
+        assert!(is_degenerate("/9////////8")); // photo 569 in DB
+        assert!(is_degenerate("//////////8")); // photo 716 in DB
+        assert!(is_degenerate("/v////////8")); // photo 2224 in DB
     }
 
     #[test]
