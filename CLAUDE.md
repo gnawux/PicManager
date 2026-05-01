@@ -667,6 +667,66 @@ picmanager faces analyze --rotated-only
 
 **注意**：`IMG_20250204_135549.jpg` 没有可检测的人脸，不能用于 `assert!(!faces.is_empty())` 类测试。
 
+### CSS writing-mode + transform:rotate 叠加陷阱
+
+**症状：** 竖排文字标签中每个字符都是上下颠倒的。
+
+**根因：** `writing-mode:vertical-lr` 让文字在列内从上到下排列，字符本身方向正常。再叠加 `transform:rotate(180deg)` 时，整个元素旋转 180°，字符本身也跟着翻转，最终每个字都是倒置的。
+
+**规则：**
+- 只需要竖排（从上到下）：`writing-mode:vertical-lr` 即可，不加任何 transform
+- 需要从下到上排列：对**外层块级容器**做 `transform:rotate(180deg)`，而不是对设了 writing-mode 的内联元素旋转
+
+```css
+/* ✗ 错误：字符会倒置 */
+span { writing-mode: vertical-lr; transform: rotate(180deg); }
+
+/* ✓ 正确：从上到下竖排 */
+span { writing-mode: vertical-lr; }
+
+/* ✓ 正确：从下到上竖排（整块旋转，字符不倒） */
+.label-wrapper { transform: rotate(180deg); }
+.label-wrapper span { writing-mode: vertical-lr; }
+```
+
+### 前端 cursor-anchored 弹出确认框：outside-click 必须延迟注册
+
+**场景：** 用 `e.clientX/Y` 定位一个 `position:fixed` 的确认气泡，点击气泡外部时自动关闭。
+
+**陷阱：** 在点击事件处理函数内**同步**注册 `document.addEventListener('click', dismiss)` 后，该监听器会立即被当前冒泡到 document 的点击事件触发，气泡刚创建就被关闭。
+
+**修法：** 用 `setTimeout(..., 0)` 将外部点击监听器的注册推迟到当前事件循环结束后：
+
+```js
+function showInlineConfirm(anchorX, anchorY, message, onConfirm) {
+  const el = document.createElement('div');
+  el.className = 'inline-confirm';
+  // ... 设置内容和位置（viewport clamping）...
+  document.body.appendChild(el);
+
+  const dismiss = () => el.remove();
+  el.querySelector('.confirm-ok').addEventListener('click', () => { dismiss(); onConfirm(); });
+  el.querySelector('.confirm-cancel').addEventListener('click', dismiss);
+
+  // ✓ 必须延迟：否则当前 click 事件冒泡到 document 时会立即触发 dismiss
+  setTimeout(() => {
+    document.addEventListener('click', dismiss, { once: true, capture: true });
+  }, 0);
+}
+```
+
+**Viewport clamping 模式：**
+```js
+const W = window.innerWidth, H = window.innerHeight;
+const elW = el.offsetWidth || 200, elH = el.offsetHeight || 80;
+let left = anchorX + 10, top = anchorY + 10;
+if (left + elW > W - 8) left = anchorX - elW - 10;  // 翻到左侧
+if (top  + elH > H - 8) top  = anchorY - elH - 10;  // 翻到上方
+el.style.left = `${Math.max(8, left)}px`;
+el.style.top  = `${Math.max(8, top)}px`;
+```
+注意 `el.offsetWidth` 在 `appendChild` 之后、设置 `left/top` 之前读取才有正确值（布局已发生）。
+
 ## 常用命令
 
 ```bash
