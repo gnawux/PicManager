@@ -88,6 +88,11 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('dedup-btn').addEventListener('click', openDedupModal);
   document.getElementById('close-dedup').addEventListener('click', () => {
     document.getElementById('dedup-modal').classList.add('hidden');
+    closeCompareOverlay();
+  });
+  document.getElementById('close-compare').addEventListener('click', closeCompareOverlay);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeCompareOverlay();
   });
 
   // Detail edit
@@ -991,7 +996,54 @@ async function openDedupModal() {
 }
 
 function openCompareOverlay(g, groupDiv) {
-  // Implemented in step 38d
+  const overlay = document.getElementById('dedup-compare-overlay');
+  const imagesDiv = document.getElementById('dedup-compare-images');
+  document.getElementById('dedup-compare-title').textContent = `重复组 #${g.group_id} — 点击照片选择保留项`;
+  imagesDiv.innerHTML = '';
+
+  for (const m of g.members) {
+    const item = document.createElement('div');
+    item.className = 'compare-item';
+    item.dataset.photoId = m.photo_id;
+
+    // Check if already selected in the main modal
+    const mainEl = groupDiv.querySelector(`.dedup-member[data-photo-id="${m.photo_id}"]`);
+    if (mainEl && mainEl.classList.contains('selected')) item.classList.add('selected');
+
+    const dimsText = m.width ? `${m.width}×${m.height}` : '';
+    const dateText = m.taken_at ? m.taken_at.slice(0, 10) : '';
+    const camText  = m.camera  ? m.camera : '';
+    item.innerHTML = `
+      <img src="/api/photos/${m.photo_id}/file" alt="${m.filename}" loading="lazy">
+      <div class="compare-meta">
+        <div class="cm-filename">${m.filename}</div>
+        ${dimsText ? `<div class="cm-dims">${dimsText}</div>` : ''}
+        ${dateText ? `<div>${dateText}</div>` : ''}
+        ${camText  ? `<div>${camText}</div>`  : ''}
+      </div>
+      <button class="compare-select-btn">${item.classList.contains('selected') ? '✓ 已选择保留' : '选择保留'}</button>`;
+
+    const toggleSelection = () => {
+      const selected = item.classList.toggle('selected');
+      item.querySelector('.compare-select-btn').textContent = selected ? '✓ 已选择保留' : '选择保留';
+      // Sync with main modal
+      if (mainEl) mainEl.classList.toggle('selected', selected);
+    };
+
+    item.querySelector('img').addEventListener('click', toggleSelection);
+    item.querySelector('.compare-select-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSelection();
+    });
+
+    imagesDiv.appendChild(item);
+  }
+
+  overlay.classList.remove('hidden');
+}
+
+function closeCompareOverlay() {
+  document.getElementById('dedup-compare-overlay').classList.add('hidden');
 }
 
 // ── View switching ────────────────────────────────────────────────────────────

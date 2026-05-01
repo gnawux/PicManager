@@ -454,6 +454,15 @@
     <img id="face-lightbox-img" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 4px 32px rgba(0,0,0,0.5)" />
   </div>
 
+  <!-- Full-screen dedup compare overlay -->
+  <div id="dedup-compare-overlay" class="hidden">
+    <div id="dedup-compare-bar">
+      <span id="dedup-compare-title"></span>
+      <button id="close-compare">✕ 关闭</button>
+    </div>
+    <div id="dedup-compare-images"></div>
+  </div>
+
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
   <script src="/app.js"></script>
