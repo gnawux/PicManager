@@ -2742,9 +2742,13 @@ async function triggerRecluster() {
 }
 
 async function openMergeDialog() {
-  const people = await fetchJSON('/api/people');
+  const [people, suggestions] = await Promise.all([
+    fetchJSON('/api/people'),
+    fetchJSON(`/api/people/${state.currentPersonId}/merge-suggestions?limit=20`),
+  ]);
   if (!people) return;
   state.allPeople = people;
+  state.mergeSimilarityMap = new Map((suggestions || []).map(s => [s.person_id, s.distance]));
   state.mergeTargetId = null;
   document.getElementById('merge-confirm-btn').disabled = true;
   document.getElementById('merge-search').value = '';
@@ -2753,12 +2757,31 @@ async function openMergeDialog() {
 }
 
 function renderMergeList(people) {
+  const simMap = state.mergeSimilarityMap || new Map();
   const ul = document.getElementById('merge-target-list');
   ul.innerHTML = '';
-  for (const p of people) {
+
+  // Sort: entries with similarity score first (higher similarity = lower distance),
+  // then the rest by photo_count desc
+  const sorted = [...people].sort((a, b) => {
+    const da = simMap.has(a.id) ? simMap.get(a.id) : Infinity;
+    const db = simMap.has(b.id) ? simMap.get(b.id) : Infinity;
+    if (da !== db) return da - db;
+    return (b.photo_count || 0) - (a.photo_count || 0);
+  });
+
+  for (const p of sorted) {
     const li = document.createElement('li');
-    li.style.cssText = 'padding:6px 10px;cursor:pointer;';
-    li.textContent = (p.name || '未命名') + ` (${p.photo_count} 张)`;
+    li.style.cssText = 'padding:6px 10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px';
+    const label = document.createElement('span');
+    label.textContent = (p.name || '未命名') + ` (${p.photo_count} 张)`;
+    li.appendChild(label);
+    if (simMap.has(p.id)) {
+      const pct = document.createElement('span');
+      pct.style.cssText = 'font-size:11px;color:#888;flex-shrink:0';
+      pct.textContent = `${Math.round((1 - simMap.get(p.id)) * 100)}% 相似`;
+      li.appendChild(pct);
+    }
     li.addEventListener('click', () => {
       ul.querySelectorAll('li').forEach(x => x.style.background = '');
       li.style.background = '#e8e0ff';
