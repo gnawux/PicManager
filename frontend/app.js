@@ -1726,14 +1726,41 @@ async function loadMergeSuggestions(personId, person) {
     panel.classList.add('hidden');
     return;
   }
-  const suggestions = await fetchJSON(`/api/people/${personId}/merge-suggestions?limit=10`);
+  const suggestions = await fetchJSON(`/api/people/${personId}/merge-suggestions?limit=20`);
   if (!suggestions || suggestions.length === 0) {
     panel.classList.add('hidden');
     return;
   }
   panel.classList.remove('hidden');
   panel.classList.add('panel-collapsed');
-  for (const s of suggestions) {
+
+  // Sort: named first (by distance), then unnamed (by distance)
+  const named   = suggestions.filter(s =>  s.name);
+  const unnamed = suggestions.filter(s => !s.name);
+
+  const addSeparator = (label) => {
+    const sep = document.createElement('div');
+    sep.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:0 6px';
+    sep.innerHTML = `<div style="width:1px;flex:1;background:#ddd"></div><span style="font-size:10px;color:#aaa;white-space:nowrap;writing-mode:vertical-lr;transform:rotate(180deg)">${label}</span><div style="width:1px;flex:1;background:#ddd"></div>`;
+    list.appendChild(sep);
+  };
+
+  const allGrouped = [];
+  if (named.length)   allGrouped.push({ label: '已命名', items: named });
+  if (unnamed.length) allGrouped.push({ label: '未命名', items: unnamed });
+
+  let firstGroup = true;
+  for (const group of allGrouped) {
+    if (!firstGroup) addSeparator(group.label);
+    else if (allGrouped.length > 1) {
+      // Label for first group: insert header label before cards
+      const lbl = document.createElement('div');
+      lbl.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 6px';
+      lbl.innerHTML = `<span style="font-size:10px;color:#aaa;white-space:nowrap;writing-mode:vertical-lr;transform:rotate(180deg)">${group.label}</span>`;
+      list.appendChild(lbl);
+    }
+    firstGroup = false;
+    for (const s of group.items) {
     const pct = Math.round((1 - s.distance) * 100);
     const card = document.createElement('div');
     card.style.cssText = 'flex-shrink:0;width:80px;text-align:center';
@@ -1783,7 +1810,8 @@ async function loadMergeSuggestions(personId, person) {
 
     card.append(img, nameEl, meta, mergeBtn);
     list.appendChild(card);
-  }
+    } // end group.items loop
+  } // end allGrouped loop
 }
 
 async function loadOutlierFaces(personId) {
