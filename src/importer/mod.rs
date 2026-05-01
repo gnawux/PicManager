@@ -288,6 +288,13 @@ async fn import_one(
     let photo_id = result.last_insert_rowid();
     let mut face_count = 0usize;
     if let Ok(img) = image::open(&final_path) {
+        sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ?")
+            .bind(img.width() as i64)
+            .bind(img.height() as i64)
+            .bind(photo_id)
+            .execute(pool)
+            .await
+            .ok();
         face_count = crate::face::analyze_one(pool, photo_id, &img).await;
         crate::animal::detect_and_save(pool, photo_id, &img).await;
     }

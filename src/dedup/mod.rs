@@ -11,8 +11,11 @@ pub use candidate::{scan, scan_full};
 pub struct DedupMember {
     pub photo_id: i64,
     pub path: String,
+    pub filename: String,
     pub taken_at: Option<String>,
     pub camera: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
     pub keep: bool,
 }
 
@@ -32,7 +35,7 @@ pub async fn list_groups(pool: &SqlitePool) -> Result<Vec<DedupGroup>> {
     let mut groups = Vec::new();
     for (group_id, status) in group_rows {
         let members: Vec<DedupMember> = sqlx::query_as(
-            "SELECT dm.photo_id, p.path, p.taken_at, p.camera, dm.keep
+            "SELECT dm.photo_id, p.path, p.taken_at, p.camera, p.width, p.height, dm.keep
              FROM dedup_members dm JOIN photos p ON p.id = dm.photo_id
              WHERE dm.group_id = ? ORDER BY dm.photo_id",
         )
@@ -40,8 +43,12 @@ pub async fn list_groups(pool: &SqlitePool) -> Result<Vec<DedupGroup>> {
         .fetch_all(pool)
         .await?
         .into_iter()
-        .map(|(photo_id, path, taken_at, camera, keep): (i64, String, Option<String>, Option<String>, bool)| {
-            DedupMember { photo_id, path, taken_at, camera, keep }
+        .map(|(photo_id, path, taken_at, camera, width, height, keep): (i64, String, Option<String>, Option<String>, Option<i64>, Option<i64>, bool)| {
+            let filename = std::path::Path::new(&path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            DedupMember { photo_id, path, filename, taken_at, camera, width, height, keep }
         })
         .collect();
 
@@ -123,12 +130,12 @@ mod tests {
 
     async fn setup_group(pool: &SqlitePool) -> (i64, i64, i64) {
         let pa = sqlx::query(
-            "INSERT INTO photos (path, sha256, format, phash, import_status) VALUES ('/a.jpg','a','jpeg','AAAA','imported')",
+            "INSERT INTO photos (path, sha256, format, phash, import_status, width, height) VALUES ('/a.jpg','a','jpeg','AAAA','imported',1920,1080)",
         )
         .execute(pool).await.unwrap().last_insert_rowid();
 
         let pb = sqlx::query(
-            "INSERT INTO photos (path, sha256, format, phash, import_status) VALUES ('/b.jpg','b','jpeg','AAAA','imported')",
+            "INSERT INTO photos (path, sha256, format, phash, import_status, width, height) VALUES ('/b.jpg','b','jpeg','AAAA','imported',800,600)",
         )
         .execute(pool).await.unwrap().last_insert_rowid();
 
@@ -221,5 +228,53 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count.0, 1, "soft-deleting one photo should decrement by 1");
+    }
+
+    #[tokio::test]
+    async fn list_groups_returns_filename() {
+        let pool = test_pool().await;
+        setup_group(&pool).await;
+        let groups = list_groups(&pool).await.unwrap();
+        let filenames: Vec<&str> = groups[0].members.iter().map(|m| m.filename.as_str()).collect();
+        assert!(filenames.contains(&"a.jpg"), "filename should be basename of path");
+        assert!(filenames.contains(&"b.jpg"));
+    }
+
+    #[tokio::test]
+    async fn list_groups_returns_dimensions() {
+        let pool = test_pool().await;
+        setup_group(&pool).await;
+        let groups = list_groups(&pool).await.unwrap();
+        // members are sorted by photo_id; a was inserted first
+        let a = groups[0].members.iter().find(|m| m.filename == "a.jpg").unwrap();
+        assert_eq!(a.width, Some(1920));
+        assert_eq!(a.height, Some(1080));
+        let b = groups[0].members.iter().find(|m| m.filename == "b.jpg").unwrap();
+        assert_eq!(b.width, Some(800));
+        assert_eq!(b.height, Some(600));
+    }
+
+    #[tokio::test]
+    async fn list_groups_null_dimensions_when_not_set() {
+        let pool = test_pool().await;
+        // Insert photos without width/height
+        let pa = sqlx::query(
+            "INSERT INTO photos (path, sha256, format, phash, import_status) VALUES ('/c.jpg','c','jpeg','BBBB','imported')",
+        )
+        .execute(&pool).await.unwrap().last_insert_rowid();
+        let pb = sqlx::query(
+            "INSERT INTO photos (path, sha256, format, phash, import_status) VALUES ('/d.jpg','d','jpeg','BBBB','imported')",
+        )
+        .execute(&pool).await.unwrap().last_insert_rowid();
+        let gid = sqlx::query("INSERT INTO dedup_groups (status) VALUES ('pending')")
+            .execute(&pool).await.unwrap().last_insert_rowid();
+        sqlx::query("INSERT INTO dedup_members (group_id, photo_id) VALUES (?,?),(?,?)")
+            .bind(gid).bind(pa).bind(gid).bind(pb)
+            .execute(&pool).await.unwrap();
+
+        let groups = list_groups(&pool).await.unwrap();
+        let m = &groups[0].members[0];
+        assert!(m.width.is_none(), "width should be None when not stored");
+        assert!(m.height.is_none());
     }
 }
