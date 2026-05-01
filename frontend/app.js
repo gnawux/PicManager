@@ -1741,7 +1741,7 @@ async function loadMergeSuggestions(personId, person) {
   const addSeparator = (label) => {
     const sep = document.createElement('div');
     sep.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;padding:0 6px';
-    sep.innerHTML = `<div style="width:1px;flex:1;background:#ddd"></div><span style="font-size:10px;color:#aaa;white-space:nowrap;writing-mode:vertical-lr;transform:rotate(180deg)">${label}</span><div style="width:1px;flex:1;background:#ddd"></div>`;
+    sep.innerHTML = `<div style="width:1px;flex:1;background:#ddd"></div><span style="font-size:10px;color:#aaa;white-space:nowrap;writing-mode:vertical-lr">${label}</span><div style="width:1px;flex:1;background:#ddd"></div>`;
     list.appendChild(sep);
   };
 
@@ -1756,7 +1756,7 @@ async function loadMergeSuggestions(personId, person) {
       // Label for first group: insert header label before cards
       const lbl = document.createElement('div');
       lbl.style.cssText = 'flex-shrink:0;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:0 6px';
-      lbl.innerHTML = `<span style="font-size:10px;color:#aaa;white-space:nowrap;writing-mode:vertical-lr;transform:rotate(180deg)">${group.label}</span>`;
+      lbl.innerHTML = `<span style="font-size:10px;color:#aaa;white-space:nowrap;writing-mode:vertical-lr">${group.label}</span>`;
       list.appendChild(lbl);
     }
     firstGroup = false;
@@ -2752,7 +2752,7 @@ async function openMergeDialog() {
   state.mergeTargetId = null;
   document.getElementById('merge-confirm-btn').disabled = true;
   document.getElementById('merge-search').value = '';
-  renderMergeList(people.filter(p => p.id !== state.currentPersonId));
+  renderMergeList(people.filter(p => p.id !== state.currentPersonId && p.name));
   document.getElementById('merge-modal').classList.remove('hidden');
 }
 
@@ -2795,8 +2795,8 @@ function renderMergeList(people) {
 function filterMergeList() {
   const q = document.getElementById('merge-search').value.toLowerCase();
   const filtered = state.allPeople.filter(p =>
-    p.id !== state.currentPersonId &&
-    (p.name || '未命名').toLowerCase().includes(q)
+    p.id !== state.currentPersonId && p.name &&
+    p.name.toLowerCase().includes(q)
   );
   renderMergeList(filtered);
 }
