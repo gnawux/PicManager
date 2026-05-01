@@ -192,9 +192,13 @@ docs/
 | 36e | docs: DESIGN.md 新增 7 个 API 端点，ARCHITECTURE.md 新增 collections.rs，CLAUDE.md 更新 |
 | 37a | fix(dedup): 两层去重架构 + 时间感知阈值；degenerate hash 过滤（对称双侧）；DCT pHash Layer 2 验证 |
 | 37b | fix(dedup): Union-Find 聚类 — 连拍 n 张合并为 1 组而非 C(n,2) 对组；scan_full 扫前清除旧 pending 组 |
-| 37c | fix(dedup): SIMILARITY_THRESHOLD_FAR 3→8；连拍/远距离独立 Union-Find 防止连拍组被结构相似链污染 |
+| 37c | fix(dedup): SIMILARITY_THRESHOLD_FAR 8→3；连拍/远距离独立 Union-Find 防止连拍组被结构相似链污染 |
+| 38a | feat(dedup): CLI 只扫描报告组数，移除终端交互提示，重定向到 Web 界面确认 |
+| 38b | feat(dedup): GET /api/dedup 返回 filename/width/height 字段；migration 0014；import_one 存储尺寸；3 个 TDD 测试 |
+| 38c | feat(dedup): Web UI dedup 列表展示完整文件名 + 尺寸徽章 + 拍摄日期/相机信息；移除文件名截断 |
+| 38d | feat(dedup): Web UI 全屏比较模态框，加载原图并排展示，点击选择保留项并与主模态双向同步 |
 
-当前测试数：**309 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**312 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
