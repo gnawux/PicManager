@@ -1043,6 +1043,8 @@ GET    /api/animals/{species}/photos      → list_species_photos
 - **普通合并**（source 不是 target 的祖先）：将 source 的子节点改到 target 下，移人脸，删 source。
 - **父→子合并**（source 是 target 的祖先，用递归 CTE 检测）：先将 target.parent_id 改为 source.parent_id（target 升级到 source 的位置），再将 source 的其余子节点改到 target 下，移人脸，删 source。避免产生 parent_id 自引用的孤儿节点。
 前端在两处合并入口（建议合并面板、合并到…对话框）均显示包含源/目标名称的确认弹窗，防止误操作。
+- **建议合并面板**：`?limit=20` 拉取建议，结果按**已命名 / 未命名**分两组展示（组间有分隔符），各组内按相似度降序排列；条目超出宽度横向滚动。
+- **合并到…对话框**：打开时同时拉取 `merge-suggestions?limit=20` 获取相似度数据；候选列表按相似度降序排列（无相似度数据的追加在末尾，按照片数降序），有相似度的条目右侧显示"N% 相似"。
 
 **`POST /api/people/{id}/reparent`**：`{ "new_parent_id": 3 }` — `new_parent_id` 为 null 时提升为顶级。
 
@@ -1054,7 +1056,7 @@ GET    /api/animals/{species}/photos      → list_species_photos
 
 **`POST /api/people/{id}/lift`**：`{ "name": "父节点名" }` — 在当前人物上方插入一个新父节点：新人物继承当前人物原 `parent_id`，当前人物的 `parent_id` 改为新人物。在同一事务中执行。返回 `{ "new_person_id": N }`。
 
-**`GET /api/people/{id}/merge-suggestions?limit=10`**：使用置信度优先的精炼质心算法（见下）计算目标人物质心，对所有其他 active 人物也计算精炼质心，按余弦距离升序返回最多 `limit` 条建议（默认 10）。若目标人物无 embedding 则返回空列表。
+**`GET /api/people/{id}/merge-suggestions?limit=20`**：使用置信度优先的精炼质心算法（见下）计算目标人物质心，对所有其他 active 人物也计算精炼质心，按余弦距离升序返回最多 `limit` 条建议（默认 5，上限 20）。若目标人物无 embedding 则返回空列表。
 Response 数组元素：`{ person_id, name, cover_face_id, photo_count, face_count, distance }`
 
 **`GET /api/people/{id}/outlier-faces?limit=5&min_dist=0.50`**：计算该人物的精炼质心，返回距质心余弦距离超过 `min_dist`（默认 0.50）的人脸，按距离降序排列，最多 `limit` 条（上限 50）。`min_dist=0` 可获取全部人脸（按距离排序，无阈值），用于诊断。若有效 embedding 数量 < 2 则返回空列表。
