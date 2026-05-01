@@ -942,7 +942,10 @@ async function openDedupModal() {
   for (const g of groups) {
     const div = document.createElement('div');
     div.className = 'dedup-group';
-    div.innerHTML = `<h3>重复组 #${g.group_id}</h3>
+    div.innerHTML = `<div class="dedup-group-header">
+        <h3>重复组 #${g.group_id}</h3>
+        <button class="compare-btn" title="放大比较原图">⛶ 放大比较</button>
+      </div>
       <div class="dedup-members"></div>
       <div class="actions">
         <button class="resolve-btn" data-gid="${g.group_id}">确认保留选中项</button>
@@ -954,9 +957,13 @@ async function openDedupModal() {
       const el = document.createElement('div');
       el.className = 'dedup-member';
       el.dataset.photoId = m.photo_id;
+      const dimsHtml = m.width ? `<p class="dedup-dims">${m.width}×${m.height}</p>` : '';
+      const dateHtml = m.taken_at ? `<p class="dedup-meta">${m.taken_at.slice(0, 10)}</p>` : '';
+      const camHtml  = m.camera  ? `<p class="dedup-meta">${m.camera}</p>` : '';
       el.innerHTML = `
         <img src="/api/photos/${m.photo_id}/thumb" alt="">
-        <p title="${m.path}">${m.path.split('/').pop()}</p>`;
+        <p class="dedup-filename" title="${m.path}">${m.filename}</p>
+        ${dimsHtml}${dateHtml}${camHtml}`;
       el.addEventListener('click', () => el.classList.toggle('selected'));
       membersDiv.appendChild(el);
     }
@@ -976,10 +983,15 @@ async function openDedupModal() {
     });
 
     div.querySelector('.skip-btn').addEventListener('click', () => div.remove());
+    div.querySelector('.compare-btn').addEventListener('click', () => openCompareOverlay(g, div));
     container.appendChild(div);
   }
 
   document.getElementById('dedup-modal').classList.remove('hidden');
+}
+
+function openCompareOverlay(g, groupDiv) {
+  // Implemented in step 38d
 }
 
 // ── View switching ────────────────────────────────────────────────────────────
