@@ -29,7 +29,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
     },
-    /// 扫描重复照片并交互式确认
+    /// 扫描重复照片（在 Web 界面确认去重操作）
     Dedup {
         /// 重置扫描状态并全库重新扫描（默认为增量扫描）
         #[arg(long)]
@@ -109,27 +109,9 @@ async fn main() -> anyhow::Result<()> {
 
             let groups = dedup::list_groups(&pool).await?;
             if groups.is_empty() {
-                println!("没有待确认的重复组");
-            }
-            for group in &groups {
-                println!("\n--- 重复组 {} ---", group.group_id);
-                for m in &group.members {
-                    println!("  [{}] {}", m.photo_id, m.path);
-                    if let Some(t) = &m.taken_at { println!("       拍摄时间: {t}"); }
-                    if let Some(c) = &m.camera   { println!("       相机: {c}"); }
-                }
-                print!("保留哪张（输入 photo_id，多个用逗号分隔，s=跳过）: ");
-                use std::io::{self, Write};
-                io::stdout().flush()?;
-                let mut input = String::new();
-                io::stdin().read_line(&mut input)?;
-                let input = input.trim();
-                if input == "s" || input.is_empty() { continue; }
-                let keep_ids: Vec<i64> = input.split(',')
-                    .filter_map(|s| s.trim().parse().ok())
-                    .collect();
-                dedup::resolve(&pool, group.group_id, &keep_ids).await?;
-                println!("已确认");
+                println!("没有待确认的重复组，无需操作");
+            } else {
+                println!("共 {} 个待确认的重复组，请启动 Web 界面（picmanager serve）确认", groups.len());
             }
         }
         Command::Config => {
