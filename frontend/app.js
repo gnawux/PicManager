@@ -2428,6 +2428,35 @@ async function savePersonName() {
 
 let _mergeConfirmCallback = null;
 
+function showInlineConfirm(anchorX, anchorY, message, onConfirm) {
+  document.querySelectorAll('.inline-confirm').forEach(el => el.remove());
+  const el = document.createElement('div');
+  el.className = 'inline-confirm';
+  el.innerHTML = `<p>${message}</p>
+    <div class="inline-confirm-btns">
+      <button class="btn-danger confirm-ok">确定</button>
+      <button class="btn-ghost confirm-cancel">取消</button>
+    </div>`;
+  document.body.appendChild(el);
+
+  // Clamp position so the popover stays within the viewport
+  const W = window.innerWidth, H = window.innerHeight;
+  const elW = el.offsetWidth  || 200;
+  const elH = el.offsetHeight || 80;
+  let left = anchorX + 10;
+  let top  = anchorY + 10;
+  if (left + elW > W - 8) left = anchorX - elW - 10;
+  if (top  + elH > H - 8) top  = anchorY - elH - 10;
+  el.style.left = `${Math.max(8, left)}px`;
+  el.style.top  = `${Math.max(8, top)}px`;
+
+  const dismiss = () => el.remove();
+  el.querySelector('.confirm-ok').addEventListener('click', () => { dismiss(); onConfirm(); });
+  el.querySelector('.confirm-cancel').addEventListener('click', dismiss);
+  // Dismiss on any outside click (deferred so the originating click doesn't immediately close it)
+  setTimeout(() => document.addEventListener('click', dismiss, { once: true, capture: true }), 0);
+}
+
 function showMergeConfirm(message, onConfirm) {
   document.getElementById('merge-confirm-message').textContent = message;
   _mergeConfirmCallback = onConfirm;
@@ -2609,25 +2638,27 @@ function showPersonMenu(btn, personId, card) {
   menu.style.top = `${rect.bottom + 4}px`;
   menu.style.left = `${rect.left}px`;
 
-  menu.querySelector('[data-action="ignore"]').addEventListener('click', async (e) => {
+  menu.querySelector('[data-action="ignore"]').addEventListener('click', (e) => {
     e.stopPropagation();
     closePersonMenu();
-    if (!confirm('确定要忽略此人？此操作可撤销。')) return;
-    const ok = await patchPerson(personId, { status: 'ignored' });
-    if (ok) {
-      removePersonCard(personId, card);
-      pushUndo('忽略此人', async () => { await patchPerson(personId, { status: 'active' }); });
-    }
+    showInlineConfirm(e.clientX, e.clientY, '确定要忽略此人？此操作可撤销。', async () => {
+      const ok = await patchPerson(personId, { status: 'ignored' });
+      if (ok) {
+        removePersonCard(personId, card);
+        pushUndo('忽略此人', async () => { await patchPerson(personId, { status: 'active' }); });
+      }
+    });
   });
-  menu.querySelector('[data-action="not-person"]').addEventListener('click', async (e) => {
+  menu.querySelector('[data-action="not-person"]').addEventListener('click', (e) => {
     e.stopPropagation();
     closePersonMenu();
-    if (!confirm('确定要标记为非人物？此操作可撤销。')) return;
-    const ok = await patchPerson(personId, { status: 'not_a_person' });
-    if (ok) {
-      removePersonCard(personId, card);
-      pushUndo('标记为非人物', async () => { await patchPerson(personId, { status: 'active' }); });
-    }
+    showInlineConfirm(e.clientX, e.clientY, '确定要标记为非人物？此操作可撤销。', async () => {
+      const ok = await patchPerson(personId, { status: 'not_a_person' });
+      if (ok) {
+        removePersonCard(personId, card);
+        pushUndo('标记为非人物', async () => { await patchPerson(personId, { status: 'active' }); });
+      }
+    });
   });
 }
 
