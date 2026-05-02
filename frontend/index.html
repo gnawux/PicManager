@@ -61,7 +61,6 @@
         <button class="tab-btn active" data-view="photos">照片</button>
         <button class="tab-btn" data-view="people">人物</button>
         <button class="tab-btn" data-view="locations">地点</button>
-        <button class="tab-btn" data-view="animals">动物</button>
       </nav>
 
       <!-- ── Photos view ──────────────────────────────────────────── -->
@@ -126,29 +125,7 @@
         </div>
       </div>
 
-      <!-- ── Animals view ───────────────────────────────────────────── -->
-      <div id="view-animals" class="view-section hidden">
-        <div id="animal-species-section">
-          <div class="toolbar">
-            <span id="animal-count"></span>
-          </div>
-          <div id="animal-species-grid" class="animal-species-grid"></div>
-        </div>
-        <div id="animal-photos-section" class="hidden">
-          <div class="toolbar">
-            <button id="animal-back-btn" class="btn-ghost">← 动物列表</button>
-            <span id="animal-species-title"></span>
-            <div class="pagination">
-              <button id="animal-prev-btn">‹</button>
-              <span id="animal-page-info"></span>
-              <button id="animal-next-btn">›</button>
-            </div>
-          </div>
-          <div id="animal-photos-grid" class="photo-grid"></div>
-        </div>
-      </div>
-
-      <!-- ── People view ──────────────────────────────────────────── -->
+<!-- ── People view ──────────────────────────────────────────── -->
       <div id="view-people" class="view-section hidden">
 
         <!-- People list -->
@@ -346,7 +323,6 @@
       <div class="detail-image-wrap">
         <img id="detail-img" src="" alt="">
         <svg id="detail-faces" class="face-overlay" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
-        <svg id="detail-animals" class="face-overlay" viewBox="0 0 1 1" preserveAspectRatio="none"></svg>
       </div>
       <div class="detail-meta">
         <h2 id="detail-title"></h2>

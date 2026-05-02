@@ -296,7 +296,6 @@ async fn import_one(
             .await
             .ok();
         face_count = crate::face::analyze_one(pool, photo_id, &img).await;
-        crate::animal::detect_and_save(pool, photo_id, &img).await;
     }
 
     Ok(Some((photo_id, face_count, meta.gps_lat.is_some())))
