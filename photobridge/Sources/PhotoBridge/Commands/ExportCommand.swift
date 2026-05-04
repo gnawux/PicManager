@@ -37,6 +37,12 @@ struct ExportCommand: AsyncParsableCommand {
             try FileManager.default.createDirectory(at: stagingDir, withIntermediateDirectories: true)
         }
 
+        // Snapshot the current change token before enumeration so that a
+        // subsequent `photobridge sync` starts from this point in time.
+        let tokenSnapshot = IncrementalEnumerator().serializeToken(
+            PHPhotoLibrary.shared().currentChangeToken
+        )
+
         print("Enumerating Photos library…")
         let enumerator = LibraryEnumerator()
         let pairs = enumerator.enumerate { processed, total in
@@ -89,6 +95,14 @@ struct ExportCommand: AsyncParsableCommand {
             fflush(stdout)
         }
         print()
+        // Save sync state so `photobridge sync` only fetches changes since this export.
+        var state = SyncState(
+            lastSyncToken: tokenSnapshot,
+            lastSyncDate: Date(),
+            exportedCount: exported
+        )
+        try state.save(to: IncrementalEnumerator.defaultStateURL)
+
         print("Done. \(exported) exported, \(failed) failed.")
         print("Next: run picmanager import --batch-size \(batchSize) '\(stagingDir.path)'")
     }
