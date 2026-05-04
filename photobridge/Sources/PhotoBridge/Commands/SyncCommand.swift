@@ -68,6 +68,23 @@ struct SyncCommand: AsyncParsableCommand {
             return
         }
 
+        // Disk space pre-check
+        let assets = pairs.map { $0.0 }
+        let libraryPath: String? = nil  // PHPhotoLibrary has no public API for library path
+        if let warning = checkDiskSpace(stagingDir: stagingDir, assets: assets, photosLibraryPath: libraryPath) {
+            if warning.isSystemVolume {
+                fputs("""
+                ⚠️  Photos Library is on the system volume. The Photos framework will temporarily
+                    download iCloud photos to the system volume cache during sync.
+                    Consider moving your Photos Library to an external drive first.
+                    Run: photobridge setup\n
+                """, stderr)
+            }
+            if Double(warning.estimatedBytes) > Double(warning.freeBytes) * 0.8 {
+                fputs("⚠️  Estimated download size (\(formatBytes(warning.estimatedBytes))) may exceed 80% of free space (\(formatBytes(warning.freeBytes))). Proceeding anyway.\n", stderr)
+            }
+        }
+
         print("Exporting \(pairs.count) new assets to \(stagingDir.path)…")
         var exported = 0
         var exportFailed = 0

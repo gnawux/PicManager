@@ -29,4 +29,7 @@ runFixTimestampsTests()
 // Step 43a
 runPicManagerRunnerTests()
 
+// Step 43c
+runDiskSpaceCheckTests()
+
 finish()
