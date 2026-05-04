@@ -8,4 +8,7 @@ suite("PhotoBridge package") {
 // Step 39b
 runAuthTests()
 
+// Step 40a
+runAssetFilterTests()
+
 finish()

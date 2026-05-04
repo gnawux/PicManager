@@ -24,7 +24,8 @@ let package = Package(
                 "PhotoBridgeLib",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
-            path: "Sources/PhotoBridge"
+            path: "Sources/PhotoBridge",
+            exclude: ["Info.plist", "PhotoBridge.entitlements"]
         ),
         // Test runner executable
         .executableTarget(
