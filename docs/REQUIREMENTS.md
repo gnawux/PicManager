@@ -262,6 +262,112 @@ picmanager fill-missing [--faces] [--geo]
 * **移除照片**：在精选集视图内多选照片后点"从精选集移除"批量移除；移除只删除关联关系，不影响照片本身
 * **浏览**：点击侧边栏精选集条目，主区域展示该精选集中的照片（分页，按拍摄时间排序）
 
+## iCloud 照片导入（PhotoBridge）
+
+PicManager 的核心导入器处理本地文件系统目录。iPhone / iPad 上的照片通过 iCloud 同步至 macOS Photos.app，需要一个独立的原生 macOS 工具 **PhotoBridge** 作为桥梁，将 Photos 库中的照片导出并交由 PicManager 入库。
+
+### 使用流程
+
+```
+╔══════════════════════════════════════════════════════════════════════╗
+║                         iCloud 照片服务                              ║
+║          iPhone / iPad / Mac  ──→  跨设备自动同步                    ║
+╚══════════════════════════════╤═══════════════════════════════════════╝
+                               │  iCloud 同步
+                               ▼
+╔══════════════════════════════════════════════════════════════════════╗
+║            macOS Photos.app  系统照片库                               ║
+║            （建议迁移至外置硬盘，与 PicManager 库同卷）               ║
+║            Photos 偏好设置 → 通用 → 将此库用作系统照片库             ║
+╚══════════════════════════════╤═══════════════════════════════════════╝
+                               │  PhotoKit API（macOS 26+）
+                               ▼
+╔══════════════════════════════════════════════════════════════════════╗
+║                      PhotoBridge  CLI                                ║
+║                                                                      ║
+║   photobridge export   ── 首次全量导出                               ║
+║   photobridge sync     ── 增量同步（仅导出上次以来的新增照片）        ║
+║   photobridge status   ── 查看同步状态                               ║
+║                                                                      ║
+║   • 格式过滤：只导出 HEIC / JPEG 静态图                              ║
+║     Live Photo 只取静态图，跳过 MOV 视频组件                         ║
+║     RAW＋JPEG 组合只取 JPEG，跳过 RAW 文件                           ║
+║     连拍照片只取精选张（用户在 Photos 中标记的 userPick）            ║
+║   • 分批处理：每批 N 张写入暂存目录，导入确认后清空                   ║
+║   • 状态持久化：记录已导出资产 ID 和增量变更令牌                     ║
+╚════════╤═════════════════════════════════╤════════════════════════════╝
+         │ 每批文件写入暂存目录             │ 调用子进程
+         ▼                                 ▼
+╔════════════════════╗      picmanager import --copy
+║   暂存目录（临时） ║           --batch-size N
+║                    ║           --log import.ndjson
+║  2025-06-15/       ║           <暂存目录>
+║    IMG_001.heic    ║               │
+║    IMG_002.jpg     ║         解析 NDJSON 日志
+╚════════════════════╝         确认成功后清空暂存
+                                     │
+                                     ▼
+╔══════════════════════════════════════════════════════════════════════╗
+║                     PicManager  照片库                               ║
+║                     （外置硬盘，用户指定路径）                        ║
+║                                                                      ║
+║   ┌──────────────┐   ┌─────────────────┐   ┌─────────────────────┐  ║
+║   │  SQLite DB   │   │  照片文件        │   │  Web UI :8080        │  ║
+║   │  元数据      │   │  yyyy-mm-dd/    │   │  人物 · 相册 · 地图  │  ║
+║   │  人脸嵌入    │   │  IMG_xxx.heic   │   │  去重 · 精选集       │  ║
+║   └──────────────┘   └─────────────────┘   └─────────────────────┘  ║
+╚══════════════════════════════════════════════════════════════════════╝
+```
+
+### 前置要求（首次使用）
+
+> **重要**：PhotoKit 导出云端照片时，Photos 框架会先将原始文件下载到 Photos Library 所在磁盘。若 Photos Library 仍在系统卷（默认 `~/Pictures/`），下载大量 iCloud 照片可能占满系统卷。
+>
+> **推荐做法**：在 macOS Photos.app 偏好设置 → 通用 中，将照片库迁移到与 PicManager 库同一块外置硬盘，再设置为系统照片库。
+
+### 格式处理规则
+
+| 资产类型 | 导出内容 | 跳过内容 |
+|----------|----------|----------|
+| 普通 JPEG / HEIC | 静态图文件 | — |
+| Live Photo | 静态图（HEIC/JPEG） | 视频组件（.mov） |
+| RAW＋JPEG 组合 | JPEG 文件 | RAW 文件（.dng / .arw 等） |
+| 连拍（Burst） | 精选张（userPick） | 其余连拍帧 |
+| 视频 | 跳过 | — |
+
+### 与 PicManager 批量导入集成
+
+PhotoBridge 调用 `picmanager import` 子进程，两侧使用相同的 `--batch-size` 参数：
+
+```bash
+# 首次全量导出（Photos Library 迁移完毕后执行一次）
+photobridge export --batch-size 200
+
+# 日常增量同步（新照片加入 iCloud 后执行）
+photobridge sync --batch-size 200
+
+# 查看上次同步时间与待处理数量
+photobridge status
+```
+
+PhotoBridge 解析 `picmanager import --log` 输出的 NDJSON 日志，确认每批照片成功入库后再清空暂存文件，失败的文件在下次运行时自动重试。
+
+### 状态管理
+
+PhotoBridge 在 `~/Library/Application Support/PhotoBridge/state.json` 维护：
+
+* **增量变更令牌**（`PHPersistentChangeToken`）：记录上次同步位点，`photobridge sync` 从此处开始，只处理新增资产
+* **已导出资产 ID 列表**：防止因 picmanager 入库失败导致重复导出
+
+### 技术规格
+
+* 语言：Swift，面向 macOS 26+
+* 框架：PhotoKit（系统照片库访问）
+* 权限：`NSPhotoLibraryUsageDescription`（完整照片库读取权限）
+* 首次运行时弹出系统授权对话框，后续无需重复授权
+
+---
+
 ## 其他要求
 
 * 导入后照片在 library 中按 `yyyy-mm-dd` 目录组织，数据库记录照片在 library 内的新路径

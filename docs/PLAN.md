@@ -1140,3 +1140,380 @@ GET  /api/people?name_exact=张三
 - 空名称时不触发查重（前端校验）
 
 **验收**：将已有"张三"聚类再命名一个聚类为"张三"，弹出对话框并展示双方缩略图；选"是同一人"后两者合并；选"不同人"后人物列表中出现两个"张三"。
+
+---
+
+## Step 39 — PhotoBridge 项目脚手架
+
+**目标**：在仓库内建立独立 Swift Package，能编译并通过 PhotoKit 权限检查。
+
+### 39a — Swift Package 骨架
+
+在 `photobridge/` 下初始化 Swift Package Manager 项目：
+
+```
+photobridge/
+  Package.swift
+  Sources/
+    PhotoBridge/
+      main.swift         CLI 入口
+      Commands/          各子命令占位文件
+      Core/              业务逻辑占位
+  Tests/
+    PhotoBridgeTests/
+```
+
+`Package.swift` 配置：
+- Swift tools version 6.0，platform `.macOS(.v26)`
+- 依赖：`swift-argument-parser`（Apple 官方 CLI 框架）
+- Target：executable `PhotoBridge` + testTarget `PhotoBridgeTests`
+
+`main.swift` 使用 `ArgumentParser` 定义根命令及三个子命令占位：`export`、`sync`、`status`，暂时打印 "Not yet implemented"。
+
+**单元测试**：`PhotoBridgeTests` 空测试，确保 `swift test` 通过。
+
+**验收**：`swift build` 无报错；`photobridge --help` 显示三个子命令；`swift test` 通过。
+
+---
+
+### 39b — Entitlements 与权限配置
+
+配置照片库访问权限（macOS App Sandbox / Hardened Runtime）：
+
+- `photobridge.entitlements`：声明 `com.apple.security.personal-information.photos-library`
+- `Info.plist`（或 `PhotoBridge-Info.plist`）：`NSPhotoLibraryUsageDescription` 写入说明文字
+- 代码层：`PhotoLibraryAuth.swift`，封装 `PHPhotoLibrary.requestAuthorization(for:)` 异步授权流程，返回 `Result<Void, AuthError>`；授权被拒绝时打印友好提示并以非零退出码退出
+
+**单元测试**：mock `PHAuthorizationStatus` 各状态（notDetermined / authorized / denied / restricted / limited），验证 `AuthError` 枚举覆盖全部分支。
+
+**验收**：首次运行 `photobridge status` 时，macOS 弹出照片库访问授权对话框；授权后再运行无对话框。
+
+---
+
+## Step 40 — 照片资产枚举与文件导出引擎
+
+**目标**：能从 Photos 库枚举全部符合条件的照片资产，并将文件写出到指定目录。
+
+### 40a — 资产枚举与资源类型过滤
+
+新建 `Core/AssetEnumerator.swift`：
+
+```swift
+struct AssetEnumerator {
+    /// 返回 Photos 库中所有需要导出的 (PHAsset, PHAssetResource) 对
+    func enumerate() -> [(PHAsset, PHAssetResource)]
+}
+```
+
+过滤规则（按优先级）：
+
+1. `PHAsset.mediaType == .image`（跳过视频）
+2. 每个 PHAsset 调用 `PHAssetResource.assetResources(for:)` 取资源列表，按以下逻辑选取**唯一一个**导出资源：
+   - 若存在 `.photo` 类型资源（JPEG 或 HEIC），取 `.photo`；跳过 `.alternatePhoto`（RAW）和 `.pairedVideo`（MOV）
+   - 若只有 `.alternatePhoto`（纯 RAW 资产，无 JPEG），**跳过整个资产**并记录日志
+3. 连拍资产（`asset.representsBurst == true`）：只保留 `burstSelectionTypes` 包含 `.userPick` 的资产；若无精选张，跳过整个连拍组
+
+**单元测试**：
+- 模拟各类资源列表（JPEG-only / HEIC-only / RAW+JPEG / Live Photo / 纯RAW），验证选取结果
+- 模拟连拍组（含 userPick / 不含 userPick），验证过滤行为
+
+**验收**：在测试照片库上运行枚举，输出资产数量，与 Photos.app 中显示的图片数一致（不含视频）。
+
+---
+
+### 40b — PHAssetResourceManager 文件写出
+
+新建 `Core/AssetExporter.swift`：
+
+```swift
+struct AssetExporter {
+    /// 将单个资产资源写出到 destURL，支持网络访问（下载云端资产）
+    func export(resource: PHAssetResource, to destURL: URL) async throws
+    
+    /// 批量导出，报告进度
+    func exportBatch(
+        assets: [(PHAsset, PHAssetResource)],
+        stagingDir: URL,
+        progress: @escaping (Int, Int) -> Void
+    ) async throws -> [ExportedAsset]
+}
+
+struct ExportedAsset {
+    let localIdentifier: String   // PHAsset.localIdentifier
+    let fileURL: URL              // 写出路径
+    let takenAt: Date?
+}
+```
+
+实现细节：
+- `PHAssetResourceRequestOptions.isNetworkAccessAllowed = true`（允许从 iCloud 下载）
+- 使用 `PHAssetResourceManager.default().writeData(for:toFile:options:completionHandler:)` 写出到 `stagingDir/<localIdentifier>.<ext>`，使用 localIdentifier 而非原始文件名，避免重名冲突
+- 导出文件的扩展名从 `PHAssetResource.uniformTypeIdentifier` 推断（`public.jpeg` → `.jpg`，`public.heic` → `.heic`）
+- 写出时并发数上限 `--max-concurrent-downloads`（默认 4），避免同时触发大量 iCloud 下载
+
+**单元测试**：使用 stub PHAssetResource 验证 URL 构造逻辑和扩展名推断。
+
+**验收**：`photobridge export --output ~/staging --dry-run` 打印待导出资产数量；实际导出后 staging 目录中出现文件，每个文件可被 `image` 工具打开。
+
+---
+
+### 40c — export 子命令接线
+
+将 40a/40b 接入 `Commands/ExportCommand.swift`：
+
+```
+photobridge export
+    [--output <dir>]          暂存目录（默认 ~/Library/Application Support/PhotoBridge/staging）
+    [--batch-size <n>]        每批数量（默认 200）
+    [--max-concurrent <n>]    并发下载数（默认 4）
+    [--dry-run]               只统计，不写文件
+    [--picmanager <path>]     picmanager 可执行文件路径（默认 PATH 搜索）
+```
+
+全量导出：枚举全库 → 按 batch-size 分批写出文件 → 每批调用 picmanager（Step 42 实现，本步先跳过调用，只写文件） → 打印进度。
+
+**验收**：`photobridge export --dry-run` 打印总数；`photobridge export` 在 staging 目录写出文件。
+
+---
+
+## Step 41 — 增量同步状态管理
+
+**目标**：持久化 `PHPersistentChangeToken`，实现只处理上次同步以来新增照片的增量模式。
+
+### 41a — 状态文件模型
+
+新建 `Core/SyncState.swift`：
+
+```swift
+struct SyncState: Codable {
+    var lastChangeTokenData: Data?          // PHPersistentChangeToken 序列化数据
+    var exportedIdentifiers: Set<String>    // 已成功入库的 localIdentifier
+    var lastSyncDate: Date?
+    var lastSyncCount: Int
+}
+```
+
+- 持久化路径：`~/Library/Application Support/PhotoBridge/state.json`
+- 线程安全：文件读写在主 actor 序列化
+- 提供 `SyncState.load() throws -> SyncState` 和 `save()` 方法
+
+**单元测试**：
+- 序列化 → 反序列化 roundtrip 验证字段完整性
+- 文件不存在时 `load()` 返回空状态（不抛出）
+
+---
+
+### 41b — PHPersistentChangeFetchRequest 增量枚举
+
+新建 `Core/IncrementalEnumerator.swift`：
+
+```swift
+struct IncrementalEnumerator {
+    /// 返回上次 changeToken 以来新增的 PHAsset，并更新 token
+    func fetchChanges(since token: PHPersistentChangeToken?) async throws
+        -> (assets: [PHAsset], newToken: PHPersistentChangeToken)
+}
+```
+
+实现细节：
+- 若 `token == nil`（首次），调用 `PHPhotoLibrary.shared().currentChangeToken` 仅获取当前令牌，不枚举资产（首次应使用全量 `AssetEnumerator`）
+- 若 `token != nil`，使用 `PHPersistentChangeFetchRequest(changeToken:)` 获取变更，过滤出 `insertions`（新增资产），对 `PHAssetChangeDetail.objectLocalIdentifiers` 批量 fetch PHAsset
+- 将新 token 回写到 `SyncState` 后再返回，确保令牌不丢失
+
+**单元测试**：mock `PHPersistentChangeFetchResult` 验证新增/删除/修改分类逻辑。
+
+---
+
+### 41c — sync 子命令接线
+
+将 41a/41b 接入 `Commands/SyncCommand.swift`：
+
+```
+photobridge sync
+    [--output <dir>]
+    [--batch-size <n>]
+    [--max-concurrent <n>]
+    [--picmanager <path>]
+```
+
+流程：
+1. 加载 `SyncState`
+2. 若无历史令牌 → 提示用户先运行 `photobridge export`，退出
+3. 用 `IncrementalEnumerator.fetchChanges(since:)` 获取新增资产
+4. 跳过已在 `exportedIdentifiers` 中的资产（防御性去重）
+5. 走与 `export` 相同的 40b/40c 写文件流程
+6. 保存新 token 到状态文件
+
+**验收**：首次 `photobridge export` 后，向 Photos 库加入 1 张新照片，运行 `photobridge sync` 只处理这 1 张，进度显示 "1/1"。
+
+---
+
+### 41d — status 子命令
+
+`Commands/StatusCommand.swift`：
+
+```
+photobridge status
+```
+
+输出示例：
+```
+PhotoBridge 状态
+  上次同步：2026-05-04 14:30  （5 小时前）
+  已导出：12,453 张
+  Photos 库当前资产数：12,460 张
+  待同步：约 7 张（上次以来新增）
+  状态文件：~/Library/Application Support/PhotoBridge/state.json
+```
+
+若从未同步过，打印：`尚未同步。请先运行 photobridge export 进行首次全量导出。`
+
+**验收**：分别在首次运行前、export 后、sync 后运行 `photobridge status`，输出数字与预期一致。
+
+---
+
+## Step 42 — PicManager 批量导入集成
+
+**目标**：PhotoBridge 在每批文件写出后自动调用 `picmanager import`，解析 NDJSON 日志确认成功，更新状态文件，清空暂存文件。
+
+### 42a — PicManager 子进程调用与日志解析
+
+新建 `Core/PicManagerRunner.swift`：
+
+```swift
+struct PicManagerRunner {
+    let executablePath: URL
+
+    /// 对 stagingDir 调用 picmanager import --copy --batch-size N --log logFile，
+    /// 等待完成，解析 NDJSON 日志，返回成功 / 失败文件的 localIdentifier 列表
+    func importBatch(
+        stagingDir: URL,
+        batchSize: Int,
+        logFile: URL
+    ) async throws -> ImportResult
+}
+
+struct ImportResult {
+    let succeededIdentifiers: [String]    // 对应 ExportedAsset.localIdentifier
+    let failedIdentifiers: [String]
+    let skippedIdentifiers: [String]      // SHA-256 重复，已在库中
+}
+```
+
+NDJSON 日志格式（来自 `importer/log.rs`）：
+
+```json
+{"status":"Imported","path":"/tmp/staging/01ABC.heic","sha256":"..."}
+{"status":"Skipped","path":"/tmp/staging/01DEF.jpg","reason":"AlreadyImported"}
+{"status":"Failed","path":"/tmp/staging/01GHI.heic","error":"..."}
+```
+
+实现细节：
+- 暂存文件命名为 `<localIdentifier>.<ext>`，从 `path` 字段的文件名反推 localIdentifier
+- `picmanager` 可执行文件路径：先查 `--picmanager` 参数，再搜 `PATH`，找不到时给出安装提示
+- 子进程退出码非零时，保留暂存文件不清理，下次运行重试
+
+**单元测试**（不需要真实 picmanager 二进制）：
+- 解析各类 NDJSON 记录，验证分类正确
+- 测试 localIdentifier 从文件名反推逻辑
+
+---
+
+### 42b — 端到端批量循环
+
+在 `AssetExporter.exportBatch` 完成后，串联以下流程（在 `ExportCommand` 和 `SyncCommand` 中复用）：
+
+```
+枚举待导出资产
+    └─→ 分批（每批 batch-size 张）
+            ├─→ PHAssetResourceManager 写文件到 staging/
+            ├─→ PicManagerRunner.importBatch()
+            │       ├─→ 成功：更新 SyncState.exportedIdentifiers
+            │       ├─→ 跳过（已在库中）：也加入 exportedIdentifiers
+            │       └─→ 失败：记录警告，本批次暂存文件保留
+            └─→ 清理本批成功/跳过文件，保留失败文件
+    └─→ 保存 SyncState
+    └─→ 打印汇总
+```
+
+汇总格式：
+```
+导出完成（耗时 3 分 42 秒）
+  处理：1,200 张  导入：1,187 张  跳过（重复）：11 张  失败：2 张
+  失败文件已保留在暂存目录，下次运行自动重试：~/Library/Application Support/PhotoBridge/staging/
+```
+
+**验收**：完整运行 `photobridge export`，PicManager DB 中出现对应照片记录；重新运行 `photobridge sync` 后无新导入（全部已跳过）。
+
+---
+
+### 42c — 磁盘空间预检
+
+`export` / `sync` 启动时预检暂存目录剩余空间：
+
+- 用 `PHAsset.pixelWidth × pixelHeight × 3 / 8`（JPEG 典型压缩率）估算所有待处理资产的磁盘占用
+- 若估算值 > 暂存目录剩余空间的 80%，打印警告但继续（不强制中止，估算可能偏高）
+- 若 Photos Library 所在路径检测为系统卷（`/` 或 `/System`），打印警告：
+  ```
+  ⚠️  Photos Library 位于系统卷。导入过程中 Photos 框架会临时将云端照片下载到系统卷缓存。
+      建议将 Photos Library 迁移至外置硬盘后再导入。详见：photobridge help setup
+  ```
+
+---
+
+## Step 43 — CLI 完善与文档
+
+**目标**：完善用户体验、帮助文档，补充 README 导入指南。
+
+### 43a — setup 引导子命令
+
+`photobridge setup` 打印分步设置向导（纯文本，不执行任何操作）：
+
+```
+PhotoBridge 首次设置向导
+══════════════════════════════
+
+步骤 1：迁移 Photos Library 到外置硬盘（推荐）
+  ① 打开 Photos.app → 偏好设置 → 通用
+  ② 点击"更改"，选择外置硬盘上的目标路径
+  ③ Photos 会自动移动整个库（iCloud 内容留在云端，不影响访问）
+
+步骤 2：授予照片库访问权限
+  ① 运行：photobridge status
+  ② 系统弹出授权对话框，选择"完整访问"
+
+步骤 3：首次全量导出
+  ① 确保 PicManager 已启动并配置好库路径：picmanager serve
+  ② 运行：photobridge export --batch-size 200
+  ③ 等待完成（大型库可能需要数小时，可中断后续跑）
+
+步骤 4：日常增量同步
+  在 iPhone/iPad 拍摄并同步到 iCloud 后，运行：
+  photobridge sync
+  或配置 launchd 定时任务自动执行。
+```
+
+---
+
+### 43b — launchd plist 生成
+
+`photobridge setup --install-launchd [--interval-hours <n>]` 生成并安装 launchd 定时任务：
+
+- 生成 `~/Library/LaunchAgents/com.picmanager.photobridge-sync.plist`
+- 默认每 6 小时运行一次 `photobridge sync`
+- 打印 `launchctl load` 命令供用户手动执行（不自动 load，避免不必要权限提升）
+
+---
+
+### 43c — README 导入指南
+
+在项目根目录 `README.md` 的"导入"章节添加 iCloud 照片导入段落，引用流程图（从 REQUIREMENTS.md 复制）和 `photobridge setup` 命令。
+
+---
+
+### 43d — CLAUDE.md / 文档同步
+
+更新 `CLAUDE.md`：
+- 在"实际项目结构"中添加 `photobridge/` 目录描述
+- 在"技术栈"中注明 Swift + PhotoKit 工具
+- 记录 PhotoBridge 关键实现细节（PHPersistentChangeToken 序列化、localIdentifier 命名约定、资源类型过滤规则）
