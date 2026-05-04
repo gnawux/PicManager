@@ -11,12 +11,13 @@ public enum AuthError: Error, Equatable, LocalizedError {
         case .denied:
             return """
                 Photos access denied.
-                Grant access in System Settings → Privacy & Security → Photos → photobridge (Full Access).
-                If photobridge doesn't appear there yet, re-sign the binary first:
-                  codesign --force --sign - \\
-                    --entitlements Sources/PhotoBridge/PhotoBridge.entitlements \\
-                    .build/release/photobridge
-                Then run photobridge again — macOS will show a consent dialog.
+                macOS attributes CLI tool permissions to the terminal app that runs photobridge.
+                Reset the terminal's Photos permission and run photobridge again — a consent dialog will appear:
+                  tccutil reset Photos com.apple.Terminal   # Terminal.app
+                  tccutil reset Photos com.googlecode.iterm2  # iTerm2
+                  tccutil reset Photos com.microsoft.VSCode   # VS Code
+                Or grant it manually in System Settings → Privacy & Security → Photos
+                (look for your terminal app, not "photobridge").
                 """
         case .restricted:
             return "Photos access is restricted by a device policy and cannot be granted."
