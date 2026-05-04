@@ -61,7 +61,7 @@ struct ExportCommand: AsyncParsableCommand {
         while idx < pairs.count {
             let batchEnd = min(idx + maxConcurrent, pairs.count)
             let batch = Array(pairs[idx..<batchEnd])
-            await withTaskGroup(of: Void.self) { group in
+            let batchSucceeded = await withTaskGroup(of: Bool.self) { group in
                 for (asset, resource) in batch {
                     group.addTask {
                         let destURL = exportDestinationURL(
@@ -71,19 +71,25 @@ struct ExportCommand: AsyncParsableCommand {
                         )
                         do {
                             try await writeAssetResource(resource, to: destURL)
+                            return true
                         } catch {
                             fputs("  ✗ \(asset.localIdentifier): \(error)\n", stderr)
+                            return false
                         }
                     }
                 }
+                var count = 0
+                for await success in group { if success { count += 1 } }
+                return count
             }
-            exported += batch.count
+            exported += batchSucceeded
+            failed += batch.count - batchSucceeded
             idx = batchEnd
             print("  \(exported)/\(pairs.count) exported", terminator: "\r")
             fflush(stdout)
         }
         print()
-        print("Done. \(exported - failed) exported, \(failed) failed.")
+        print("Done. \(exported) exported, \(failed) failed.")
         print("Next: run picmanager import --copy --batch-size \(batchSize) '\(stagingDir.path)'")
     }
 
