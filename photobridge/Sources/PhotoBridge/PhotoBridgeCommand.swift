@@ -12,6 +12,7 @@ struct PhotoBridge: AsyncParsableCommand {
             SyncCommand.self,
             StatusCommand.self,
             FixTimestampsCommand.self,
+            SetupCommand.self,
         ]
     )
 }
