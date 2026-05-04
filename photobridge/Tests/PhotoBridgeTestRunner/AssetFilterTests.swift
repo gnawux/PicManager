@@ -1,5 +1,5 @@
 import Photos
-@testable import PhotoBridgeLib
+import PhotoBridgeLib
 
 func runAssetFilterTests() {
     suite("selectExportResource") {
