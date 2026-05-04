@@ -11,4 +11,7 @@ runAuthTests()
 // Step 40a
 runAssetFilterTests()
 
+// Step 40b
+runAssetExporterTests()
+
 finish()
