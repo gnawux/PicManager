@@ -175,6 +175,58 @@ Progress is printed every minute; a summary is shown at the end:
   地理：编码了 20 个新位置，3 张无城市信息（已跳过），共 23 张待处理
 ```
 
+## PhotoBridge — iCloud Photos Import
+
+PhotoBridge is a companion macOS CLI that exports photos from your iCloud / Photos library
+into a staging directory, from which PicManager can import them.
+
+### Prerequisites
+
+- macOS 26 (Tahoe) or later
+- Grant **Full Access** to Photos in System Settings → Privacy & Security → Photos
+- If your Photos Library lives on the system volume, consider migrating it to an external drive
+  first — iCloud downloads go to the same volume as the library, and a full-library export of a
+  large iCloud library will fill the system volume.
+
+### Build
+
+```bash
+cd photobridge
+swift build -c release
+# binary: photobridge/.build/release/photobridge
+```
+
+### Usage
+
+**One-shot export** — exports your entire Photos library to a staging directory, then imports
+it with PicManager:
+
+```bash
+photobridge export --dry-run           # count assets without exporting
+photobridge export                     # export to ~/Library/Application Support/PhotoBridge/staging/
+photobridge export --output /Volumes/NAS/staging
+
+# After export, import the staging directory:
+picmanager import --copy /path/to/staging/
+```
+
+**Incremental sync** — exports only photos added or changed since the last sync:
+
+```bash
+photobridge sync                       # export new assets, save sync token
+photobridge sync --dry-run             # show how many new assets would be exported
+photobridge status                     # show last sync date and count
+```
+
+Options shared by `export` and `sync`:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--output <dir>` | `~/Library/Application Support/PhotoBridge/staging` | Staging directory |
+| `--batch-size <n>` | 200 | Photos per PicManager import batch |
+| `--max-concurrent <n>` | 4 | Max concurrent iCloud downloads |
+| `--dry-run` | — | Count assets only, do not export |
+
 ## Configuration
 
 Create `~/Library/Application Support/picmanager/config.toml` to override any default:
