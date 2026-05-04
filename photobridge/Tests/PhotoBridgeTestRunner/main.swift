@@ -26,4 +26,7 @@ runAssetTimestampTests()
 // Step 42d
 runFixTimestampsTests()
 
+// Step 43a
+runPicManagerRunnerTests()
+
 finish()
