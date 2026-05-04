@@ -248,8 +248,12 @@ async fn import_one(
 
     let meta = metadata::extract_from_file(path)?;
 
-    // Three-level date inference: EXIF → filename → None (unknown/)
-    let date = meta.taken_at
+    // Four-level date inference: EXIF → file mtime → filename → None (unknown/)
+    // mtime is set by photobridge to asset.creationDate; reliable for photos without EXIF.
+    let effective_taken_at = meta.taken_at
+        .or_else(|| metadata::mtime_to_naive_datetime(path));
+
+    let date = effective_taken_at
         .map(|dt| dt.date())
         .or_else(|| {
             path.file_name()
@@ -269,7 +273,7 @@ async fn import_one(
     .bind(&sha256)
     .bind(&phash)
     .bind(meta.format.as_str())
-    .bind(meta.taken_at.map(|t| t.to_string()))
+    .bind(effective_taken_at.map(|t| t.to_string()))
     .bind(meta.gps_lat)
     .bind(meta.gps_lon)
     .bind(meta.camera)
@@ -308,6 +312,7 @@ mod tests {
     use std::fs;
     use std::sync::atomic::Ordering::Relaxed;
     use tempfile::tempdir;
+    use filetime;
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -423,21 +428,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_date_goes_to_unknown() {
+    async fn no_exif_uses_mtime_for_placement() {
         let pool = test_pool().await;
         let src_dir = tempdir().unwrap();
         let lib_dir = tempdir().unwrap();
 
         let src = src_dir.path().join("no_exif.jpg");
         fs::copy(fixtures_dir().join("no_exif.jpg"), &src).unwrap();
+        // Set known mtime: 2024-06-01 00:00:00 UTC
+        let known = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_717_200_000);
+        filetime::set_file_mtime(&src, filetime::FileTime::from_system_time(known)).unwrap();
 
         let summary = import_dir(&pool, src_dir.path(), lib_dir.path(), false).await.unwrap();
         assert_eq!(summary.imported, 1);
 
-        let unknown_dir = lib_dir.path().join("unknown");
-        assert!(unknown_dir.exists(), "unknown/ directory should be created");
-        let files: Vec<_> = fs::read_dir(&unknown_dir).unwrap().collect();
-        assert!(!files.is_empty(), "file should be in unknown/");
+        let dated_dir = lib_dir.path().join("2024-06-01");
+        assert!(dated_dir.exists(), "file should be placed in mtime-derived dated directory");
     }
 
     #[tokio::test]
@@ -616,5 +622,36 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count.0, 1, "re-import must not increment counter again");
+    }
+
+    #[tokio::test]
+    async fn no_exif_uses_mtime_as_taken_at() {
+        let pool = test_pool().await;
+        let src_dir = tempdir().unwrap();
+        let lib_dir = tempdir().unwrap();
+
+        let src = src_dir.path().join("no_exif.jpg");
+        fs::copy(fixtures_dir().join("no_exif.jpg"), &src).unwrap();
+
+        // Set mtime to 2023-03-15 00:00:00 UTC
+        let known_secs: i64 = 1_678_838_400;
+        let known_ft = filetime::FileTime::from_unix_time(known_secs, 0);
+        filetime::set_file_mtime(&src, known_ft).unwrap();
+
+        let summary = import_dir(&pool, src_dir.path(), lib_dir.path(), false).await.unwrap();
+        assert_eq!(summary.imported, 1);
+
+        // File should be placed in dated directory, not unknown/
+        let dated_dir = lib_dir.path().join("2023-03-15");
+        assert!(dated_dir.exists(), "should be placed in 2023-03-15/, not unknown/");
+
+        // DB taken_at should reflect the mtime
+        let row: (Option<String>,) =
+            sqlx::query_as("SELECT taken_at FROM photos LIMIT 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let taken_at = row.0.expect("taken_at should be set from mtime");
+        assert!(taken_at.starts_with("2023-03-15"), "taken_at should be 2023-03-15, got {taken_at}");
     }
 }
