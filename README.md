@@ -183,7 +183,6 @@ into a staging directory, from which PicManager can import them.
 ### Prerequisites
 
 - macOS 26 (Tahoe) or later
-- Grant **Full Access** to Photos in System Settings → Privacy & Security → Photos
 - If your Photos Library lives on the system volume, consider migrating it to an external drive
   first — iCloud downloads go to the same volume as the library, and a full-library export of a
   large iCloud library will fill the system volume.
@@ -200,14 +199,20 @@ codesign --force --sign - \
 # binary: photobridge/.build/release/photobridge
 ```
 
-> **Note:** The codesign step is required. Without it, macOS TCC has no way to identify the
-> binary and `requestAuthorization` returns `denied` immediately without showing a dialog.
-> Re-sign after each `swift build -c release`.
+> **Photos permission note:** macOS TCC attributes the Photos permission to the terminal app
+> that runs photobridge (iTerm2, Terminal.app, etc.), not to the binary itself. When you first
+> run photobridge, your terminal app will show a "wants to access your Photos" consent dialog.
+> After granting, no restart is needed — re-run the command immediately.
 >
-> If macOS still denies access after signing (e.g. after granting then revoking), reset the
-> TCC entry and run again:
+> The codesign step is required each time you rebuild. Without it, `requestAuthorization`
+> returns `denied` immediately without showing a dialog.
+>
+> If the dialog does not appear (previously dismissed or denied), reset the terminal app's
+> Photos permission and run again:
 > ```bash
-> tccutil reset Photos
+> tccutil reset Photos com.googlecode.iterm2  # iTerm2
+> tccutil reset Photos com.apple.Terminal     # Terminal.app
+> tccutil reset Photos com.microsoft.VSCode   # VS Code
 > ```
 
 ### Usage

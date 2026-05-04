@@ -727,6 +727,28 @@ el.style.top  = `${Math.max(8, top)}px`;
 ```
 注意 `el.offsetWidth` 在 `appendChild` 之后、设置 `left/top` 之前读取才有正确值（布局已发生）。
 
+### PhotoBridge：macOS TCC 照片权限归属终端 App
+
+`PHPhotoLibrary.requestAuthorization` 在命令行工具中调用时，macOS TCC 把权限请求归属到**启动该工具的终端 App**（如 iTerm2、Terminal.app），而不是 photobridge 二进制本身。
+
+**关键行为：**
+- 授权弹框显示的是"iTerm2 想要访问您的照片"，不是"photobridge"
+- System Settings → Privacy & Security → Photos 里出现的是终端 App，不是 photobridge
+- `tccutil reset Photos com.picmanager.photobridge` 会报错（bundle ID 从未注册过 TCC）
+- 授权后无需重启终端，直接再跑一次命令即可
+
+**首次使用流程：**
+1. `swift build -c release` 后执行 `codesign --force --sign - --entitlements Sources/PhotoBridge/PhotoBridge.entitlements .build/release/photobridge`
+2. 运行 `photobridge export --dry-run`，终端 App 会弹出照片授权框
+3. 点击"允许"，直接再跑命令，权限立刻生效
+
+**弹框不出现（之前拒绝过）：** reset 终端 App 的权限后重试：
+```bash
+tccutil reset Photos com.googlecode.iterm2  # iTerm2
+tccutil reset Photos com.apple.Terminal     # Terminal.app
+tccutil reset Photos com.microsoft.VSCode   # VS Code
+```
+
 ## 常用命令
 
 ```bash
