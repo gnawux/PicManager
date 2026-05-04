@@ -1,8 +1,11 @@
-// Step 39a: package scaffold — placeholder test
+// Step 39a
 suite("PhotoBridge package") {
     test("library compiles") {
         try expect(1 + 1, equals: 2)
     }
 }
+
+// Step 39b
+runAuthTests()
 
 finish()

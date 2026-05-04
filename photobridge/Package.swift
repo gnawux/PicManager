@@ -14,7 +14,8 @@ let package = Package(
         // Business logic library (testable)
         .target(
             name: "PhotoBridgeLib",
-            path: "Sources/PhotoBridgeLib"
+            path: "Sources/PhotoBridgeLib",
+            linkerSettings: [.linkedFramework("Photos")]
         ),
         // CLI executable
         .executableTarget(
