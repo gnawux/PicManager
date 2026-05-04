@@ -77,6 +77,9 @@ struct ExportCommand: AsyncParsableCommand {
                         )
                         do {
                             try await writeAssetResource(resource, to: destURL)
+                            if let date = asset.creationDate ?? asset.modificationDate {
+                                try? applyTimestamp(to: destURL, date: date)
+                            }
                             return true
                         } catch {
                             fputs("  ✗ \(asset.localIdentifier): \(error)\n", stderr)
