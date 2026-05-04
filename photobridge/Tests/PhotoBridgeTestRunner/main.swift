@@ -14,4 +14,7 @@ runAssetFilterTests()
 // Step 40b
 runAssetExporterTests()
 
+// Step 41a
+runSyncStateTests()
+
 finish()
