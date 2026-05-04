@@ -70,7 +70,7 @@ struct SyncCommand: AsyncParsableCommand {
 
         print("Exporting \(pairs.count) new assets to \(stagingDir.path)…")
         var exported = 0
-        var failed = 0
+        var exportFailed = 0
 
         var idx = 0
         while idx < pairs.count {
@@ -101,7 +101,7 @@ struct SyncCommand: AsyncParsableCommand {
                 return count
             }
             exported += batchSucceeded
-            failed += batch.count - batchSucceeded
+            exportFailed += batch.count - batchSucceeded
             idx = batchEnd
             print("  \(exported)/\(pairs.count) exported", terminator: "\r")
             fflush(stdout)
@@ -113,8 +113,31 @@ struct SyncCommand: AsyncParsableCommand {
         state.exportedCount += exported
         try state.save(to: stateURL)
 
-        print("Done. \(exported) exported, \(failed) failed (total ever: \(state.exportedCount)).")
-        print("Next: run picmanager import --batch-size \(batchSize) '\(stagingDir.path)'")
+        // Optionally call picmanager import
+        let runner = resolveRunner()
+        if let runner {
+            print("Importing into PicManager…")
+            do {
+                let result = try await runner.importBatch(stagingDir: stagingDir, batchSize: batchSize)
+                for url in result.succeededPaths + result.skippedPaths {
+                    try? FileManager.default.removeItem(at: url)
+                }
+                let imported = result.succeededPaths.count
+                let skipped  = result.skippedPaths.count
+                let failed   = result.failedPaths.count + exportFailed
+                print("Done. \(exported) exported — \(imported) imported, \(skipped) skipped (dup), \(failed) failed.")
+                if !result.failedPaths.isEmpty || exportFailed > 0 {
+                    print("Failed files kept in staging for retry: \(stagingDir.path)")
+                }
+            } catch {
+                fputs("picmanager import failed: \(error)\n", stderr)
+                print("Staging files kept at: \(stagingDir.path)")
+                print("Next: run picmanager import --batch-size \(batchSize) '\(stagingDir.path)'")
+            }
+        } else {
+            print("Done. \(exported) exported, \(exportFailed) failed (total ever: \(state.exportedCount)).")
+            print("Next: run picmanager import --batch-size \(batchSize) '\(stagingDir.path)'")
+        }
     }
 
     private func resolveStagingDir() -> URL {
@@ -123,6 +146,16 @@ struct SyncCommand: AsyncParsableCommand {
         }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return support.appendingPathComponent("PhotoBridge/staging")
+    }
+
+    private func resolveRunner() -> PicManagerRunner? {
+        if let path = picmanager {
+            return PicManagerRunner(executableURL: URL(fileURLWithPath: path))
+        }
+        if let url = PicManagerRunner.findInPath() {
+            return PicManagerRunner(executableURL: url)
+        }
+        return nil
     }
 
     private func formatDate(_ date: Date) -> String {
