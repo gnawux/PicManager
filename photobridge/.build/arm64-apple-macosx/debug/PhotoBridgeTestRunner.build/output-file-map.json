@@ -1,0 +1,19 @@
+{
+  "": {
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/primary.swiftdeps"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/Tests/PhotoBridgeTestRunner/TestRunner.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/TestRunner.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/TestRunner.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/TestRunner~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/TestRunner.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/TestRunner.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/Tests/PhotoBridgeTestRunner/main.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/main.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/main.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/main.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgeTestRunner.build/main.dia"
+  }
+}

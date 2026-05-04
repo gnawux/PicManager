@@ -1,0 +1,26 @@
+{
+  "": {
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/primary.swiftdeps"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-docc-reference/Extensions/ArgumentParser+Markdown.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/ArgumentParser+Markdown.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/ArgumentParser+Markdown.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/ArgumentParser+Markdown~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/ArgumentParser+Markdown.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/ArgumentParser+Markdown.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-docc-reference/Extensions/Process+SimpleAPI.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/Process+SimpleAPI.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/Process+SimpleAPI.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/Process+SimpleAPI~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/Process+SimpleAPI.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/Process+SimpleAPI.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-docc-reference/GenerateDoccReference.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/GenerateDoccReference.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/GenerateDoccReference.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/GenerateDoccReference~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/GenerateDoccReference.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_docc_reference.build/GenerateDoccReference.dia"
+  }
+}

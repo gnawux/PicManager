@@ -1,0 +1,215 @@
+{
+  "": {
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/primary.swiftdeps"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/AuthorArgument.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/AuthorArgument.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/AuthorArgument.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/AuthorArgument~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/AuthorArgument.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/AuthorArgument.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/ArgumentSynopsis.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentSynopsis.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentSynopsis.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentSynopsis~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentSynopsis.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentSynopsis.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Author.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Author.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Author.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Author~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Author.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Author.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Authors.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Authors.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Authors.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Authors~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Authors.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Authors.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Core/Container.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Container.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Container.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Container~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Container.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Container.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Core/Empty.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Empty.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Empty.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Empty~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Empty.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Empty.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Core/ForEach.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ForEach.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ForEach.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ForEach~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ForEach.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ForEach.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Core/MDocASTNodeWrapper.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNodeWrapper.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNodeWrapper.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNodeWrapper~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNodeWrapper.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNodeWrapper.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Core/MDocBuilder.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocBuilder.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocBuilder.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocBuilder~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocBuilder.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocBuilder.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Core/MDocComponent.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocComponent.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocComponent.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocComponent~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocComponent.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocComponent.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Discussion.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Discussion.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Discussion.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Discussion~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Discussion.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Discussion.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Document.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Document.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Document.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Document~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Document.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Document.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/DocumentDate.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/DocumentDate.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/DocumentDate.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/DocumentDate~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/DocumentDate.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/DocumentDate.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Exit.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Exit.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Exit.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Exit~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Exit.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Exit.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/List.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/List.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/List.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/List~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/List.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/List.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/MultiPageDescription.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MultiPageDescription.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MultiPageDescription.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MultiPageDescription~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MultiPageDescription.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MultiPageDescription.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Name.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Name.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Name.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Name~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Name.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Name.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Preamble.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Preamble.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Preamble.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Preamble~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Preamble.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Preamble.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Section.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Section.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Section.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Section~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Section.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Section.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/SeeAlso.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SeeAlso.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SeeAlso.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SeeAlso~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SeeAlso.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SeeAlso.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/SinglePageDescription.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SinglePageDescription.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SinglePageDescription.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SinglePageDescription~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SinglePageDescription.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/SinglePageDescription.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/DSL/Synopsis.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Synopsis.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Synopsis.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Synopsis~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Synopsis.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Synopsis.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/Extensions/ArgumentParser+MDoc.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentParser+MDoc.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentParser+MDoc.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentParser+MDoc~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentParser+MDoc.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/ArgumentParser+MDoc.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/Extensions/Date+ExpressibleByArgument.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Date+ExpressibleByArgument.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Date+ExpressibleByArgument.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Date+ExpressibleByArgument~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Date+ExpressibleByArgument.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Date+ExpressibleByArgument.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/Extensions/Process+SimpleAPI.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Process+SimpleAPI.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Process+SimpleAPI.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Process+SimpleAPI~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Process+SimpleAPI.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/Process+SimpleAPI.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/GenerateManual.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/GenerateManual.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/GenerateManual.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/GenerateManual~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/GenerateManual.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/GenerateManual.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/MDoc/MDocASTNode.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNode.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNode.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNode~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNode.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocASTNode.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/MDoc/MDocMacro.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocMacro.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocMacro.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocMacro~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocMacro.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocMacro.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/MDoc/MDocSerializationContext.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocSerializationContext.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocSerializationContext.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocSerializationContext~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocSerializationContext.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/MDocSerializationContext.dia"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Tools/generate-manual/MDoc/String+Escaping.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/String+Escaping.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/String+Escaping.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/String+Escaping~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/String+Escaping.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/generate_manual-tool.build/String+Escaping.dia"
+  }
+}

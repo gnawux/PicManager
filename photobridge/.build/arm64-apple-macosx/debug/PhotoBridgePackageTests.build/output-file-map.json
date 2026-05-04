@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgePackageTests.build/primary.swiftdeps"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgePackageTests.derived/runner.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgePackageTests.build/runner.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgePackageTests.build/runner.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgePackageTests.build/runner~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgePackageTests.build/runner.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/PhotoBridgePackageTests.build/runner.dia"
+  }
+}

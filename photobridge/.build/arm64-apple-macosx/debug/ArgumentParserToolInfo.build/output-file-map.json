@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/ArgumentParserToolInfo.build/primary.swiftdeps"
+  },
+  "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/checkouts/swift-argument-parser/Sources/ArgumentParserToolInfo/ToolInfo.swift": {
+    "dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/ArgumentParserToolInfo.build/ToolInfo.d",
+    "object": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/ArgumentParserToolInfo.build/ToolInfo.swift.o",
+    "swiftmodule": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/ArgumentParserToolInfo.build/ToolInfo~partial.swiftmodule",
+    "swift-dependencies": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/ArgumentParserToolInfo.build/ToolInfo.swiftdeps",
+    "diagnostics": "/Volumes/PLATEA/Documents/Workspace/PicManager/photobridge/.build/arm64-apple-macosx/debug/ArgumentParserToolInfo.build/ToolInfo.dia"
+  }
+}
