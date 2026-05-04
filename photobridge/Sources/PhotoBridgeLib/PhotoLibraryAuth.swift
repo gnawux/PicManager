@@ -1,10 +1,31 @@
 import Photos
 
-public enum AuthError: Error, Equatable {
+public enum AuthError: Error, Equatable, LocalizedError {
     case denied
     case restricted
-    case limited       // partial access — warn user to grant full access
+    case limited
     case unknown
+
+    public var errorDescription: String? {
+        switch self {
+        case .denied:
+            return """
+                Photos access denied.
+                Grant access in System Settings → Privacy & Security → Photos → photobridge (Full Access).
+                If photobridge doesn't appear there yet, re-sign the binary first:
+                  codesign --force --sign - \\
+                    --entitlements Sources/PhotoBridge/PhotoBridge.entitlements \\
+                    .build/release/photobridge
+                Then run photobridge again — macOS will show a consent dialog.
+                """
+        case .restricted:
+            return "Photos access is restricted by a device policy and cannot be granted."
+        case .limited:
+            return "Photos access is limited. Grant Full Access in System Settings → Privacy & Security → Photos."
+        case .unknown:
+            return "Photos authorization status is undetermined. Try running photobridge again."
+        }
+    }
 }
 
 public enum AuthResult {

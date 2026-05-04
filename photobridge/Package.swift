@@ -25,7 +25,17 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/PhotoBridge",
-            exclude: ["Info.plist", "PhotoBridge.entitlements"]
+            exclude: ["Info.plist", "PhotoBridge.entitlements"],
+            linkerSettings: [
+                // Embed Info.plist into the __TEXT,__info_plist section so macOS TCC
+                // can find NSPhotoLibraryUsageDescription and show a consent dialog.
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/PhotoBridge/Info.plist",
+                ])
+            ]
         ),
         // Test runner executable
         .executableTarget(

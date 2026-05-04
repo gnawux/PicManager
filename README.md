@@ -193,8 +193,22 @@ into a staging directory, from which PicManager can import them.
 ```bash
 cd photobridge
 swift build -c release
+# Sign the binary so macOS will show the Photos consent dialog:
+codesign --force --sign - \
+  --entitlements Sources/PhotoBridge/PhotoBridge.entitlements \
+  .build/release/photobridge
 # binary: photobridge/.build/release/photobridge
 ```
+
+> **Note:** The codesign step is required. Without it, macOS TCC has no way to identify the
+> binary and `requestAuthorization` returns `denied` immediately without showing a dialog.
+> Re-sign after each `swift build -c release`.
+>
+> If macOS still denies access after signing (e.g. after granting then revoking), reset the
+> TCC entry and run again:
+> ```bash
+> tccutil reset Photos
+> ```
 
 ### Usage
 
