@@ -23,4 +23,7 @@ runIncrementalEnumeratorTests()
 // Step 42a
 runAssetTimestampTests()
 
+// Step 42d
+runFixTimestampsTests()
+
 finish()
