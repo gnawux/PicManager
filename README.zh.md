@@ -195,8 +195,8 @@ photobridge export --dry-run           # 统计资产数量，不实际导出
 photobridge export                     # 导出到 ~/Library/Application Support/PhotoBridge/staging/
 photobridge export --output /Volumes/NAS/staging
 
-# 导出完成后，用 PicManager 导入暂存目录：
-picmanager import --copy /path/to/staging/
+# 导出完成后，用 PicManager 导入暂存目录（移动文件，暂存目录自动清空）：
+picmanager import /path/to/staging/
 ```
 
 **增量同步** — 仅导出上次同步后新增或变更的照片：

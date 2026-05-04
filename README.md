@@ -225,8 +225,8 @@ photobridge export --dry-run           # count assets without exporting
 photobridge export                     # export to ~/Library/Application Support/PhotoBridge/staging/
 photobridge export --output /Volumes/NAS/staging
 
-# After export, import the staging directory:
-picmanager import --copy /path/to/staging/
+# After export, import the staging directory (move files, staging is auto-cleaned):
+picmanager import /path/to/staging/
 ```
 
 **Incremental sync** — exports only photos added or changed since the last sync:

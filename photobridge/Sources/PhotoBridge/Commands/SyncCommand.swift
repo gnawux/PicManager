@@ -111,7 +111,7 @@ struct SyncCommand: AsyncParsableCommand {
         try state.save(to: stateURL)
 
         print("Done. \(exported) exported, \(failed) failed (total ever: \(state.exportedCount)).")
-        print("Next: run picmanager import --copy --batch-size \(batchSize) '\(stagingDir.path)'")
+        print("Next: run picmanager import --batch-size \(batchSize) '\(stagingDir.path)'")
     }
 
     private func resolveStagingDir() -> URL {

@@ -90,7 +90,7 @@ struct ExportCommand: AsyncParsableCommand {
         }
         print()
         print("Done. \(exported) exported, \(failed) failed.")
-        print("Next: run picmanager import --copy --batch-size \(batchSize) '\(stagingDir.path)'")
+        print("Next: run picmanager import --batch-size \(batchSize) '\(stagingDir.path)'")
     }
 
     private func resolveStagingDir() -> URL {
