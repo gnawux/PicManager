@@ -215,26 +215,48 @@ codesign --force --sign - \
 > tccutil reset Photos com.microsoft.VSCode   # VS Code
 > ```
 
+### First-time setup
+
+```bash
+photobridge setup                      # print step-by-step setup guide
+```
+
 ### Usage
 
-**One-shot export** — exports your entire Photos library to a staging directory, then imports
-it with PicManager:
+**One-shot export** — exports your entire Photos library, then auto-imports into PicManager
+if `picmanager` is found in `PATH` (or via `--picmanager`):
 
 ```bash
 photobridge export --dry-run           # count assets without exporting
-photobridge export                     # export to ~/Library/Application Support/PhotoBridge/staging/
-photobridge export --output /Volumes/NAS/staging
+photobridge export                     # export + auto-import if picmanager in PATH
+photobridge export --output /Volumes/NAS/staging --picmanager /usr/local/bin/picmanager
 
-# After export, import the staging directory (move files, staging is auto-cleaned):
+# If picmanager is not in PATH, import manually after export:
 picmanager import /path/to/staging/
 ```
 
 **Incremental sync** — exports only photos added or changed since the last sync:
 
 ```bash
-photobridge sync                       # export new assets, save sync token
+photobridge sync                       # export new assets + auto-import
 photobridge sync --dry-run             # show how many new assets would be exported
 photobridge status                     # show last sync date and count
+```
+
+**Repair timestamps** on already-exported files (for files exported before auto-timestamp
+was added):
+
+```bash
+photobridge fix-timestamps /path/to/staging/        # apply Photos creation dates to mtimes
+photobridge fix-timestamps --dry-run /path/to/staging/
+```
+
+**Automatic sync via launchd:**
+
+```bash
+photobridge setup --install-launchd --interval-hours 6
+# then activate:
+launchctl load ~/Library/LaunchAgents/com.picmanager.photobridge-sync.plist
 ```
 
 Options shared by `export` and `sync`:
@@ -242,6 +264,7 @@ Options shared by `export` and `sync`:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `--output <dir>` | `~/Library/Application Support/PhotoBridge/staging` | Staging directory |
+| `--picmanager <path>` | (auto-detect from PATH) | Path to picmanager executable |
 | `--batch-size <n>` | 200 | Photos per PicManager import batch |
 | `--max-concurrent <n>` | 4 | Max concurrent iCloud downloads |
 | `--dry-run` | — | Count assets only, do not export |
