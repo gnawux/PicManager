@@ -20,4 +20,7 @@ runSyncStateTests()
 // Step 41b
 runIncrementalEnumeratorTests()
 
+// Step 42a
+runAssetTimestampTests()
+
 finish()
