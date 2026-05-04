@@ -17,4 +17,7 @@ runAssetExporterTests()
 // Step 41a
 runSyncStateTests()
 
+// Step 41b
+runIncrementalEnumeratorTests()
+
 finish()
