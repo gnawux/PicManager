@@ -67,7 +67,7 @@ fn sips_to_jpeg(path: &Path) -> anyhow::Result<Vec<u8>> {
     Ok(std::fs::read(&tmp_path)?)
 }
 
-fn read_exif_orientation(path: &Path) -> Option<u8> {
+pub fn read_exif_orientation(path: &Path) -> Option<u8> {
     use exif::{In, Reader, Tag};
     let file = std::fs::File::open(path).ok()?;
     let mut buf = std::io::BufReader::new(file);
