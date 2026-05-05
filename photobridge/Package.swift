@@ -27,6 +27,7 @@ let package = Package(
             path: "Sources/PhotoBridge",
             exclude: ["Info.plist", "PhotoBridge.entitlements"],
             linkerSettings: [
+                .linkedLibrary("sqlite3"),
                 // Embed Info.plist into the __TEXT,__info_plist section so macOS TCC
                 // can find NSPhotoLibraryUsageDescription and show a consent dialog.
                 .unsafeFlags([

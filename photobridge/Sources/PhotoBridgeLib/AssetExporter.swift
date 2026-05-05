@@ -84,9 +84,9 @@ public func writeAssetResourceOrientationFixed(
 }
 
 /// Queries Photos for the orientation it uses to display `asset` (with user edits).
-/// Returns the EXIF-compatible integer value (1–8), or nil if unavailable.
+/// Returns the EXIF-compatible integer value (1–8), or nil if unavailable locally.
 @available(macOS 13, *)
-private func requestPhotosDisplayOrientation(for asset: PHAsset) async -> Int? {
+public func requestPhotosDisplayOrientation(for asset: PHAsset) async -> Int? {
     await withCheckedContinuation { continuation in
         let options = PHImageRequestOptions()
         options.deliveryMode = .fastFormat
@@ -107,7 +107,7 @@ private func requestPhotosDisplayOrientation(for asset: PHAsset) async -> Int? {
 }
 
 /// Reads the EXIF Orientation tag from a HEIC or JPEG file. Returns nil on failure.
-private func readExifOrientationFromFile(at url: URL) -> Int? {
+public func readExifOrientationFromFile(at url: URL) -> Int? {
     guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
           let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any]
     else { return nil }
@@ -134,7 +134,7 @@ private func fixExifOrientationInFile(at url: URL, orientation: Int) {
     }
 }
 
-private func findExecutable(_ name: String) -> URL? {
+public func findExecutable(_ name: String) -> URL? {
     let candidates = [
         "/opt/homebrew/bin/\(name)",
         "/usr/local/bin/\(name)",
@@ -158,7 +158,7 @@ private func findExecutable(_ name: String) -> URL? {
     return out.isEmpty ? nil : URL(fileURLWithPath: out)
 }
 
-private func runProcess(_ url: URL, args: [String]) {
+public func runProcess(_ url: URL, args: [String]) {
     let proc = Process()
     proc.executableURL = url
     proc.arguments = args
