@@ -198,7 +198,7 @@ async fn cached_or_fetch(
 
 async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<GeoInfo> {
     let url = format!(
-        "https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10"
+        "https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10&accept-language=zh-CN,en"
     );
     let resp: serde_json::Value = client.get(&url).send().await.ok()?.json().await.ok()?;
     let addr = resp.get("address")?;
