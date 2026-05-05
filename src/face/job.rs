@@ -120,7 +120,7 @@ pub(crate) async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64) {
 
     let Some(path) = path else { return };
 
-    match image::open(&path) {
+    match crate::image_open::open_image(std::path::Path::new(&path)) {
         Ok(img) => { crate::face::analyze_one(pool, photo_id, &img).await; }
         Err(_) => tracing::warn!("could not open {path} for face re-analysis after transform"),
     }

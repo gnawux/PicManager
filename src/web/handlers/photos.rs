@@ -391,27 +391,36 @@ pub async fn get_photo_file(
         return StatusCode::NOT_FOUND.into_response();
     };
 
+    let is_heic = matches!(format.to_lowercase().as_str(), "heic" | "heif");
     let mime = match format.to_lowercase().as_str() {
-        "jpeg" | "jpg" => "image/jpeg",
-        "png"          => "image/png",
-        "gif"          => "image/gif",
-        "webp"         => "image/webp",
-        "heic" | "heif"=> "image/heic",
-        "tiff" | "tif" => "image/tiff",
-        _              => "application/octet-stream",
+        "jpeg" | "jpg"         => "image/jpeg",
+        "png"                  => "image/png",
+        "gif"                  => "image/gif",
+        "webp"                 => "image/webp",
+        "heic" | "heif"        => "image/jpeg",  // transcoded for browser compatibility
+        "tiff" | "tif"         => "image/tiff",
+        _                      => "application/octet-stream",
     };
 
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
-        Err(_)    => StatusCode::NOT_FOUND.into_response(),
+    if is_heic {
+        let p = std::path::PathBuf::from(&path);
+        match tokio::task::spawn_blocking(move || crate::image_open::heic_to_jpeg(&p)).await {
+            Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+            _             => StatusCode::NOT_FOUND.into_response(),
+        }
+    } else {
+        match tokio::fs::read(&path).await {
+            Ok(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+            Err(_)    => StatusCode::NOT_FOUND.into_response(),
+        }
     }
 }
 
 fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
-    use image::{ImageFormat, ImageReader};
+    use image::ImageFormat;
     use std::io::Cursor;
 
-    let img = ImageReader::open(path)?.decode()?;
+    let img = crate::image_open::open_image(std::path::Path::new(path))?;
     let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
     let thumb = apply_exif_orientation(thumb, exif_orient);
     let thumb = apply_transform(thumb, rotation, flip_h, flip_v);

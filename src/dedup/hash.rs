@@ -1,4 +1,3 @@
-use image::ImageReader;
 use image_hasher::{HashAlg, HasherConfig};
 use std::path::Path;
 use crate::error::{AppError, Result};
@@ -24,7 +23,7 @@ pub const DCT_THRESHOLD: u32 = 8;
 pub fn compute_dcthash(path: &Path) -> Option<u64> {
     use image::imageops::FilterType;
 
-    let img = image::open(path)
+    let img = crate::image_open::open_image(path)
         .ok()?
         .resize_exact(32, 32, FilterType::Lanczos3)
         .to_luma8();
@@ -86,9 +85,7 @@ fn dct1d(values: &mut [f64; 32]) {
 }
 
 pub fn compute_phash(path: &Path) -> Result<String> {
-    let img = ImageReader::open(path)
-        .map_err(AppError::Io)?
-        .decode()
+    let img = crate::image_open::open_image(path)
         .map_err(|e| AppError::Metadata(e.to_string()))?;
 
     let hasher = HasherConfig::new().hash_alg(HashAlg::Gradient).to_hasher();

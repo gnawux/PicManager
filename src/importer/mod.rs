@@ -291,7 +291,7 @@ async fn import_one(
 
     let photo_id = result.last_insert_rowid();
     let mut face_count = 0usize;
-    if let Ok(img) = image::open(&final_path) {
+    if let Ok(img) = crate::image_open::open_image(final_path.as_ref()) {
         sqlx::query("UPDATE photos SET width = ?, height = ? WHERE id = ?")
             .bind(img.width() as i64)
             .bind(img.height() as i64)

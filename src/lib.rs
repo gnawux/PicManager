@@ -4,6 +4,7 @@ pub mod face;
 pub mod config;
 pub mod dedup;
 pub mod error;
+pub mod image_open;
 pub mod importer;
 pub mod metadata;
 pub mod storage;
