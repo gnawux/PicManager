@@ -93,7 +93,7 @@ struct ExportCommand: AsyncParsableCommand {
                             uti: resource.uniformTypeIdentifier
                         )
                         do {
-                            try await writeAssetResource(resource, to: destURL)
+                            try await writeAssetResourceOrientationFixed(resource, for: asset, to: destURL)
                             if let date = asset.creationDate ?? asset.modificationDate {
                                 try? applyTimestamp(to: destURL, date: date)
                             }

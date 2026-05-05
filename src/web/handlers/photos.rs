@@ -422,7 +422,6 @@ fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h:
 
     let p = std::path::Path::new(path);
     let img = crate::image_open::open_image(p)?;
-    let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
     // For HEIC, open_image returns raw pixels (sips orientation undone).
     // Read orientation from the file directly to handle photos where the DB
     // exif_orientation column is stale (e.g. imported before migration 0012).
@@ -431,7 +430,10 @@ fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h:
     } else {
         exif_orient
     };
-    let thumb = apply_exif_orientation(thumb, effective_orient);
+    // Apply EXIF orientation on the full image BEFORE resize so that
+    // resize_to_fill crops in display orientation (portrait shots stay portrait).
+    let img = apply_exif_orientation(img, effective_orient);
+    let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
     let thumb = apply_transform(thumb, rotation, flip_h, flip_v);
 
     let mut buf = Vec::new();

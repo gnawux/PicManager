@@ -247,12 +247,20 @@ photobridge/           iCloud Photos 导出伴侣工具（Swift Package）
 - `SIMILARITY_THRESHOLD_FAR = 3`（远距离对阈值）：只匹配 dist ≤ 3 的远距离对（原图 + App 处理副本），防止结构相似的户外照片被链式合并成大组
 - 连拍对与远距离对独立 Union-Find：连拍照片所在的簇不会被远距离结构相似对污染（`burst_components` + `far_components`）
 
-### image crate 不自动应用 EXIF Orientation
+### image crate 与 sips 均不自动应用 EXIF Orientation
 
-`image::open()` / `ImageReader::decode()` **不会**自动应用 EXIF Orientation tag（0x0112）。需要：
-1. 用 kamadak-exif 手动读取 `Tag::Orientation`，获得 1–8 的值
-2. 调用 `face::apply_exif_orientation(img, orientation)` 将图像旋转/翻转到显示方向
-3. 再叠加用户手动调整的 `rotation/flip_h/flip_v`（通过 `face::apply_transform`）
+`image::open()` / `ImageReader::decode()` **不会**自动应用 EXIF Orientation tag（0x0112）。
+
+**sips 行为**（macOS）：`sips -s format jpeg input.heic --out output.jpg` 同样**不旋转像素**——它只是把 HEIC 文件里的 EXIF Orientation 标签原样复制到输出 JPEG，像素布局与传感器原始方向保持一致。（`sips -g orientation` 显示 `<nil>` 是因为 sips 通过 HEIF 容器属性读取方向，而 iPhone HEIC 只写 EXIF Orientation，不写 HEIF IROT box，所以 sips 的 `-g orientation` 读不到）。
+
+浏览器（Chrome）读 JPEG 的 EXIF Orientation 标签后自动旋转展示——这是为什么"查看原图"方向正确，但用 image crate 加载后处理却不对的原因。
+
+因此，所有代码路径均需手动处理两层变换：
+1. 用 kamadak-exif 读取 `Tag::Orientation`（1–8）
+2. 调用 `face::apply_exif_orientation(img, orientation)` 旋转/翻转到显示方向
+3. 再叠加用户调整的 `rotation/flip_h/flip_v`（通过 `face::apply_transform`）
+
+**重要顺序**：`apply_exif_orientation` 必须在 `resize_to_fill` **之前**调用，否则裁剪会发生在传感器方向（横版图裁横版内容），而非显示方向（竖版图裁竖版内容）。
 
 这两层变换组合后的图像才是"显示空间"。人脸 bbox、缩略图生成、人脸裁图均应在显示空间操作。
 
