@@ -24,14 +24,14 @@ A family photo management tool. Import, de-duplicate, organise by time / locatio
 - **Face detection & clustering** — ultraface-slim-320 + ArcFace 512-D embeddings + DBSCAN people grouping; all local, no API key
 - **Animal detection** — YOLOv8-nano, 10 COCO species, runs on import
 - **Web UI** — photo grid, album sidebar, people manager, map view, dedup review, curated collections
-- **PhotoBridge** — incremental iCloud sync via `PHPersistentChangeToken`; auto-sets file timestamps from `PHAsset.creationDate`
+- **PhotoBridge** — incremental iCloud sync via `PHPersistentChangeToken`; auto-sets file timestamps from `PHAsset.creationDate`; auto-corrects HEIC EXIF orientation to match Photos.app display (requires `exiftool`)
 
 ---
 
 ## Requirements
 
 - **picmanager**: Rust 1.95+, macOS (primary); `brew install libheif` for HEIC support
-- **photobridge**: macOS 13+, Xcode command-line tools
+- **photobridge**: macOS 13+, Xcode command-line tools; `brew install exiftool` for HEIC orientation correction
 
 ---
 
@@ -67,6 +67,9 @@ picmanager models fetch
 photobridge setup              # first-time guide
 photobridge export             # full export + auto-import if picmanager is in PATH
 photobridge sync               # incremental sync on subsequent runs
+# Fix orientation for already-exported HEIC files
+photobridge fix-orientations --dir ~/staging/ --dry-run  # report mismatches
+photobridge fix-orientations --dir ~/staging/            # apply fixes
 ```
 
 See **[docs/MANUAL.md](docs/MANUAL.md)** for full CLI reference, REST API, configuration, and PhotoBridge options.

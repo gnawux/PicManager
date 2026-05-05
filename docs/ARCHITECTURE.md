@@ -113,6 +113,7 @@ picmanager/
         │       ├── SyncCommand.swift         # sync：增量导出（PHPersistentChangeToken）
         │       ├── StatusCommand.swift       # status：显示同步状态
         │       ├── FixTimestampsCommand.swift # fix-timestamps：修复文件 mtime
+        │       ├── FixOrientationsCommand.swift # fix-orientations：批量修复 HEIC EXIF 方向
         │       └── SetupCommand.swift        # setup：初始化配置
         └── PhotoBridgeLib/  # 库目标（业务逻辑，可独立测试）
             ├── LibraryEnumerator.swift       # 全量枚举 PHAsset
@@ -131,13 +132,16 @@ picmanager/
 Swift CLI，需要 macOS 13+，依赖 PhotoKit 框架（macOS TCC 权限由启动终端 App 持有）。
 
 **功能：**
-- `export`：全量枚举 Photos 库所有图片资产，批量下载（含 iCloud），写出到暂存目录，设置文件 mtime/ctime = `PHAsset.creationDate`，快照当前 `PHPersistentChangeToken`
-- `sync`：从上次保存的 `PHPersistentChangeToken` 读取变更，仅导出新增资产，更新 token
+- `export`：全量枚举 Photos 库所有图片资产，批量下载（含 iCloud），写出到暂存目录，设置文件 mtime/ctime = `PHAsset.creationDate`，自动修正 EXIF 方向，快照当前 `PHPersistentChangeToken`
+- `sync`：从上次保存的 `PHPersistentChangeToken` 读取变更，仅导出新增资产，更新 token；同样自动修正 EXIF 方向
 - `status`：显示上次同步时间、导出计数、暂存目录占用
 - `fix-timestamps`：对已导出但 mtime 不正确的文件重新设置时间戳
+- `fix-orientations`：批量扫描 HEIC 文件，通过 PhotoKit 查询 Photos 的显示方向，对不一致的文件用 exiftool 修复 EXIF 方向；可选同时更新 PicManager DB 和清除缩略图缓存
 - `setup`：引导用户完成初始配置
 
 导出完成后可选自动调用 `picmanager import --copy --log <path>` 子进程，解析 NDJSON 日志汇报导入结果。mtime 被 picmanager 用作日期推断的第二优先级（当 EXIF 缺失时），因此正确设置 mtime 对库组织至关重要。
+
+HEIC 方向修正原理：`writeAssetResourceOrientationFixed` 调用 `requestImageDataAndOrientation(for:options:)` 查询 Photos 的"显示方向"（含用户在 Photos.app 内手动旋转的修正），与文件 EXIF tag 比对，不一致时用 exiftool 无损修改标签。exiftool 未安装时静默跳过。
 
 ### importer — 导入模块
 
@@ -540,11 +544,12 @@ picmanager config                             # 显示当前生效配置
 独立 Swift CLI，需要 macOS 13+。通过 TCC 请求照片库权限（权限归属启动终端 App）。
 
 ```bash
-photobridge export --output ~/staging/          # 全量导出到暂存目录
+photobridge export --output ~/staging/          # 全量导出到暂存目录（含方向修正）
 photobridge sync --output ~/staging/            # 增量导出（自上次同步后的新照片）
 photobridge export --dry-run                    # 统计资产数，不实际导出
 photobridge status                              # 显示同步状态和统计
 photobridge fix-timestamps --output ~/staging/  # 修复已导出文件的 mtime
+photobridge fix-orientations --dir ~/staging/   # 批量修复 staging 中 HEIC EXIF 方向
 photobridge setup                               # 初始化配置引导
 ```
 

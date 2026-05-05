@@ -24,14 +24,14 @@ English documentation: [README.md](README.md)
 - **人脸检测与聚类** — ultraface-slim-320 + ArcFace 512 维嵌入 + DBSCAN 人物聚类；全本地，无需 API Key
 - **动物检测** — YOLOv8-nano，10 种 COCO 动物，导入时自动运行
 - **Web UI** — 照片网格、相册侧边栏、人物管理、地图视图、去重确认、精选集
-- **PhotoBridge** — 通过 `PHPersistentChangeToken` 增量同步 iCloud；自动从 `PHAsset.creationDate` 设置文件时间戳
+- **PhotoBridge** — 通过 `PHPersistentChangeToken` 增量同步 iCloud；自动从 `PHAsset.creationDate` 设置文件时间戳；自动修正 HEIC EXIF 方向使其与 Photos.app 显示一致（需要 `exiftool`）
 
 ---
 
 ## 环境要求
 
 - **picmanager**：Rust 1.95+，macOS（主要平台）；HEIC 支持需 `brew install libheif`
-- **photobridge**：macOS 13+，Xcode 命令行工具
+- **photobridge**：macOS 13+，Xcode 命令行工具；HEIC 方向修正需 `brew install exiftool`
 
 ---
 
@@ -67,6 +67,9 @@ picmanager models fetch
 photobridge setup              # 首次配置向导
 photobridge export             # 全量导出 + 若 picmanager 在 PATH 中则自动导入
 photobridge sync               # 后续增量同步
+# 修复已导出 HEIC 文件的方向
+photobridge fix-orientations --dir ~/staging/ --dry-run  # 检查方向不一致
+photobridge fix-orientations --dir ~/staging/            # 应用修复
 ```
 
 完整 CLI 参考、REST API、配置项和 PhotoBridge 选项，参见 **[docs/MANUAL.zh.md](docs/MANUAL.zh.md)**。

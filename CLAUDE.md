@@ -100,17 +100,18 @@ docs/
   DESIGN.md            详细设计（模块接口、DB schema、API 参考、测试策略）
 photobridge/           iCloud Photos 导出伴侣工具（Swift Package）
   Sources/PhotoBridge/
-    PhotoBridgeCommand.swift  CLI 入口（export / sync / status / fix-timestamps / setup）
+    PhotoBridgeCommand.swift  CLI 入口（export / sync / status / fix-timestamps / fix-orientations / setup）
     Commands/
       ExportCommand.swift     全量导出 + 时间戳 + 磁盘预检 + picmanager 自动导入
       SyncCommand.swift       增量同步（PHPersistentChangeToken）+ 同上
       StatusCommand.swift     显示上次同步时间与数量
       FixTimestampsCommand.swift  修复已导出文件的 mtime/ctime
+      FixOrientationsCommand.swift  批量修复 HEIC EXIF 方向（exiftool + PhotoKit）
       SetupCommand.swift      首次配置向导 + launchd plist 生成
   Sources/PhotoBridgeLib/
     LibraryEnumerator.swift   全量枚举：PHAsset + selectExportResource
     IncrementalEnumerator.swift  增量枚举：PHPersistentChangeFetchResult
-    AssetExporter.swift       exportDestinationURL() + writeAssetResource()
+    AssetExporter.swift       exportDestinationURL() + writeAssetResource() + writeAssetResourceOrientationFixed()
     AssetTimestamp.swift      applyTimestamp(to:date:)
     AssetEnumerator.swift     AssetResourceInfo 协议
     DiskSpaceCheck.swift      estimatedBytes / freeBytes / checkDiskSpace
@@ -841,5 +842,8 @@ photobridge export --dry-run                # 只统计数量
 photobridge sync                            # 增量同步（自上次 token 之后的新照片）
 photobridge status                          # 上次同步时间与数量
 photobridge fix-timestamps /path/to/staging # 修复已导出文件的 mtime/ctime
+photobridge fix-orientations --dir /path/to/staging --dry-run  # 检查 staging 中方向不一致的 HEIC
+photobridge fix-orientations --dir /path/to/staging            # 修复 staging 中的 HEIC 方向（需要 exiftool）
+photobridge fix-orientations --dir /path/to/library --picmanager-db /path/to/picmanager.db --thumbs-dir /path/to/.thumbs  # 修复已导入照片
 .build/debug/PhotoBridgeTestRunner          # 跑 PhotoBridge 全部测试（53 个）
 ```

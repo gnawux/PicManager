@@ -352,6 +352,31 @@ photobridge status
 
 PhotoBridge 解析 `picmanager import --log` 输出的 NDJSON 日志，确认每批照片成功入库后再清空暂存文件，失败的文件在下次运行时自动重试。
 
+### HEIC 方向修正
+
+Apple Photos 允许用户在 Photos.app 中手动旋转照片，但不会修改 HEIC 文件本身，只写入私有内部数据库。PhotoBridge 导出的 HEIC 文件 EXIF 方向标签可能与 Photos 的显示方向不一致，导致 PicManager 显示方向错误。
+
+**导出时自动修正（推荐）：**
+`export` / `sync` 使用 `writeAssetResourceOrientationFixed`，在写出文件后自动查询 Photos 的显示方向（`PHImageManager.requestImageDataAndOrientation(version:.current)`），若与文件 EXIF 不一致则用 `exiftool` 无损修改 EXIF 标签。需要安装 `exiftool`（`brew install exiftool`），未安装时静默跳过。
+
+**已导出/已导入文件的批量修正：**
+`photobridge fix-orientations` 命令批量处理已导出的 HEIC 文件：
+
+```bash
+# 检查 staging 目录中方向不一致的文件（不修改）
+photobridge fix-orientations --dir /path/to/staging --dry-run
+
+# 修复 staging 中的 HEIC 文件
+photobridge fix-orientations --dir /path/to/staging
+
+# 修复已导入 PicManager 的 HEIC，同时更新 DB 和清除缩略图缓存
+photobridge fix-orientations --dir /path/to/library \
+  --picmanager-db /path/to/picmanager.db \
+  --thumbs-dir /path/to/.thumbs
+```
+
+通过文件名反向解析 `localIdentifier`，批量查询 Photos 资产（每批 500 个），并发查询方向（`--max-concurrent`，默认 16）。不在本机 Photos 库中的文件（iCloud 仅存储、受限访问）会跳过。
+
 ### 状态管理
 
 PhotoBridge 在 `~/Library/Application Support/PhotoBridge/state.json` 维护：
