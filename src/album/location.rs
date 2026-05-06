@@ -258,7 +258,8 @@ pub async fn group_by_location_scoped(
     let placeholders = photo_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
         "SELECT id, gps_lat, gps_lon FROM photos \
-         WHERE id IN ({placeholders}) AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL"
+         WHERE id IN ({placeholders}) AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL \
+         ORDER BY gps_lat, gps_lon"
     );
     let mut q = sqlx::query_as::<_, (i64, f64, f64)>(&sql);
     for id in photo_ids {
