@@ -196,11 +196,16 @@ async fn cached_or_fetch(
     city
 }
 
-/// Keep only the first semicolon-delimited variant and trim whitespace.
-/// Nominatim sometimes concatenates zh-CN and zh-TW names (e.g. "美国;美國")
-/// when both exist in OSM. Taking the first segment gives a stable single name.
+/// Keep only the first variant and trim whitespace.
+/// Nominatim (or OSM data) sometimes joins script variants with ";" or " / ",
+/// e.g. "美国;美國" or "荷兰 / 荷蘭". Take the segment before the first delimiter.
 fn first_name(s: String) -> String {
-    s.splitn(2, ';').next().map(|p| p.trim().to_owned()).unwrap_or(s)
+    let end = [s.find(';'), s.find(" / ")]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(s.len());
+    s[..end].trim().to_owned()
 }
 
 async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<GeoInfo> {
