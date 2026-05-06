@@ -500,11 +500,17 @@ fn crop_face(
     w: i64,
     h: i64,
 ) -> anyhow::Result<Vec<u8>> {
-    use image::{ImageFormat, ImageReader};
+    use image::ImageFormat;
     use std::io::Cursor;
 
-    let img = ImageReader::open(path)?.decode()?;
-    let img = apply_exif_orientation(img, exif_orient);
+    let p = std::path::Path::new(path);
+    let img = crate::image_open::open_image(p)?;
+    let effective_orient = if crate::image_open::is_heic(p) {
+        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
+    } else {
+        exif_orient
+    };
+    let img = apply_exif_orientation(img, effective_orient);
     let img = apply_transform(img, rotation, flip_h, flip_v);
     let iw = img.width() as i64;
     let ih = img.height() as i64;
