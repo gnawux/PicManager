@@ -1131,7 +1131,9 @@ function renderGeoCities(st, countryName) {
       li.classList.add('active');
       setBreadcrumb(`${countryName} › ${st.name} › ${c.name}`);
       const cityParam = c.name === 'Unknown' ? '__null__' : c.name;
-      geoCurrentGeoFilter = { country: countryName, state: st.name, city: cityParam };
+      const countryParam = countryName === 'Unknown' ? '__null__' : countryName;
+      const stateParam = st.name === 'Unknown' ? '__null__' : st.name;
+      geoCurrentGeoFilter = { country: countryParam, state: stateParam, city: cityParam };
       geoCurrentPage = 1;
       loadGeoPhotos();
       refreshMapIfActive();
