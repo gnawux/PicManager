@@ -25,9 +25,12 @@ pub struct Pagination {
     pub page: u32,
     #[serde(default = "default_per_page")]
     pub per_page: u32,
+    #[serde(default = "default_order")]
+    pub order: String,
 }
 fn default_page() -> u32 { 1 }
 fn default_per_page() -> u32 { 50 }
+fn default_order() -> String { "desc".to_string() }
 
 pub async fn list_collections(
     State(state): State<AppState>,
@@ -214,13 +217,15 @@ pub async fn list_collection_photos(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let photos: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+    let dir = if pag.order == "asc" { "ASC" } else { "DESC" };
+    let sql = format!(
         "SELECT p.id, p.path, p.taken_at, p.camera
          FROM photos p JOIN photo_albums pa ON pa.photo_id = p.id
          WHERE pa.album_id = ?
-         ORDER BY p.taken_at NULLS LAST, p.id
-         LIMIT ? OFFSET ?",
-    )
+         ORDER BY p.taken_at {dir} NULLS LAST, p.id {dir}
+         LIMIT ? OFFSET ?"
+    );
+    let photos: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(&sql)
     .bind(id)
     .bind(pag.per_page as i64)
     .bind(offset)

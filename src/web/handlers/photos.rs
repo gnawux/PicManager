@@ -278,10 +278,13 @@ pub struct Pagination {
     pub page: u32,
     #[serde(default = "default_per_page")]
     pub per_page: u32,
+    #[serde(default = "default_order")]
+    pub order: String,
 }
 
 fn default_page() -> u32 { 1 }
 fn default_per_page() -> u32 { 50 }
+fn default_order() -> String { "desc".to_string() }
 
 #[derive(Debug, Serialize)]
 pub struct PhotoRow {
@@ -313,11 +316,13 @@ pub async fn list_photos(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let photos: Vec<PhotoRow> = sqlx::query_as(
+    let dir = if pag.order == "asc" { "ASC" } else { "DESC" };
+    let sql = format!(
         "SELECT id, path, format, taken_at, camera, import_status
-         FROM photos ORDER BY taken_at DESC NULLS LAST, id DESC
-         LIMIT ? OFFSET ?",
-    )
+         FROM photos ORDER BY taken_at {dir} NULLS LAST, id {dir}
+         LIMIT ? OFFSET ?"
+    );
+    let photos: Vec<PhotoRow> = sqlx::query_as(&sql)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.pool)

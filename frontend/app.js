@@ -3,6 +3,7 @@
 const state = {
   page: 1,
   perPage: 50,
+  order: 'desc',
   total: 0,
   albumId: null,
   collectionId: null,   // currently viewed collection
@@ -80,6 +81,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('import-btn').addEventListener('click', startImport);
   document.getElementById('prev-btn').addEventListener('click', () => changePage(-1));
   document.getElementById('next-btn').addEventListener('click', () => changePage(1));
+  document.getElementById('sort-order-btn').addEventListener('click', toggleSortOrder);
   document.getElementById('dedup-btn').addEventListener('click', openDedupModal);
   document.getElementById('close-dedup').addEventListener('click', () => {
     document.getElementById('dedup-modal').classList.add('hidden');
@@ -271,11 +273,11 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadPhotos() {
   let url;
   if (state.inCollection && state.collectionId) {
-    url = `/api/collections/${state.collectionId}/photos?page=${state.page}&per_page=${state.perPage}`;
+    url = `/api/collections/${state.collectionId}/photos?page=${state.page}&per_page=${state.perPage}&order=${state.order}`;
   } else if (state.albumId) {
-    url = `/api/albums/${state.albumId}/photos?page=${state.page}&per_page=${state.perPage}`;
+    url = `/api/albums/${state.albumId}/photos?page=${state.page}&per_page=${state.perPage}&order=${state.order}`;
   } else {
-    url = `/api/photos?page=${state.page}&per_page=${state.perPage}`;
+    url = `/api/photos?page=${state.page}&per_page=${state.perPage}&order=${state.order}`;
   }
 
   const data = await fetchJSON(url);
@@ -309,6 +311,14 @@ function renderGrid(photos) {
     });
     grid.appendChild(card);
   });
+}
+
+function toggleSortOrder() {
+  state.order = state.order === 'desc' ? 'asc' : 'desc';
+  state.page = 1;
+  document.getElementById('sort-order-btn').textContent =
+    state.order === 'desc' ? '↓ 最新优先' : '↑ 最早优先';
+  loadPhotos();
 }
 
 // ── Batch selection ───────────────────────────────────────────────────────────
