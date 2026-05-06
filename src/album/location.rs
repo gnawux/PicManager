@@ -196,19 +196,29 @@ async fn cached_or_fetch(
     city
 }
 
+/// Keep only the first semicolon-delimited variant and trim whitespace.
+/// Nominatim sometimes concatenates zh-CN and zh-TW names (e.g. "美国;美國")
+/// when both exist in OSM. Taking the first segment gives a stable single name.
+fn first_name(s: String) -> String {
+    s.splitn(2, ';').next().map(|p| p.trim().to_owned()).unwrap_or(s)
+}
+
 async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<GeoInfo> {
+    // zh-CN,zh,en: prefer Simplified Chinese; avoid zh-CN+zh-TW concatenation that
+    // bare "zh" can trigger when both script variants exist in OSM (e.g. "美国;美國").
     let url = format!(
-        "https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10&accept-language=zh,en"
+        "https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10&accept-language=zh-CN,zh,en"
     );
     let resp: serde_json::Value = client.get(&url).send().await.ok()?.json().await.ok()?;
     let addr = resp.get("address")?;
 
     let city = ["city", "town", "village"]
         .iter()
-        .find_map(|f| addr.get(*f).and_then(|v| v.as_str()).map(str::to_owned));
-    let county = addr.get("county").and_then(|v| v.as_str()).map(str::to_owned);
-    let mut state = addr.get("state").and_then(|v| v.as_str()).map(str::to_owned);
-    let country = addr.get("country").and_then(|v| v.as_str()).map(str::to_owned);
+        .find_map(|f| addr.get(*f).and_then(|v| v.as_str()).map(str::to_owned))
+        .map(first_name);
+    let county = addr.get("county").and_then(|v| v.as_str()).map(str::to_owned).map(first_name);
+    let mut state = addr.get("state").and_then(|v| v.as_str()).map(str::to_owned).map(first_name);
+    let country = addr.get("country").and_then(|v| v.as_str()).map(str::to_owned).map(first_name);
 
     // Chinese direct-controlled municipalities (直辖市) have no `state` field in
     // Nominatim — the city IS the province-level entity.  Derive from ISO 3166-2.
