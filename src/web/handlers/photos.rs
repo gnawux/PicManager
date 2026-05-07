@@ -445,12 +445,8 @@ fn apply_transforms_full(path: &str, exif_orient: u8, rotation: i32, flip_h: boo
     use std::io::Cursor;
 
     let p = std::path::Path::new(path);
-    let img = crate::image_open::open_image(p)?;
-    let effective_orient = if crate::image_open::is_heic(p) {
-        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
-    } else {
-        exif_orient
-    };
+    let (img, file_orient) = crate::image_open::open_image_with_orient(p)?;
+    let effective_orient = if file_orient != 1 { file_orient } else { exif_orient };
     let img = apply_exif_orientation(img, effective_orient);
     let img = apply_transform(img, rotation, flip_h, flip_v);
     let mut buf = Vec::new();
@@ -463,15 +459,16 @@ fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h:
     use std::io::Cursor;
 
     let p = std::path::Path::new(path);
-    let img = crate::image_open::open_image(p)?;
-    // For HEIC, open_image returns raw pixels (sips orientation undone).
-    // Read orientation from the file directly to handle photos where the DB
-    // exif_orientation column is stale (e.g. imported before migration 0012).
-    let effective_orient = if crate::image_open::is_heic(p) {
-        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
-    } else {
-        exif_orient
-    };
+    // open_image_with_orient returns (pixels, effective_orientation).
+    // For HEIC, orientation is read from the sips-output JPEG so that HEIF
+    // IROT box rotations (which sips translates into EXIF) are captured.
+    // The DB exif_orient is used as a fallback if sips output has none.
+    let (img, file_orient) = crate::image_open::open_image_with_orient(p)?;
+    // file_orient is from sips output JPEG for HEIC (captures HEIF IROT box),
+    // or from the file's EXIF for other formats.
+    // Fall back to DB exif_orient when the file reports normal (1) in case the
+    // DB value was stored before migration 0012 with the correct value.
+    let effective_orient = if file_orient != 1 { file_orient } else { exif_orient };
     // Apply EXIF orientation on the full image BEFORE resize so that
     // resize_to_fill crops in display orientation (portrait shots stay portrait).
     let img = apply_exif_orientation(img, effective_orient);

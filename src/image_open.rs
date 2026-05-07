@@ -75,6 +75,35 @@ pub fn read_exif_orientation(path: &Path) -> Option<u8> {
     field.value.get_uint(0).map(|v| v as u8)
 }
 
+pub fn read_exif_orientation_from_bytes(bytes: &[u8]) -> Option<u8> {
+    use exif::{In, Reader, Tag};
+    let data = Reader::new()
+        .read_from_container(&mut std::io::Cursor::new(bytes))
+        .ok()?;
+    let field = data.get_field(Tag::Orientation, In::PRIMARY)?;
+    field.value.get_uint(0).map(|v| v as u8)
+}
+
+/// Like `open_image`, but also returns the effective EXIF orientation.
+///
+/// For HEIC, sips may translate a HEIF IROT box into an EXIF Orientation tag
+/// in the output JPEG (e.g. a Photos-exported HEIC can have IROT=90 CW with
+/// EXIF Orientation=1 in the container).  Reading orientation from the sips
+/// output rather than the original HEIC file gives the correct value.
+/// For non-HEIC files the orientation is read from the file as usual.
+pub fn open_image_with_orient(path: &Path) -> anyhow::Result<(DynamicImage, u8)> {
+    if is_heic(path) {
+        let jpeg = sips_to_jpeg(path)?;
+        let orient = read_exif_orientation_from_bytes(&jpeg).unwrap_or(1);
+        let img = image::load_from_memory_with_format(&jpeg, image::ImageFormat::Jpeg)?;
+        Ok((img, orient))
+    } else {
+        let img = image::open(path)?;
+        let orient = read_exif_orientation(path).unwrap_or(1);
+        Ok((img, orient))
+    }
+}
+
 
 #[cfg(test)]
 mod tests {
