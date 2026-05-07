@@ -385,26 +385,45 @@ pub async fn get_photo_file(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let row: Option<(String, String)> =
-        sqlx::query_as("SELECT path, format FROM photos WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&state.pool)
-            .await
-            .unwrap_or(None);
+    let row: Option<(String, String, i32, i32, i32, i32)> = sqlx::query_as(
+        "SELECT path, format, rotation, flip_h, flip_v, exif_orientation FROM photos WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
 
-    let Some((path, format)) = row else {
+    let Some((path, format, rotation, flip_h_i, flip_v_i, exif_orient)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
+    let flip_h = flip_h_i != 0;
+    let flip_v = flip_v_i != 0;
     let is_heic = matches!(format.to_lowercase().as_str(), "heic" | "heif");
+
+    // When user-applied transforms are present, bake EXIF orientation + DB
+    // rotation/flip into the pixels and return a plain JPEG so the browser
+    // doesn't apply the EXIF orientation a second time.
+    if rotation != 0 || flip_h || flip_v {
+        let exif_orient_u8 = exif_orient as u8;
+        match tokio::task::spawn_blocking(move || {
+            apply_transforms_full(&path, exif_orient_u8, rotation, flip_h, flip_v)
+        })
+        .await
+        {
+            Ok(Ok(bytes)) => return ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
+            _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    }
+
     let mime = match format.to_lowercase().as_str() {
-        "jpeg" | "jpg"         => "image/jpeg",
-        "png"                  => "image/png",
-        "gif"                  => "image/gif",
-        "webp"                 => "image/webp",
-        "heic" | "heif"        => "image/jpeg",  // transcoded for browser compatibility
-        "tiff" | "tif"         => "image/tiff",
-        _                      => "application/octet-stream",
+        "jpeg" | "jpg"  => "image/jpeg",
+        "png"           => "image/png",
+        "gif"           => "image/gif",
+        "webp"          => "image/webp",
+        "heic" | "heif" => "image/jpeg",
+        "tiff" | "tif"  => "image/tiff",
+        _               => "application/octet-stream",
     };
 
     if is_heic {
@@ -419,6 +438,24 @@ pub async fn get_photo_file(
             Err(_)    => StatusCode::NOT_FOUND.into_response(),
         }
     }
+}
+
+fn apply_transforms_full(path: &str, exif_orient: u8, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
+    use image::ImageFormat;
+    use std::io::Cursor;
+
+    let p = std::path::Path::new(path);
+    let img = crate::image_open::open_image(p)?;
+    let effective_orient = if crate::image_open::is_heic(p) {
+        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
+    } else {
+        exif_orient
+    };
+    let img = apply_exif_orientation(img, effective_orient);
+    let img = apply_transform(img, rotation, flip_h, flip_v);
+    let mut buf = Vec::new();
+    img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;
+    Ok(buf)
 }
 
 fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
