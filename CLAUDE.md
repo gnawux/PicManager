@@ -252,12 +252,17 @@ photobridge/           iCloud Photos 导出伴侣工具（Swift Package）
 
 `image::open()` / `ImageReader::decode()` **不会**自动应用 EXIF Orientation tag（0x0112）。
 
-**sips 行为**（macOS）：`sips -s format jpeg input.heic --out output.jpg` 同样**不旋转像素**——它只是把 HEIC 文件里的 EXIF Orientation 标签原样复制到输出 JPEG，像素布局与传感器原始方向保持一致。（`sips -g orientation` 显示 `<nil>` 是因为 sips 通过 HEIF 容器属性读取方向，而 iPhone HEIC 只写 EXIF Orientation，不写 HEIF IROT box，所以 sips 的 `-g orientation` 读不到）。
+**sips 行为**（macOS）：`sips -s format jpeg input.heic --out output.jpg` **不旋转像素**，但输出 JPEG 的 EXIF Orientation 因 HEIC 内容不同而有两种情况：
 
-浏览器（Chrome）读 JPEG 的 EXIF Orientation 标签后自动旋转展示——这是为什么"查看原图"方向正确，但用 image crate 加载后处理却不对的原因。
+- **普通 iPhone HEIC（无 HEIF IROT box）**：sips 将 HEIC 文件中的 EXIF Orientation 原样复制到输出 JPEG。`sips -g orientation` 显示 `<nil>`，因为 sips 通过读取 HEIF IROT box 来获取方向，而 iPhone HEIC 只写 EXIF，不写 IROT box，所以 sips 读不到。
+- **Photos 导出的 HEIC（有 HEIF IROT box）**：sips **将 IROT 翻译成 EXIF** 写入输出 JPEG（例如 IROT=Rotate90CW → 输出 EXIF=6），但 HEIC 文件自身的 EXIF Orientation 字段不变（仍为 1）。此时输出 EXIF 与原始 HEIC EXIF **不同**。
+
+**关键规则**：HEIC 方向处理必须从**原始 HEIC 文件**读取 EXIF Orientation（用 kamadak-exif `read_exif_orientation`），**不能**从 sips 输出 JPEG 读，否则对有 IROT box 的 HEIC 会多旋转一次（IROT 的 "旋转意图" 被当成 EXIF 执行了一遍，但像素早已在原始位置）。
+
+浏览器（Chrome）读 JPEG 的 EXIF Orientation 标签后自动旋转展示。因此 HEIC 的 `/file` 端点必须将正确的方向**直接烘焙进像素**并输出不带 Orientation 标签的 JPEG，否则浏览器会错误应用 sips 合成的 EXIF=6，把横版照片显示成竖版。
 
 因此，所有代码路径均需手动处理两层变换：
-1. 用 kamadak-exif 读取 `Tag::Orientation`（1–8）
+1. 用 kamadak-exif 从**原始文件**读取 `Tag::Orientation`（1–8）；HEIC 用 `read_exif_orientation(heic_path)`，非 HEIC 用 DB 中存储的 `exif_orientation`
 2. 调用 `face::apply_exif_orientation(img, orientation)` 旋转/翻转到显示方向
 3. 再叠加用户调整的 `rotation/flip_h/flip_v`（通过 `face::apply_transform`）
 

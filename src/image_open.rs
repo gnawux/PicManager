@@ -6,11 +6,16 @@ use std::path::Path;
 /// For JPEG/PNG/WebP/GIF, delegates to `image::open()` which returns
 /// raw pixels (EXIF Orientation is NOT auto-applied by the image crate).
 ///
-/// For HEIC/HEIF, uses macOS `sips` to convert to JPEG. sips copies the EXIF
-/// Orientation tag to the output JPEG but does NOT rotate the pixels (iPhone
-/// HEICs store rotation in the EXIF tag, not the HEIF IROT box). The image crate
-/// also does not auto-orient, so callers receive raw sensor pixels and must apply
-/// the stored `exif_orientation` themselves — consistent with the JPEG path.
+/// For HEIC/HEIF, uses macOS `sips` to convert to JPEG.  sips does NOT rotate
+/// pixels, but the EXIF Orientation it writes to the output JPEG varies:
+///  - iPhone HEIC (no HEIF IROT box): sips copies the HEIC EXIF Orientation verbatim.
+///  - Photos-exported HEIC (has HEIF IROT box): sips *translates* the IROT box into
+///    EXIF Orientation (e.g. IROT=Rotate90CW → output EXIF=6), even though the
+///    HEIC file's own EXIF Orientation tag remains 1.
+///
+/// Because of this IROT-translation, callers must read the orientation from the
+/// **original HEIC file** via `read_exif_orientation(path)`, not from the sips
+/// output.  Using the sips-derived EXIF would cause a spurious extra rotation.
 pub fn open_image(path: &Path) -> anyhow::Result<DynamicImage> {
     match image::open(path) {
         Ok(img) => return Ok(img),
@@ -143,5 +148,23 @@ mod tests {
         let bytes = heic_to_jpeg(&path).unwrap();
         let expected = std::fs::read(&path).unwrap();
         assert_eq!(bytes, expected);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn open_image_with_orient_heic_uses_file_exif_not_sips_output() {
+        // open_image_with_orient must return orientation from the original HEIC file,
+        // not from the sips-output JPEG.  For Photos-exported HEICs with a HEIF IROT
+        // box, sips translates the IROT into EXIF (e.g. IROT=Rotate90CW → EXIF=6)
+        // even though the HEIC EXIF Orientation tag itself remains 1 — using the sips
+        // output would cause a spurious extra rotation.
+        let path = sample("IMG_9886.HEIC");
+        let (_, orient) = open_image_with_orient(&path).unwrap();
+        let file_orient = read_exif_orientation(&path).unwrap_or(1);
+        assert_eq!(
+            orient, file_orient,
+            "open_image_with_orient returned {orient} but file EXIF is {file_orient}; \
+             it must read from the HEIC file, not the sips-output JPEG"
+        );
     }
 }

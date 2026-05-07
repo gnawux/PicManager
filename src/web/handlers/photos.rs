@@ -540,4 +540,41 @@ mod tests {
         assert_eq!(r.width(), w);
         assert_eq!(r.height(), h);
     }
+
+    fn sample(name: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/samples")
+            .join(name)
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn generate_thumb_heic_returns_valid_jpeg() {
+        let f = sample("IMG_9886.HEIC");
+        let bytes = generate_thumb(f.to_str().unwrap(), 300, 1, 0, false, false).unwrap();
+        assert!(!bytes.is_empty());
+        assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn generate_thumb_and_apply_transforms_full_heic_consistent_orientation() {
+        // Both functions must read orientation from the same source (original HEIC file,
+        // not sips output).  A HEIC with HEIF IROT would expose any divergence: sips
+        // would give EXIF=6 while the file has EXIF=1, producing different aspect ratios.
+        let f = sample("IMG_9886.HEIC");
+        let path = f.to_str().unwrap();
+        let thumb_bytes = generate_thumb(path, 300, 1, 0, false, false).unwrap();
+        let full_bytes = apply_transforms_full(path, 1, 0, false, false).unwrap();
+
+        let thumb = image::load_from_memory(&thumb_bytes).unwrap();
+        let full = image::load_from_memory(&full_bytes).unwrap();
+        let thumb_landscape = thumb.width() >= thumb.height();
+        let full_landscape = full.width() >= full.height();
+        assert_eq!(
+            thumb_landscape, full_landscape,
+            "thumbnail ({}×{}) and full image ({}×{}) have inconsistent orientations",
+            thumb.width(), thumb.height(), full.width(), full.height()
+        );
+    }
 }
