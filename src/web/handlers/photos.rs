@@ -401,10 +401,12 @@ pub async fn get_photo_file(
     let flip_v = flip_v_i != 0;
     let is_heic = matches!(format.to_lowercase().as_str(), "heic" | "heif");
 
-    // When user-applied transforms are present, bake EXIF orientation + DB
-    // rotation/flip into the pixels and return a plain JPEG so the browser
-    // doesn't apply the EXIF orientation a second time.
-    if rotation != 0 || flip_h || flip_v {
+    // For HEIC: always bake EXIF orientation (read from the original HEIC file, not the
+    // sips-output JPEG) into pixels and return a plain JPEG with no EXIF Orientation tag.
+    // This prevents the browser from mis-applying an EXIF value that sips may have
+    // synthesised from a HEIF IROT box (IROT-derived EXIF=6 on landscape pixels → portrait).
+    // For non-HEIC with user-applied transforms: same pixel-baking is required.
+    if is_heic || rotation != 0 || flip_h || flip_v {
         let exif_orient_u8 = exif_orient as u8;
         match tokio::task::spawn_blocking(move || {
             apply_transforms_full(&path, exif_orient_u8, rotation, flip_h, flip_v)
@@ -421,22 +423,13 @@ pub async fn get_photo_file(
         "png"           => "image/png",
         "gif"           => "image/gif",
         "webp"          => "image/webp",
-        "heic" | "heif" => "image/jpeg",
         "tiff" | "tif"  => "image/tiff",
         _               => "application/octet-stream",
     };
 
-    if is_heic {
-        let p = std::path::PathBuf::from(&path);
-        match tokio::task::spawn_blocking(move || crate::image_open::heic_to_jpeg(&p)).await {
-            Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
-            _             => StatusCode::NOT_FOUND.into_response(),
-        }
-    } else {
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
-            Err(_)    => StatusCode::NOT_FOUND.into_response(),
-        }
+    match tokio::fs::read(&path).await {
+        Ok(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
+        Err(_)    => StatusCode::NOT_FOUND.into_response(),
     }
 }
 
@@ -445,8 +438,15 @@ fn apply_transforms_full(path: &str, exif_orient: u8, rotation: i32, flip_h: boo
     use std::io::Cursor;
 
     let p = std::path::Path::new(path);
-    let (img, file_orient) = crate::image_open::open_image_with_orient(p)?;
-    let effective_orient = if file_orient != 1 { file_orient } else { exif_orient };
+    let img = crate::image_open::open_image(p)?;
+    // For HEIC, read EXIF orientation from the original file, not the sips-output JPEG.
+    // sips may translate a HEIF IROT box into EXIF (e.g. IROT=90CW → EXIF=6), but the
+    // pixels are NOT rotated by sips, so using the sips-derived EXIF would double-rotate.
+    let effective_orient = if crate::image_open::is_heic(p) {
+        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
+    } else {
+        exif_orient
+    };
     let img = apply_exif_orientation(img, effective_orient);
     let img = apply_transform(img, rotation, flip_h, flip_v);
     let mut buf = Vec::new();
@@ -459,18 +459,17 @@ fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h:
     use std::io::Cursor;
 
     let p = std::path::Path::new(path);
-    // open_image_with_orient returns (pixels, effective_orientation).
-    // For HEIC, orientation is read from the sips-output JPEG so that HEIF
-    // IROT box rotations (which sips translates into EXIF) are captured.
-    // The DB exif_orient is used as a fallback if sips output has none.
-    let (img, file_orient) = crate::image_open::open_image_with_orient(p)?;
-    // file_orient is from sips output JPEG for HEIC (captures HEIF IROT box),
-    // or from the file's EXIF for other formats.
-    // Fall back to DB exif_orient when the file reports normal (1) in case the
-    // DB value was stored before migration 0012 with the correct value.
-    let effective_orient = if file_orient != 1 { file_orient } else { exif_orient };
-    // Apply EXIF orientation on the full image BEFORE resize so that
-    // resize_to_fill crops in display orientation (portrait shots stay portrait).
+    let img = crate::image_open::open_image(p)?;
+    // For HEIC, read EXIF orientation directly from the original file, not the sips-output
+    // JPEG. sips translates HEIF IROT boxes into EXIF on the output, but the pixels are not
+    // rotated, so using the sips-derived EXIF would double-rotate the thumbnail.
+    // Fall back to DB exif_orient when the file has no Orientation tag.
+    let effective_orient = if crate::image_open::is_heic(p) {
+        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
+    } else {
+        exif_orient
+    };
+    // Apply EXIF orientation BEFORE resize so resize_to_fill crops in display orientation.
     let img = apply_exif_orientation(img, effective_orient);
     let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
     let thumb = apply_transform(thumb, rotation, flip_h, flip_v);
