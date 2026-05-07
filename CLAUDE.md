@@ -250,6 +250,9 @@ photobridge/           iCloud Photos 导出伴侣工具（Swift Package）
 
 ### image crate 与 sips 均不自动应用 EXIF Orientation
 
+> **HEIC 方向问题完整参考**：`docs/HEIC_ORIENTATION.md`（情况分类、工具行为、陷阱速查、已知问题记录）。HEIC 相关开发必须先阅读该文档。
+
+
 `image::open()` / `ImageReader::decode()` **不会**自动应用 EXIF Orientation tag（0x0112）。
 
 **sips 行为**（macOS）：`sips -s format jpeg input.heic --out output.jpg` **不旋转像素**，但输出 JPEG 的 EXIF Orientation 因 HEIC 内容不同而有两种情况：
