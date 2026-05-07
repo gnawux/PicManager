@@ -67,7 +67,7 @@ pub async fn group_by_location(pool: &SqlitePool) -> Result<()> {
     let mut need_rate_limit = false;
     let mut session_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for (photo_id, lat, lon) in photos {
-        let city = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache).await;
+        let (city, _) = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache).await;
         let Some(city) = city else { continue };
         ensure_location_album(pool, photo_id, &city).await?;
     }
@@ -87,6 +87,8 @@ struct GeoInfo {
 /// caller can sleep before the next call.
 /// `session_cache` is an in-memory L1 cache scoped to one import/geocoding session;
 /// it eliminates DB round-trips for repeated coordinates within the same run.
+/// Returns `(city, is_cache_hit)`.
+/// `is_cache_hit` is true when the result came from L1/L2/proximity (no Nominatim call).
 async fn cached_or_fetch(
     pool: &SqlitePool,
     client: &Client,
@@ -94,13 +96,13 @@ async fn cached_or_fetch(
     lon: f64,
     need_rate_limit: &mut bool,
     session_cache: &mut HashMap<(String, String), Option<String>>,
-) -> Option<String> {
+) -> (Option<String>, bool) {
     let lat_key = coord_key(lat);
     let lon_key = coord_key(lon);
 
     // L1: in-memory cache — no DB round-trip for coordinates seen earlier this session.
     if let Some(cached) = session_cache.get(&(lat_key.clone(), lon_key.clone())) {
-        return cached.clone();
+        return (cached.clone(), true);
     }
 
     // Read city, state, and country to distinguish permanent failures from transient ones.
@@ -111,7 +113,8 @@ async fn cached_or_fetch(
     .bind(&lon_key)
     .fetch_optional(pool)
     .await
-    .ok()?;
+    .ok()
+    .flatten();
 
     if let Some((city, state, country)) = row {
         // All three NULL means Nominatim returned an error or no data during a previous
@@ -121,7 +124,7 @@ async fn cached_or_fetch(
             // Complete entry (state set), or a partial result (only country known) — use as-is.
             if state.is_some() || city.is_none() {
                 session_cache.insert((lat_key, lon_key), city.clone());
-                return city;
+                return (city, true);
             }
             // city is set but state is NULL → stale entry written before municipality fix.
             // Fall through to re-geocode and update.
@@ -150,7 +153,8 @@ async fn cached_or_fetch(
         .bind(lat).bind(lat).bind(lon).bind(lon)
         .fetch_optional(pool)
         .await
-        .ok()?;
+        .ok()
+        .flatten();
 
     if let Some((city, state, county, country)) = nearby {
         // Write back to exact key so future lookups skip this proximity scan.
@@ -163,7 +167,7 @@ async fn cached_or_fetch(
         .execute(pool)
         .await;
         session_cache.insert((lat_key, lon_key), city.clone());
-        return city;
+        return (city, true);
     }
 
     // No exact hit and no nearby hit — call Nominatim (respect 1 req/s policy).
@@ -193,7 +197,7 @@ async fn cached_or_fetch(
     .await;
 
     session_cache.insert((lat_key, lon_key), city.clone());
-    city
+    (city, false)
 }
 
 /// Keep only the first variant and trim whitespace.
@@ -257,14 +261,16 @@ fn cn_municipality_state(iso: &str) -> Option<&'static str> {
 }
 
 /// Like `group_by_location` but restricted to the given photo IDs.
-/// Sets `geo_total` before starting and increments `geo_done` after each photo.
-/// GPS photos that already have a geocache hit don't count as API calls but
-/// still contribute to `geo_done`.
+/// Sets `geo_total` before starting; increments `geo_done` after each photo,
+/// `geo_cache_hits` when resolved from cache (no Nominatim call), and
+/// `geo_failed` when a Nominatim call returned no city.
 pub async fn group_by_location_scoped(
     pool: &SqlitePool,
     photo_ids: &[i64],
     geo_total: &AtomicUsize,
     geo_done: &AtomicUsize,
+    geo_cache_hits: &AtomicUsize,
+    geo_failed: &AtomicUsize,
 ) -> Result<()> {
     if photo_ids.is_empty() {
         return Ok(());
@@ -297,7 +303,14 @@ pub async fn group_by_location_scoped(
     let mut need_rate_limit = false;
     let mut session_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for (photo_id, lat, lon) in photos {
-        let city = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache).await;
+        let (city, is_cache_hit) = cached_or_fetch(
+            pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache,
+        ).await;
+        if is_cache_hit {
+            geo_cache_hits.fetch_add(1, Relaxed);
+        } else if city.is_none() {
+            geo_failed.fetch_add(1, Relaxed);
+        }
         if let Some(city) = city {
             ensure_location_album(pool, photo_id, &city).await?;
         }
@@ -579,8 +592,10 @@ mod tests {
 
         let total = AtomicUsize::new(0);
         let done = AtomicUsize::new(0);
+        let hits = AtomicUsize::new(0);
+        let failed = AtomicUsize::new(0);
         // Only pass id1 — id2 should not get an album.
-        group_by_location_scoped(&pool, &[id1], &total, &done).await.unwrap();
+        group_by_location_scoped(&pool, &[id1], &total, &done, &hits, &failed).await.unwrap();
 
         assert_eq!(total.load(Relaxed), 1);
         assert_eq!(done.load(Relaxed), 1);
@@ -603,7 +618,9 @@ mod tests {
         let id = insert_photo(&pool, "/no-gps.jpg", None, None).await;
         let total = AtomicUsize::new(0);
         let done = AtomicUsize::new(0);
-        group_by_location_scoped(&pool, &[id], &total, &done).await.unwrap();
+        let hits = AtomicUsize::new(0);
+        let failed = AtomicUsize::new(0);
+        group_by_location_scoped(&pool, &[id], &total, &done, &hits, &failed).await.unwrap();
         assert_eq!(total.load(Relaxed), 0);
         assert_eq!(done.load(Relaxed), 0);
     }

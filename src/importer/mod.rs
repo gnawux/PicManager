@@ -40,6 +40,8 @@ pub struct ImportProgress {
     pub gps_found: AtomicUsize,
     pub geo_total: AtomicUsize,
     pub geo_done: AtomicUsize,
+    pub geo_cache_hits: AtomicUsize,
+    pub geo_failed: AtomicUsize,
 }
 
 pub type SharedImportProgress = Arc<ImportProgress>;
@@ -153,10 +155,11 @@ pub async fn import_dir_batch(
     album::group_by_camera(pool).await?;
 
     if !newly_imported_ids.is_empty() {
-        let dummy_total = AtomicUsize::new(0);
-        let dummy_done = AtomicUsize::new(0);
-        let (geo_total, geo_done) = (&dummy_total, &dummy_done);
-        album::group_by_location_scoped(pool, &newly_imported_ids, geo_total, geo_done).await?;
+        album::group_by_location_scoped(
+            pool, &newly_imported_ids,
+            &progress.geo_total, &progress.geo_done,
+            &progress.geo_cache_hits, &progress.geo_failed,
+        ).await?;
 
         if let Err(e) = crate::face::cluster::run_incremental_clustering(pool).await {
             tracing::warn!("incremental clustering failed: {e}");
@@ -218,10 +221,15 @@ async fn import_dir_inner(
     if !newly_imported_ids.is_empty() {
         let dummy_total = AtomicUsize::new(0);
         let dummy_done = AtomicUsize::new(0);
-        let (geo_total, geo_done) = progress.as_ref()
-            .map(|p| (&p.geo_total, &p.geo_done))
-            .unwrap_or((&dummy_total, &dummy_done));
-        album::group_by_location_scoped(pool, &newly_imported_ids, geo_total, geo_done).await?;
+        let dummy_hits = AtomicUsize::new(0);
+        let dummy_failed = AtomicUsize::new(0);
+        let (geo_total, geo_done, geo_cache_hits, geo_failed) = progress.as_ref()
+            .map(|p| (&p.geo_total, &p.geo_done, &p.geo_cache_hits, &p.geo_failed))
+            .unwrap_or((&dummy_total, &dummy_done, &dummy_hits, &dummy_failed));
+        album::group_by_location_scoped(
+            pool, &newly_imported_ids,
+            geo_total, geo_done, geo_cache_hits, geo_failed,
+        ).await?;
 
         // Assign newly detected faces to existing people or create new person clusters.
         if let Err(e) = crate::face::cluster::run_incremental_clustering(pool).await {

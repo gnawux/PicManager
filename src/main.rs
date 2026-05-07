@@ -235,6 +235,8 @@ async fn import_with_progress(
             let gps_found = progress.gps_found.load(Relaxed);
             let geo_total = progress.geo_total.load(Relaxed);
             let geo_done = progress.geo_done.load(Relaxed);
+            let geo_cache_hits = progress.geo_cache_hits.load(Relaxed);
+            let geo_failed = progress.geo_failed.load(Relaxed);
 
             if total > 0 {
                 let elapsed = start.elapsed();
@@ -249,8 +251,7 @@ async fn import_with_progress(
                         "等待中".to_string()
                     }
                 } else if geo_total == 0 && !done {
-                    // Import done but geo phase hasn't written geo_total yet
-                    // (group_by_location_scoped is running its initial DB query).
+                    // Import done but geo phase hasn't written geo_total yet.
                     if gps_found > 0 {
                         format!("地理编码中（{}张）…", gps_found)
                     } else {
@@ -259,7 +260,11 @@ async fn import_with_progress(
                 } else if geo_total == 0 {
                     "无 GPS".to_string()
                 } else {
-                    format!("{}/{} ({}%)", geo_done, geo_total, geo_done * 100 / geo_total)
+                    let remaining = geo_total.saturating_sub(geo_done);
+                    format!(
+                        "共{}张GPS，已查询{}张，缓存命中{}张，失败{}张，编码中{}张",
+                        geo_total, geo_done, geo_cache_hits, geo_failed, remaining,
+                    )
                 };
 
                 println!(

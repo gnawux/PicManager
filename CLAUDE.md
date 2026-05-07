@@ -278,6 +278,24 @@ sips --out /tmp/out.jpg file.heic && exiftool -n -Orientation /tmp/out.jpg  # si
 
 ## 关键实现细节（避免踩坑）
 
+### ImportProgress 各字段语义
+
+`src/importer/mod.rs` 的 `ImportProgress` 各字段含义：
+
+| 字段 | 含义 |
+|------|------|
+| `total` | 本次导入扫描到的文件总数 |
+| `processed` | 已处理文件数（imported + skipped + errors） |
+| `imported` / `skipped` / `errors` | 各结果类型计数 |
+| `faces_found` | 检测到的人脸总数 |
+| `gps_found` | 含 GPS 信息的已导入照片数 |
+| `geo_total` | 待地理编码的照片数（`group_by_location_scoped` 开始时一次性写入） |
+| `geo_done` | 已处理的地理编码照片数，**包含缓存命中**：`geo_done = geo_cache_hits + API成功 + geo_failed` |
+| `geo_cache_hits` | 从 L1/L2/proximity 缓存直接返回、未调用 Nominatim 的照片数 |
+| `geo_failed` | 调用了 Nominatim 但返回无城市名的照片数 |
+
+CLI 显示中"编码中"= `geo_total - geo_done`（尚未处理的剩余数）。
+
 ### 两层去重架构（dedup）
 
 **Layer 1**（`dedup/hash.rs` + `candidate.rs`）：`image_hasher::HashAlg::Gradient` 64-bit pHash，O(n log n) 多索引分桶粗筛。
