@@ -129,6 +129,53 @@ photobridge/           iCloud Photos 导出伴侣工具（Swift Package）
 - 单文件导入失败只记录 `tracing::warn`，不中断整批次
 - **文档同步**：每次功能性调整（行为变更、新增、删除）完成后，必须确认 `docs/REQUIREMENTS.md`、`docs/DESIGN.md`、`docs/ARCHITECTURE.md`、`README.md`、`CLAUDE.md` 是否需要更新，需要的必须同步修改后再提交
 
+## 踩坑经验教训
+
+以下教训来自真实的返工记录，每条都有具体事故支撑。
+
+### 1. 先建完整数据流模型，再动代码
+
+涉及多个外部工具交互（sips / exiftool / image crate / 浏览器）的 bug，不要"猜原因 → 改代码"，先用命令实测数据流的每一步：
+
+```bash
+exiftool -n -Orientation file.heic          # HEIC 文件 EXIF
+sips --out /tmp/out.jpg file.heic && exiftool -n -Orientation /tmp/out.jpg  # sips 输出 EXIF
+```
+
+**事故**：photo 9316 `/file` 方向错，在不清楚 sips 会把 HEIF IROT 翻译成 EXIF 的情况下就动手，把本来正确的缩略图也改错了（commit cdabdc3）。
+
+---
+
+### 2. 找到"两个路径不一致"时，先确认哪边是对的基准
+
+发现 A 对、B 错时，不要"让 A 和 B 变得一样"——要先确认 A 为什么对，再把 B 改成和 A 同一套逻辑。
+
+**事故**：同上。缩略图读 HEIC EXIF=1（正确），原图走 sips 输出拿到 EXIF=6（错误）。错误修法是"让缩略图也读 sips 输出"，而不是"让原图也读 HEIC EXIF"。
+
+---
+
+### 3. 多路径处理同一件事，必须有一致性测试
+
+凡是有两段代码对同一输入做同一类型的处理（如 `generate_thumb` 和 `get_photo_file` 都处理 HEIC 方向），必须有测试验证二者输出一致，否则一端的修改不会触发另一端的回归。
+
+**事故**：同上。cdabdc3 改完，所有现有单元测试仍 pass，因为没有"缩略图和原图纵横比必须一致"的测试。
+
+---
+
+### 4. 外部工具的非直觉行为，第一次踩坑时就写进文档
+
+`docs/HEIC_ORIENTATION.md` 如果在 HEIC 支持上线（commit d449850）时就写好，后续所有绕的弯路都不会发生。知识只存在脑子里，下次开新 session 就会忘。
+
+**规则**：新增对外部工具的依赖时，同一个 commit 里必须写清楚该工具的关键行为和非直觉边界。
+
+---
+
+### 5. Latent bug 比 obvious bug 危险——上线时就要想清楚边界情况
+
+`/file` 返回 sips 原始输出一直存在（d449850 起），但 6 天内无人发现，因为大多数 iPhone HEIC 没有 IROT box。等到 photo 9316 触发时，背景知识已经丢失，修复方向因此出错。
+
+**规则**：实现 HEIC 处理时就应该问："sips 输出的 EXIF 和原始文件 EXIF 在什么情况下会不同？浏览器拿到带 EXIF 的 JPEG 会做什么？"——而不是"能显示就行"。
+
 ## 开发状态
 
 **已完成：Steps 1–22（docs/PLAN.md 全部步骤）**
