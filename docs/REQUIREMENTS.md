@@ -393,6 +393,189 @@ PhotoBridge 在 `~/Library/Application Support/PhotoBridge/state.json` 维护：
 
 ---
 
+## 运动记录（2.0）
+
+### 概述
+
+PicManager 2.0 将照片管理扩展为生活记录工具，首先支持户外运动数据的导入与浏览。用户可批量导入 Garmin 等设备的运动文件，在专属的「运动」标签页中浏览运动列表与轨迹详情，系统自动将运动时段内拍摄的照片标注在运动地图上，形成图文结合的运动日记。
+
+### 支持的运动格式
+
+| 格式 | 说明 | 扩展名 |
+|------|------|--------|
+| **FIT**（Flexible and Interoperable Data Transfer） | Garmin 专有二进制格式，包含完整运动数据（GPS轨迹、心率、踏频、功率、高度等） | `.fit` |
+| **GPX**（GPS Exchange Format） | 开放 XML 格式，广泛兼容各品牌 GPS 设备与 App（Garmin Connect / Strava 导出） | `.gpx` |
+
+支持的运动类型（从文件元数据读取，无法识别时归为 `other`）：跑步（running）、徒步（hiking）、骑行（cycling）、步行（walking）、越野跑（trail_running）、游泳（swimming）、其他（other）。
+
+### 运动文件目录
+
+PicManager 维护一个专用的运动文件目录（在配置文件中指定，默认 `{library}/.activities/`），用于集中存放所有导入的 FIT/GPX 原始文件。导入时将源文件**复制**到此目录，数据库 `source_path` 记录目录内路径（而非用户的原始下载路径）。目录结构按年份组织：`{activities_dir}/{yyyy}/{filename}`。
+
+### 导入
+
+**CLI 命令：**
+
+```bash
+picmanager activities import <file_or_dir>            # 导入单文件或目录下全部 FIT/GPX
+picmanager activities import --dry-run <file_or_dir>  # 仅统计数量，不写库
+picmanager activities sync-usb                        # 从 USB 连接的 Garmin 设备导入新文件
+picmanager activities sync-usb --device GARMIN        # 指定 USB 卷名（默认自动检测）
+```
+
+行为规范：
+
+* 按文件 **SHA-256** 去重，重复导入同一文件静默跳过
+* 递归扫描目录，按扩展名（`.fit` / `.gpx`，大小写不敏感）识别格式
+* 单文件解析失败只记录 `warn`，不中断批量导入，最终汇总失败数量
+* 源文件**复制**到 `activities_dir`，不删除原始文件
+* `sync-usb` 自动检测 `/Volumes/` 下挂载的 Garmin 设备（卷名含 `GARMIN`），读取 `{volume}/GARMIN/Activity/` 目录
+* 导入完成后打印汇总：`共 N 个文件，导入 X，跳过（重复）Y，失败 Z`
+
+> Garmin 数据同步方案详见 `docs/GARMIN_SYNC.md`。MVP 阶段使用手动导入 + USB 直连，非官方 API 自动同步作为后续可选增强。
+
+### 数据模型
+
+**`activities` 表（每次运动一条记录）：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PK | |
+| `sha256` | TEXT UNIQUE | 文件内容哈希，用于去重 |
+| `source_path` | TEXT | 原始文件路径（仅记录，不强依赖） |
+| `file_format` | TEXT | `'fit'` / `'gpx'` |
+| `title` | TEXT | 活动名称（FIT activity name / GPX name），默认 `{日期} {类型}` |
+| `activity_type` | TEXT | `running` / `hiking` / `cycling` / `walking` / `trail_running` / `swimming` / `other` |
+| `start_time` | TEXT | UTC ISO-8601，轨迹第一个点的时间 |
+| `end_time` | TEXT | UTC ISO-8601，轨迹最后一个点的时间 |
+| `duration_seconds` | INTEGER | 总运动时长（不含暂停） |
+| `distance_meters` | REAL | 总距离（米） |
+| `elevation_gain_meters` | REAL NULL | 累计爬升（米），无高度数据时为 NULL |
+| `avg_heart_rate` | INTEGER NULL | 平均心率（bpm），无数据时为 NULL |
+| `max_heart_rate` | INTEGER NULL | 最大心率（bpm） |
+| `calories` | INTEGER NULL | 消耗卡路里 |
+| `device` | TEXT NULL | 设备名称（如 `"Garmin Fenix 7S"`） |
+| `import_status` | TEXT | `'imported'` / `'failed'` |
+
+**`activity_track_points` 表（每个 GPS 轨迹点一条记录）：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | INTEGER PK | |
+| `activity_id` | INTEGER FK | → activities(id) ON DELETE CASCADE |
+| `ts` | TEXT | UTC ISO-8601 时间戳 |
+| `lat` | REAL | WGS84 纬度 |
+| `lon` | REAL | WGS84 经度 |
+| `elevation` | REAL NULL | 海拔（米） |
+| `heart_rate` | INTEGER NULL | 心率（bpm） |
+| `cadence` | INTEGER NULL | 踏频 / 步频（rpm/spm） |
+| `speed` | REAL NULL | 速度（m/s） |
+
+轨迹点数量估算：典型 1 小时跑步约 3600 点（1 秒采样），一年 200 次运动约 72 万点，存储可控。
+
+**照片关联（不设独立表，按需查询）：**
+
+照片与运动的关联采用**双重过滤**，两个条件均须满足：
+
+1. **时间**：照片 `taken_at` 落在 `[activity.start_time, activity.end_time]` 区间内
+2. **GPS 距离**：照片须有 GPS 坐标，且距运动轨迹最近点 ≤ 500 米
+
+纯时间过滤会把同一时段不同位置的家庭成员照片误关联进来（如一人跑步时另一人在家拍照），GPS 距离过滤是必要条件。无 GPS 的照片不参与关联。
+
+关联在展示时即时计算，无需预存：
+
+```sql
+-- 伪码：先按时间筛，再在应用层按距轨迹最近点过滤
+SELECT * FROM photos
+WHERE taken_at BETWEEN :start_time AND :end_time
+  AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
+ORDER BY taken_at
+-- 然后在应用层计算每张照片距轨迹的最小距离，过滤掉 > 500m 的
+```
+
+### WebUI — 运动标签页
+
+导航栏新增「运动」标签，与「照片」「人物」「地点」并列。
+
+#### 运动列表视图
+
+* 按 `start_time` 降序列出所有已导入运动，默认每页 50 条
+* 每条记录展示：
+  * 运动类型图标（🏃 跑步 / 🥾 徒步 / 🚴 骑行等）
+  * 日期与时间（本地时区）
+  * 标题
+  * 距离（km，保留两位小数）
+  * 时长（h:mm:ss）
+  * 累计爬升（有数据时展示，单位 m）
+  * 平均心率（有数据时展示，单位 bpm）
+* 支持按运动类型筛选（顶部筛选栏）
+* 点击任意一条记录进入运动详情视图
+
+#### 运动详情视图（分屏）
+
+分屏布局：**左侧主区（约 65%）放地图，右侧边栏（约 35%）放元数据与照片**。
+
+**左侧：轨迹地图**
+
+* 使用 Leaflet 展示 OpenStreetMap 底图
+* 将轨迹点连线绘制为彩色折线（颜色可按心率或速度渐变，初版用固定颜色即可）
+* 地图自动缩放适配轨迹包围盒（`fitBounds`）
+* 在轨迹上标注关联照片（使用小相机图标 📷），点击显示该照片缩略图弹窗；弹窗点击可跳转到照片详情
+* 无 GPS 的关联照片不在地图上显示（仅出现在右侧列表）
+* 地图支持缩放、拖拽
+
+**右侧：运动元数据 + 关联照片**
+
+元数据区展示：
+
+| 项目 | 说明 |
+|------|------|
+| 运动类型 | 图标 + 文字 |
+| 开始时间 | 本地时区，精确到分钟 |
+| 时长 | h:mm:ss |
+| 距离 | X.XX km |
+| 配速 / 速度 | 跑步/徒步显示配速（min/km），骑行显示速度（km/h） |
+| 累计爬升 | X m（无数据时隐藏） |
+| 平均/最大心率 | X / X bpm（无数据时隐藏） |
+| 卡路里 | X kcal（无数据时隐藏） |
+| 设备 | 设备名称（无数据时隐藏） |
+| 原始文件 | 文件名（格式标注） |
+
+关联照片区：
+
+* 标题「本次运动中的照片（N 张）」
+* 以缩略图网格展示（同照片浏览视图样式）
+* 按拍摄时间排序
+* 点击照片跳转到照片详情视图
+* 无关联照片时显示「本次运动无关联照片」
+
+### 关联照片的触发时机
+
+| 事件 | 操作 |
+|------|------|
+| 导入运动文件时 | 无需额外操作，关联是即时查询，不缓存 |
+| 导入新照片后 | 同上，下次打开运动详情时自动包含新照片 |
+| 修改照片拍摄时间后 | 自动生效（查询使用最新 taken_at） |
+
+### 边界情况与约束
+
+* **时区**：FIT/GPX 轨迹时间为 UTC，照片 `taken_at` 也按 UTC 存储（含时区偏移字段）；关联查询统一用 UTC 比较，不受设备时区设置影响
+* **时钟偏差**：相机与 GPS 设备时钟可能存在数分钟偏差；初版不做额外补偿（用户可通过「编辑拍摄时间」手动修正照片时间）
+* **无 GPS 的运动文件**（纯心率记录等）：可以导入，元数据正常存储，地图区显示"此运动无 GPS 轨迹数据"，关联照片仍按时间段展示
+* **重叠时段**：多次运动时段重叠时，一张照片可同时关联多个运动（各自独立展示，不做去重）
+* **轨迹点采样过密**：前端绘制时，若轨迹点超过 **7200 个**（约 2 小时 × 1 点/秒），使用 Ramer-Douglas-Peucker 算法降采样后再传给 Leaflet（避免前端渲染卡顿）；服务端提供采样后的轨迹数据接口；原始轨迹点完整保存在数据库，降采样仅用于展示
+
+### API 设计（概要）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/activities` | 运动列表（分页，支持 type 过滤） |
+| GET | `/api/activities/:id` | 运动详情（含元数据） |
+| GET | `/api/activities/:id/track` | 轨迹点数组（自动降采样） |
+| GET | `/api/activities/:id/photos` | 关联照片列表 |
+
+---
+
 ## 其他要求
 
 * 导入后照片在 library 中按 `yyyy-mm-dd` 目录组织，数据库记录照片在 library 内的新路径
