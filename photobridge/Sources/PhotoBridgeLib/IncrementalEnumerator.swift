@@ -38,7 +38,9 @@ public struct IncrementalEnumerator {
             for change in result {
                 let det = try change.changeDetails(for: PHObjectType.asset)
                 assetIDs.append(contentsOf: det.insertedLocalIdentifiers)
-                assetIDs.append(contentsOf: det.updatedLocalIdentifiers)
+                // updatedLocalIdentifiers is intentionally excluded: Photos.app triggers
+                // bulk updates for background tasks (face recognition, ML tagging, iCloud
+                // metadata sync) that don't represent new photos the user added.
             }
             // Snapshot the current token after processing all changes
             latestTokenData = serializeCurrentToken()
