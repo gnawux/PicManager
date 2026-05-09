@@ -274,14 +274,15 @@ async fn import_one(
     let phash = compute_phash(&final_path).ok();
 
     let result = sqlx::query(
-        "INSERT OR IGNORE INTO photos (path, sha256, phash, format, taken_at, gps_lat, gps_lon, camera, import_status, exif_orientation)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?)",
+        "INSERT OR IGNORE INTO photos (path, sha256, phash, format, taken_at, timezone_offset, gps_lat, gps_lon, camera, import_status, exif_orientation)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?)",
     )
     .bind(final_path.to_string_lossy().as_ref())
     .bind(&sha256)
     .bind(&phash)
     .bind(meta.format.as_str())
     .bind(effective_taken_at.map(|t| t.to_string()))
+    .bind(meta.timezone_offset)
     .bind(meta.gps_lat)
     .bind(meta.gps_lon)
     .bind(meta.camera)

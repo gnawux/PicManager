@@ -17,8 +17,17 @@ pub fn extract_from_file(path: &Path) -> Result<PhotoMeta> {
     let camera = exif.as_ref().and_then(parse_camera);
     let (gps_lat, gps_lon) = exif.as_ref().map(parse_gps).unwrap_or((None, None));
     let exif_orientation = exif.as_ref().map(parse_orientation).unwrap_or(1);
+    let timezone_offset = exif.as_ref().and_then(parse_timezone_offset);
 
-    Ok(PhotoMeta { format: fmt, taken_at, camera, gps_lat, gps_lon, exif_orientation })
+    Ok(PhotoMeta { format: fmt, taken_at, camera, gps_lat, gps_lon, exif_orientation, timezone_offset })
+}
+
+/// Re-read only the timezone offset from a file already in the library.
+/// Returns None if the file has no EXIF timezone info or can't be read.
+pub fn read_timezone_offset(path: &Path) -> Option<i32> {
+    let file = File::open(path).ok()?;
+    let exif = Reader::new().read_from_container(&mut BufReader::new(file)).ok()?;
+    parse_timezone_offset(&exif)
 }
 
 /// Read EXIF Orientation tag; returns 1 (normal) if absent or invalid.
@@ -94,6 +103,48 @@ fn parse_gps_time(field: &exif::Field) -> Option<NaiveTime> {
         return NaiveTime::from_hms_opt(h, m, s);
     }
     None
+}
+
+/// Try OffsetTimeOriginal → OffsetTimeDigitized → OffsetTime EXIF tags.
+/// Fallback: infer from (DateTimeOriginal − GPS UTC time), rounded to 30 min.
+fn parse_timezone_offset(exif: &exif::Exif) -> Option<i32> {
+    parse_offset_tag(exif, Tag::OffsetTimeOriginal)
+        .or_else(|| parse_offset_tag(exif, Tag::OffsetTimeDigitized))
+        .or_else(|| parse_offset_tag(exif, Tag::OffsetTime))
+        .or_else(|| infer_timezone_from_gps(exif))
+}
+
+fn parse_offset_tag(exif: &exif::Exif, tag: Tag) -> Option<i32> {
+    let field = exif.get_field(tag, In::PRIMARY)?;
+    let s = field.display_value().to_string();
+    parse_offset_string(s.trim_matches('"').trim())
+}
+
+/// Parse "+08:00" or "-05:30" into minutes.
+fn parse_offset_string(s: &str) -> Option<i32> {
+    let s = s.trim();
+    if s.len() < 5 { return None; }
+    let sign: i32 = match s.chars().next()? {
+        '+' => 1,
+        '-' => -1,
+        _ => return None,
+    };
+    let mut parts = s[1..].splitn(2, ':');
+    let hours: i32 = parts.next()?.parse().ok()?;
+    let mins: i32 = parts.next()?.parse().ok()?;
+    if hours > 14 || mins > 59 { return None; }
+    Some(sign * (hours * 60 + mins))
+}
+
+/// Infer UTC offset from DateTimeOriginal (local) minus GPS timestamp (UTC).
+/// Rounds to the nearest 30 minutes; rejects values outside [-720, 840].
+fn infer_timezone_from_gps(exif: &exif::Exif) -> Option<i32> {
+    let local_dt = parse_datetime_tag(exif, Tag::DateTimeOriginal)?;
+    let gps_utc = parse_gps_datetime(exif)?;
+    let diff_min = (local_dt - gps_utc).num_minutes() as i32;
+    // Round to nearest 30 min (all valid timezones are multiples of 15/30 min)
+    let rounded = ((diff_min + if diff_min >= 0 { 15 } else { -15 }) / 30) * 30;
+    if (-720..=840).contains(&rounded) { Some(rounded) } else { None }
 }
 
 fn parse_camera(exif: &exif::Exif) -> Option<String> {
@@ -217,6 +268,44 @@ mod tests {
         // with_exif.jpg is a standard-orientation fixture, should return 1
         let meta = extract_from_file(&fixture("with_exif.jpg")).unwrap();
         assert!((1..=8).contains(&meta.exif_orientation), "orientation must be 1-8");
+    }
+
+    // --- timezone offset tests ---
+
+    #[test]
+    fn parse_offset_string_positive() {
+        assert_eq!(parse_offset_string("+08:00"), Some(480));
+        assert_eq!(parse_offset_string("+05:30"), Some(330));
+        assert_eq!(parse_offset_string("+00:00"), Some(0));
+    }
+
+    #[test]
+    fn parse_offset_string_negative() {
+        assert_eq!(parse_offset_string("-05:00"), Some(-300));
+        assert_eq!(parse_offset_string("-05:30"), Some(-330));
+    }
+
+    #[test]
+    fn parse_offset_string_invalid() {
+        assert_eq!(parse_offset_string(""), None);
+        assert_eq!(parse_offset_string("08:00"), None); // missing sign
+        assert_eq!(parse_offset_string("+99:00"), None); // out of range
+    }
+
+    #[test]
+    fn heic_sample_timezone_is_plus8() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/samples/IMG_9886.HEIC");
+        let meta = extract_from_file(&path).unwrap();
+        assert_eq!(meta.timezone_offset, Some(480), "iPhone Beijing photo should be UTC+8");
+    }
+
+    #[test]
+    fn jpg_sample_timezone_is_plus8() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/samples/IMG_9844.JPG");
+        let meta = extract_from_file(&path).unwrap();
+        assert_eq!(meta.timezone_offset, Some(480), "Nikon Z8 Beijing photo should be UTC+8");
     }
 
     // --- fallback field tests ---

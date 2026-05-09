@@ -39,6 +39,8 @@ pub struct PhotoMeta {
     pub gps_lon: Option<f64>,
     /// EXIF Orientation tag value (1–8); 1 = normal. Absent → 1.
     pub exif_orientation: u8,
+    /// UTC offset in minutes (e.g. 480 = UTC+8). None = unknown.
+    pub timezone_offset: Option<i32>,
 }
 
 #[cfg(test)]

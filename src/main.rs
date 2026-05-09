@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, config::Config, face, storage, importer, dedup};
+use picmanager::{activities, album, config::Config, face, metadata, storage, importer, dedup};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -62,6 +62,21 @@ enum Command {
     Activities {
         #[command(subcommand)]
         action: ActivitiesAction,
+    },
+    /// 照片元数据管理
+    Photos {
+        #[command(subcommand)]
+        action: PhotosAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum PhotosAction {
+    /// 回填时区偏移：从 EXIF 读取 OffsetTimeOriginal（或 GPS 推断），更新 timezone_offset 为 NULL 的照片
+    BackfillTimezones {
+        /// 预览模式：只统计数量，不实际修改数据库
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -201,6 +216,11 @@ async fn main() -> anyhow::Result<()> {
             }
             ActivitiesAction::SyncUsb { device } => {
                 sync_usb_activities(&pool, &device, &config.activities_dir()).await?;
+            }
+        },
+        Command::Photos { action } => match action {
+            PhotosAction::BackfillTimezones { dry_run } => {
+                backfill_timezones(&pool, dry_run).await?;
             }
         },
     }
@@ -612,5 +632,28 @@ async fn bundle_models(project_dir: &std::path::Path) -> anyhow::Result<()> {
     } else {
         println!("\n未复制任何文件。请先运行 `picmanager models fetch` 下载模型。");
     }
+    Ok(())
+}
+
+async fn backfill_timezones(pool: &sqlx::SqlitePool, dry_run: bool) -> anyhow::Result<()> {
+    let total: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM photos WHERE timezone_offset IS NULL AND import_status = 'imported'",
+    )
+    .fetch_one(pool)
+    .await?;
+    println!(
+        "{}共 {} 张照片时区未知，{}读取 EXIF…",
+        if dry_run { "[dry-run] " } else { "" },
+        total.0,
+        if dry_run { "预览" } else { "开始" },
+    );
+
+    let (updated, no_tz, missing) = metadata::backfill_timezones(pool, dry_run).await?;
+
+    let label = if dry_run { "[dry-run] " } else { "" };
+    println!(
+        "{label}完成：{}时区 {updated}，无 EXIF 时区信息 {no_tz}，文件不存在 {missing}",
+        if dry_run { "可更新" } else { "已更新" },
+    );
     Ok(())
 }

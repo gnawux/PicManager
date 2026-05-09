@@ -2787,3 +2787,63 @@ async fn activity_photos_excludes_gps_too_far() {
         "photo 1000km away from track should not be associated"
     );
 }
+
+// ── timezone_offset import tests ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn import_stores_timezone_offset_from_exif() {
+    let (_, pool, tmp) = test_app_with_pool().await;
+    let lib = tmp.path().join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+    // IMG_9886.HEIC has OffsetTimeOriginal = +08:00 (UTC+8 = 480 minutes)
+    let sample = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/samples/IMG_9886.HEIC");
+    let staging = tmp.path().join("staging");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::copy(&sample, staging.join("IMG_9886.HEIC")).unwrap();
+
+    picmanager::importer::import_dir(&pool, &staging, &lib, true).await.unwrap();
+
+    let (tz,): (Option<i64>,) = sqlx::query_as("SELECT timezone_offset FROM photos LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(tz, Some(480), "iPhone HEIC with +08:00 should store timezone_offset=480");
+}
+
+#[tokio::test]
+async fn backfill_timezones_updates_null_rows() {
+    let (_, pool, tmp) = test_app_with_pool().await;
+    let lib = tmp.path().join("lib");
+    std::fs::create_dir_all(&lib).unwrap();
+
+    // Insert a photo row with NULL timezone_offset pointing at the HEIC sample
+    let sample = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/samples/IMG_9886.HEIC");
+    sqlx::query(
+        "INSERT INTO photos (path, sha256, format, import_status, timezone_offset)
+         VALUES (?, 'sha_tz_test', 'heic', 'imported', NULL)",
+    )
+    .bind(sample.to_string_lossy().as_ref())
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    // Verify it starts as NULL
+    let (before,): (Option<i64>,) =
+        sqlx::query_as("SELECT timezone_offset FROM photos WHERE sha256='sha_tz_test'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(before.is_none(), "should start as NULL");
+
+    // Run backfill
+    picmanager::metadata::backfill_timezones(&pool, false).await.unwrap();
+
+    let (after,): (Option<i64>,) =
+        sqlx::query_as("SELECT timezone_offset FROM photos WHERE sha256='sha_tz_test'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(after, Some(480), "after backfill should be 480 (UTC+8)");
+}
