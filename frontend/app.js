@@ -2986,7 +2986,10 @@ function renderActivityMeta(act) {
 
   meta.innerHTML = rows.map(([label, value]) =>
     `<div class="act-meta-row"><span class="act-meta-label">${label}</span><span class="act-meta-value">${value}</span></div>`
-  ).join('');
+  ).join('') +
+  `<div style="margin-top:10px">
+     <a href="#" style="font-size:12px;color:#3b82f6" onclick="openTrimModal(${act.id});return false">✂ 剪辑运动</a>
+   </div>`;
 }
 
 function renderActivityMap(trackData) {
@@ -3106,6 +3109,318 @@ function formatPace(act) {
   }
   const kmh = (act.distance_meters / act.duration_seconds * 3.6).toFixed(1);
   return `${kmh} km/h`;
+}
+
+// ── Activity Trim Modal ───────────────────────────────────────────────────────
+
+const trimState = {
+  activityId: null,
+  axis: 'time',       // 'time' | 'distance'
+  points: [],
+  cumTime: [],        // seconds from start, one per point
+  cumDist: [],        // metres from start, one per point
+  paceData: [],       // min/km per point (null if not computable)
+  elevData: [],       // elevation per point (null if absent)
+  startIdx: 0,
+  endIdx: 0,
+  trimMap: null,
+  polyFull: null,
+  polySelected: null,
+  dragging: null,
+  rafId: null,
+};
+
+async function openTrimModal(activityId) {
+  trimState.activityId = activityId;
+  trimState.axis = 'time';
+  trimState.dragging = null;
+
+  const modal = document.getElementById('trim-modal');
+  modal.classList.remove('hidden');
+
+  const [actData, trackData] = await Promise.all([
+    fetchJSON(`/api/activities/${activityId}`),
+    fetchJSON(`/api/activities/${activityId}/track`),
+  ]);
+
+  document.getElementById('trim-modal-title').textContent =
+    actData?.title || `活动 #${activityId}`;
+
+  const pts = trackData?.points || [];
+  trimState.points = pts;
+  trimState.startIdx = 0;
+  trimState.endIdx = pts.length > 0 ? pts.length - 1 : 0;
+
+  // Cumulative time & distance
+  const cumTime = [0], cumDist = [0];
+  for (let i = 1; i < pts.length; i++) {
+    const dt = (new Date(pts[i].ts) - new Date(pts[i - 1].ts)) / 1000;
+    const dd = trimHaversine(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+    cumTime.push(cumTime[i - 1] + Math.max(0, dt));
+    cumDist.push(cumDist[i - 1] + dd);
+  }
+  trimState.cumTime = cumTime;
+  trimState.cumDist = cumDist;
+
+  // Pace & elevation per point
+  trimState.paceData = pts.map((_, i) => {
+    if (i === 0) return null;
+    const dDist = cumDist[i] - cumDist[i - 1];
+    const dTime = cumTime[i] - cumTime[i - 1];
+    if (dDist < 1 || dTime <= 0) return null;
+    return dTime / 60 / (dDist / 1000); // min/km
+  });
+  trimState.elevData = pts.map(p => p.elevation ?? null);
+
+  // Axis tab wiring (idempotent)
+  document.querySelectorAll('.trim-tab').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.trim-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      trimState.axis = btn.dataset.axis;
+      renderTrimChart();
+      updateTrimHandlePositions();
+      updateTrimStats();
+      renderTrimAxisLabels();
+    };
+  });
+  document.querySelector('.trim-tab[data-axis="time"]').classList.add('active');
+  document.querySelector('.trim-tab[data-axis="distance"]').classList.remove('active');
+
+  initTrimMap(pts);
+  initTrimHandles();
+  renderTrimChart();
+  updateTrimHandlePositions();
+  updateTrimStats();
+  renderTrimAxisLabels();
+}
+
+function closeTrimModal() {
+  document.getElementById('trim-modal').classList.add('hidden');
+  if (trimState.trimMap) { trimState.trimMap.remove(); trimState.trimMap = null; }
+  trimState.points = [];
+}
+
+function initTrimMap(pts) {
+  if (trimState.trimMap) { trimState.trimMap.remove(); trimState.trimMap = null; }
+  if (pts.length === 0) return;
+
+  const map = L.map('trim-map');
+  trimState.trimMap = map;
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap', maxZoom: 19,
+  }).addTo(map);
+
+  const all = pts.map(p => [p.lat, p.lon]);
+  trimState.polyFull = L.polyline(all, { color: '#ccc', weight: 3 }).addTo(map);
+  trimState.polySelected = L.polyline(all, { color: '#4a9eff', weight: 3 }).addTo(map);
+  map.fitBounds(trimState.polyFull.getBounds(), { padding: [20, 20] });
+}
+
+function updateTrimMap() {
+  if (!trimState.trimMap || trimState.points.length === 0) return;
+  const { points, startIdx, endIdx } = trimState;
+  const sel = points.slice(startIdx, endIdx + 1).map(p => [p.lat, p.lon]);
+  trimState.polySelected?.setLatLngs(sel);
+}
+
+function renderTrimChart() {
+  const canvas = document.getElementById('trim-chart');
+  const wrapper = document.getElementById('trim-chart-wrapper');
+  if (!canvas || trimState.points.length === 0) return;
+
+  const W = wrapper.clientWidth, H = wrapper.clientHeight;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, W, H);
+
+  // Use elevation if available, else pace
+  const hasElevation = trimState.elevData.some(v => v !== null);
+  const rawVals = hasElevation ? trimState.elevData : trimState.paceData;
+  document.getElementById('trim-chart-label').textContent = hasElevation ? '海拔 (m)' : '配速 (min/km)';
+
+  const axisVals = trimState.axis === 'time' ? trimState.cumTime : trimState.cumDist;
+  const total = axisVals[axisVals.length - 1] || 1;
+  const N = Math.min(200, trimState.points.length);
+  const buckets = new Array(N).fill(null).map(() => ({ sum: 0, cnt: 0 }));
+
+  for (let i = 0; i < rawVals.length; i++) {
+    if (rawVals[i] == null) continue;
+    const b = Math.min(N - 1, Math.floor(axisVals[i] / total * N));
+    buckets[b].sum += rawVals[i];
+    buckets[b].cnt++;
+  }
+
+  const vals = buckets.map(b => b.cnt > 0 ? b.sum / b.cnt : null);
+  const maxVal = Math.max(...vals.filter(v => v !== null), 1);
+  const minVal = hasElevation ? Math.min(...vals.filter(v => v !== null), 0) : 0;
+  const range = maxVal - minVal || 1;
+
+  // Draw bars
+  const bw = W / N;
+  for (let i = 0; i < N; i++) {
+    if (vals[i] == null) continue;
+    const h = ((vals[i] - minVal) / range) * (H - 4);
+    ctx.fillStyle = '#93c5fd';
+    ctx.fillRect(i * bw, H - h, bw - 0.5, h);
+  }
+}
+
+function initTrimHandles() {
+  const wrapper = document.getElementById('trim-chart-wrapper');
+  const lh = document.getElementById('trim-handle-left');
+  const rh = document.getElementById('trim-handle-right');
+
+  const startDrag = (side) => (e) => {
+    trimState.dragging = side;
+    e.preventDefault();
+  };
+  lh.addEventListener('mousedown', startDrag('left'));
+  rh.addEventListener('mousedown', startDrag('right'));
+  lh.addEventListener('touchstart', startDrag('left'), { passive: false });
+  rh.addEventListener('touchstart', startDrag('right'), { passive: false });
+
+  const onMove = (e) => {
+    if (!trimState.dragging || trimState.points.length === 0) return;
+    e.preventDefault();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const rect = wrapper.getBoundingClientRect();
+    const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+
+    const axisVals = trimState.axis === 'time' ? trimState.cumTime : trimState.cumDist;
+    const total = axisVals[axisVals.length - 1] || 1;
+    const target = frac * total;
+    let idx = axisVals.findIndex(v => v >= target);
+    if (idx < 0) idx = trimState.points.length - 1;
+
+    if (trimState.dragging === 'left') {
+      trimState.startIdx = Math.min(idx, trimState.endIdx - 1);
+    } else {
+      trimState.endIdx = Math.max(idx, trimState.startIdx + 1);
+    }
+
+    if (trimState.rafId) cancelAnimationFrame(trimState.rafId);
+    trimState.rafId = requestAnimationFrame(() => {
+      updateTrimHandlePositions();
+      updateTrimStats();
+      updateTrimMap();
+    });
+  };
+
+  const onEnd = () => { trimState.dragging = null; };
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onEnd);
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onEnd);
+}
+
+function updateTrimHandlePositions() {
+  const wrapper = document.getElementById('trim-chart-wrapper');
+  if (!wrapper || trimState.points.length === 0) return;
+  const W = wrapper.clientWidth;
+  const axisVals = trimState.axis === 'time' ? trimState.cumTime : trimState.cumDist;
+  const total = axisVals[axisVals.length - 1] || 1;
+
+  const startFrac = axisVals[trimState.startIdx] / total;
+  const endFrac   = axisVals[trimState.endIdx]   / total;
+
+  const lh = document.getElementById('trim-handle-left');
+  const rh = document.getElementById('trim-handle-right');
+  const ol = document.getElementById('trim-overlay-left');
+  const or_ = document.getElementById('trim-overlay-right');
+
+  lh.style.left  = `${startFrac * 100}%`;
+  rh.style.left  = `${endFrac   * 100}%`;
+  ol.style.width = `${startFrac * 100}%`;
+  or_.style.width = `${(1 - endFrac) * 100}%`;
+}
+
+function updateTrimStats() {
+  const { cumTime, cumDist, startIdx, endIdx, points } = trimState;
+  if (points.length === 0) return;
+
+  const totalSec  = cumTime[points.length - 1] || 0;
+  const cutStart  = cumTime[startIdx] || 0;
+  const cutEnd    = totalSec - (cumTime[endIdx] || 0);
+
+  document.getElementById('trim-stat-total').textContent  = fmtDurHMS(totalSec);
+  document.getElementById('trim-stat-start').textContent  = fmtDurHMS(cutStart);
+  document.getElementById('trim-stat-end').textContent    = fmtDurHMS(cutEnd);
+
+  const selSec  = (cumTime[endIdx] || 0) - (cumTime[startIdx] || 0);
+  const selDist = (cumDist[endIdx] || 0) - (cumDist[startIdx] || 0);
+  document.getElementById('trim-selection-info').textContent =
+    `选中：${fmtDurHMS(selSec)}  ${(selDist / 1000).toFixed(2)} km`;
+}
+
+function renderTrimAxisLabels() {
+  const { cumTime, cumDist, axis, points } = trimState;
+  if (points.length === 0) return;
+  const axisEl = document.getElementById('trim-time-axis');
+  const vals = axis === 'time' ? cumTime : cumDist;
+  const total = vals[vals.length - 1] || 1;
+  const ticks = 5;
+  axisEl.innerHTML = Array.from({ length: ticks + 1 }, (_, i) => {
+    const v = total * i / ticks;
+    return `<span>${axis === 'time' ? fmtDurHMS(v) : (v / 1000).toFixed(1) + 'km'}</span>`;
+  }).join('');
+}
+
+function fmtDurHMS(secs) {
+  const s = Math.round(secs);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(ss).padStart(2,'0')}`;
+}
+
+function trimHaversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const [la1, la2] = [lat1 * Math.PI / 180, lat2 * Math.PI / 180];
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const dLat = la2 - la1;
+  const a = Math.sin(dLat/2)**2 + Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+async function saveTrim() {
+  const { activityId, points, startIdx, endIdx } = trimState;
+  if (!activityId || points.length === 0) return;
+
+  const startTime = points[startIdx].ts;
+  const endTime   = points[endIdx].ts;
+  const cutStart  = fmtDurHMS(trimState.cumTime[startIdx] || 0);
+  const cutEnd    = fmtDurHMS((trimState.cumTime[points.length-1]||0) - (trimState.cumTime[endIdx]||0));
+
+  const confirmed = confirm(
+    `确认剪辑运动？此操作不可撤销。\n\n` +
+    `• 删除开头 ${cutStart}\n` +
+    `• 删除结尾 ${cutEnd}\n\n` +
+    `轨迹点和统计数据将被永久修改。`
+  );
+  if (!confirmed) return;
+
+  const btn = document.getElementById('trim-save-btn');
+  btn.disabled = true;
+  btn.textContent = '保存中…';
+
+  const res = await fetch(`/api/activities/${activityId}/trim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ start_time: startTime, end_time: endTime }),
+  });
+
+  btn.disabled = false;
+  btn.textContent = '保存剪辑';
+
+  if (!res.ok) {
+    alert('保存失败，请重试');
+    return;
+  }
+
+  closeTrimModal();
+  // Reload the activity detail to reflect new data
+  showActivityDetail(activityId);
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

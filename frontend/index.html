@@ -273,6 +273,61 @@
     </main>
   </div>
 
+  <!-- Activity trim modal -->
+  <div id="trim-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div id="trim-container">
+      <div id="trim-header">
+        <button class="btn-ghost" onclick="closeTrimModal()">← 返回</button>
+        <span id="trim-modal-title">剪辑运动</span>
+        <div id="trim-axis-tabs">
+          <button class="trim-tab active" data-axis="time">时间</button>
+          <button class="trim-tab" data-axis="distance">距离</button>
+        </div>
+      </div>
+      <div id="trim-stats-row">
+        <div class="trim-stat">
+          <div class="trim-stat-val" id="trim-stat-total">--</div>
+          <div class="trim-stat-label">总时间</div>
+        </div>
+        <div class="trim-stat">
+          <div class="trim-stat-val" id="trim-stat-start">00:00:00</div>
+          <div class="trim-stat-label">修正开始 ⓘ</div>
+        </div>
+        <div class="trim-stat">
+          <div class="trim-stat-val" id="trim-stat-end">00:00:00</div>
+          <div class="trim-stat-label">修正结束 ⓘ</div>
+        </div>
+      </div>
+      <div id="trim-map-container">
+        <div id="trim-map"></div>
+      </div>
+      <div id="trim-chart-section">
+        <div id="trim-chart-label">配速</div>
+        <div id="trim-chart-wrapper">
+          <canvas id="trim-chart"></canvas>
+          <div id="trim-overlay-left"></div>
+          <div id="trim-overlay-right"></div>
+          <div id="trim-handle-left" class="trim-handle" title="拖动调整开始点">
+            <div class="trim-handle-bar"></div>
+            <div class="trim-handle-knob trim-handle-knob-left">◀</div>
+          </div>
+          <div id="trim-handle-right" class="trim-handle" title="拖动调整结束点">
+            <div class="trim-handle-bar"></div>
+            <div class="trim-handle-knob trim-handle-knob-right">▶</div>
+          </div>
+        </div>
+        <div id="trim-time-axis"></div>
+      </div>
+      <div id="trim-footer">
+        <div id="trim-selection-info"></div>
+        <div id="trim-footer-btns">
+          <button class="btn-ghost" onclick="closeTrimModal()">取消</button>
+          <button id="trim-save-btn" onclick="saveTrim()">保存剪辑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Batch time edit dialog -->
   <div id="batch-time-modal" class="modal hidden">
     <div class="modal-inner" style="max-width:400px">

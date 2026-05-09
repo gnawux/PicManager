@@ -530,3 +530,97 @@ dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 /* Camera marker on activity map */
 .camera-marker { font-size: 16px; cursor: pointer; }
 
+
+/* ── Activity Trim Modal ─────────────────────────────────────────────────── */
+#trim-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1100;
+}
+#trim-modal.hidden { display: none; }
+
+#trim-container {
+  background: #fff; border-radius: 10px;
+  width: min(900px, 96vw); height: min(720px, 94vh);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+
+#trim-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid #eee; flex-shrink: 0;
+}
+#trim-modal-title { font-weight: 600; font-size: 15px; flex: 1; }
+#trim-axis-tabs { display: flex; gap: 4px; }
+.trim-tab {
+  padding: 4px 14px; border: 1px solid #ddd; border-radius: 20px;
+  background: #f5f5f5; font-size: 13px; cursor: pointer;
+}
+.trim-tab.active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+
+#trim-stats-row {
+  display: flex; gap: 0; flex-shrink: 0;
+  border-bottom: 1px solid #eee;
+}
+.trim-stat {
+  flex: 1; padding: 10px 16px; text-align: center;
+  border-right: 1px solid #eee;
+}
+.trim-stat:last-child { border-right: none; }
+.trim-stat-val { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; color: #111; }
+.trim-stat-label { font-size: 11px; color: #888; margin-top: 2px; }
+
+#trim-map-container { flex: 1; min-height: 0; position: relative; }
+#trim-map { width: 100%; height: 100%; }
+
+#trim-chart-section {
+  flex-shrink: 0; height: 110px; padding: 0 12px 6px;
+  display: flex; flex-direction: column;
+}
+#trim-chart-label { font-size: 11px; color: #888; padding: 4px 0 2px; }
+
+#trim-chart-wrapper {
+  position: relative; flex: 1; min-height: 0;
+  user-select: none; cursor: crosshair;
+}
+#trim-chart {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+}
+#trim-overlay-left, #trim-overlay-right {
+  position: absolute; top: 0; height: 100%;
+  background: rgba(180,180,180,.45); pointer-events: none;
+}
+#trim-overlay-left  { left: 0; }
+#trim-overlay-right { right: 0; }
+
+.trim-handle {
+  position: absolute; top: 0; height: 100%; width: 22px;
+  cursor: ew-resize; display: flex; align-items: stretch;
+  transform: translateX(-50%);
+  z-index: 10;
+}
+.trim-handle-bar {
+  width: 2px; background: #ef4444; margin: auto;
+}
+.trim-handle-knob {
+  position: absolute; bottom: 0;
+  background: #ef4444; color: #fff;
+  font-size: 10px; padding: 2px 4px; border-radius: 3px;
+  white-space: nowrap;
+}
+.trim-handle-knob-left  { left: 0; }
+.trim-handle-knob-right { right: 0; }
+
+#trim-time-axis {
+  display: flex; justify-content: space-between;
+  font-size: 10px; color: #aaa; padding: 0 2px;
+}
+
+#trim-footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px; border-top: 1px solid #eee; flex-shrink: 0; gap: 12px;
+}
+#trim-selection-info { font-size: 12px; color: #555; }
+#trim-footer-btns { display: flex; gap: 8px; }
+#trim-save-btn { background: #ef4444; color: #fff; border: none; }
+#trim-save-btn:hover { background: #dc2626; }
