@@ -81,7 +81,7 @@ src/
       people.rs        GET /api/people（含 status/name_exact 过滤）, PATCH /api/people/{id}, POST /api/people/batch-update, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
       geo.rs           GET /api/geo/hierarchy
       animals.rs       GET /api/animals/species, GET /api/animals/{species}/photos, GET /api/photos/{id}/animals
-      activities.rs    GET /api/activities, GET /api/activities/{id}, GET /api/activities/{id}/track, GET /api/activities/{id}/photos
+      activities.rs    GET /api/activities, GET /api/activities/{id}, GET /api/activities/{id}/track, GET /api/activities/{id}/photos, POST /api/activities/{id}/trim
 frontend/              HTML + CSS + JS（编译进二进制，不依赖运行时工作目录；架构详见 docs/FRONTEND.md）
 migrations/
   0001_initial.sql     photos, albums, photo_albums, dedup_groups, dedup_members, import_sessions
@@ -284,8 +284,11 @@ sips --out /tmp/out.jpg file.heic && exiftool -n -Orientation /tmp/out.jpg  # si
 | 39c | feat(activities): Web API 4 端点（list/get/track/photos）；RDP 轨迹压缩（>7200点）；haversine 照片关联（≤500m） |
 | 39d-e | feat(activities): 前端"运动"标签页；活动列表（类型/日期/距离/时长）；详情页 Leaflet 地图 + 轨迹 + 📷标记 |
 | 39f | docs: DESIGN.md 新增 4 个 API 端点 + activities 模块；ARCHITECTURE.md/CLAUDE.md 同步更新 |
+| 39g | fix(activities): FIT title 不再使用 Activity.event 字段（始终为 "activity"），改为 NULL 触发自动生成；update_titles 同时覆盖 title='activity' 的存量记录 |
+| 39h | feat(activities): 自动标题生成（{运动类型}-{MM-DD}-{距离}@{城市}）；geocache city→county→state→country 回退；CLI `picmanager activities update-titles [--dry-run]` |
+| 39i | feat(activities): trim 剪辑功能；POST /api/activities/:id/trim；前端全屏剪辑弹窗（Leaflet 地图实时预览 + canvas 把手拖拽 + 不可撤销确认） |
 
-当前测试数：**343 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**357 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
@@ -607,6 +610,10 @@ let utc = wpt.time.as_ref().and_then(|t| {
         .map(|dt| dt.with_timezone(&Utc))
 });
 ```
+
+**FIT `Activity.event` 不是用户标题**
+
+FIT 文件的 `Activity` message 中 `event` 字段值始终为字符串 `"activity"`（FIT 协议枚举值），不是用户可编辑的活动名称。Garmin FIT 文件没有内嵌的用户标题字段。因此 `parse_fit` 返回 `title = None`，由 `generate_title` 按 `{类型}-{MM-DD}-{距离}@{城市}` 自动生成标题。存量已用 `"activity"` 作为标题的记录，可通过 `picmanager activities update-titles` 重新生成。
 
 **FIT `Timestamp` 内部是 `DateTime<Local>`，需转 UTC**
 

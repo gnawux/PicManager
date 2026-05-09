@@ -85,7 +85,7 @@ picmanager/
 │   │   ├── mod.rs           # detect_and_save()，导入时调用，模型不存在时静默跳过
 │   │   └── detector.rs      # detect()，YOLOv8-nano，OnceLock<Mutex<Session>>
 │   ├── activities/
-│   │   ├── mod.rs           # 公开接口；import_dir_activities()、import_one()、ImportSummary
+│   │   ├── mod.rs           # 公开接口；import_dir_activities()、import_one()、update_titles()、ImportSummary
 │   │   ├── parser.rs        # parse_fit()（fitparser 0.10）、parse_gpx()（gpx 0.10）；ActivityData、TrackPoint
 │   │   ├── importer.rs      # scan_dir()、SHA-256 去重、批量插入轨迹点（chunk 500）
 │   │   └── rdp.rs           # simplify()；Ramer-Douglas-Peucker 轨迹压缩（epsilon=1e-5°≈1m）
@@ -105,7 +105,7 @@ picmanager/
 │           ├── people.rs    # 人物相关所有端点；compute_refined_centroid() 质心算法
 │           ├── geo.rs       # GET /api/geo/hierarchy、GET /api/geo/photos、POST /api/geo/regeocode、GET /api/geo/regeocode/status
 │           ├── animals.rs   # GET /api/animals/species、GET /api/animals/:species/photos、GET /api/photos/:id/animals
-│           └── activities.rs # GET /api/activities、GET /api/activities/:id、GET /api/activities/:id/track、GET /api/activities/:id/photos
+│           └── activities.rs # GET /api/activities、GET /api/activities/:id、GET /api/activities/:id/track、GET /api/activities/:id/photos、POST /api/activities/:id/trim
 ├── frontend/                # 静态 HTML + CSS + JS（编译时嵌入二进制）
 ├── migrations/              # SQLx 数据库迁移文件（0001–0017）
 ├── tests/                   # 集成测试与测试 fixture
