@@ -146,7 +146,135 @@ pub async fn import_one(
         q.execute(pool).await?;
     }
 
+    // Generate title if FIT/GPX didn't provide one
+    if data.title.is_none() {
+        let first_gps = data.track_points.first().map(|p| (p.lat, p.lon));
+        if let Some(title) = generate_title(
+            pool, &data.activity_type, start_str.as_deref(), data.distance_meters, first_gps,
+        ).await {
+            sqlx::query("UPDATE activities SET title = ? WHERE id = ?")
+                .bind(&title)
+                .bind(activity_id)
+                .execute(pool)
+                .await
+                .ok();
+        }
+    }
+
     Ok(ImportOutcome::Imported(activity_id))
+}
+
+fn activity_type_zh(ty: &str) -> &str {
+    match ty {
+        "running"       => "跑步",
+        "hiking"        => "徒步",
+        "cycling"       => "骑行",
+        "walking"       => "步行",
+        "trail_running" => "越野跑",
+        "swimming"      => "游泳",
+        _               => "运动",
+    }
+}
+
+fn format_distance(meters: f64) -> String {
+    if meters < 1000.0 {
+        format!("{:.0}m", meters)
+    } else {
+        format!("{:.1}km", meters / 1000.0)
+    }
+}
+
+async fn geocache_city(pool: &SqlitePool, lat: f64, lon: f64) -> Option<String> {
+    let row: (Option<String>, Option<String>, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "SELECT city, county, state, country FROM geocache
+             WHERE CAST(lat_key AS REAL) BETWEEN ? AND ?
+               AND CAST(lon_key AS REAL) BETWEEN ? AND ?
+             ORDER BY
+               (CAST(lat_key AS REAL) - ?) * (CAST(lat_key AS REAL) - ?) +
+               (CAST(lon_key AS REAL) - ?) * (CAST(lon_key AS REAL) - ?) ASC
+             LIMIT 1",
+        )
+        .bind(lat - 0.01).bind(lat + 0.01)
+        .bind(lon - 0.01).bind(lon + 0.01)
+        .bind(lat).bind(lat).bind(lon).bind(lon)
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten()?;
+
+    let (city, county, state, country) = row;
+    city.filter(|s| !s.is_empty())
+        .or_else(|| county.filter(|s| !s.is_empty()))
+        .or_else(|| state.filter(|s| !s.is_empty()))
+        .or_else(|| country.filter(|s| !s.is_empty()))
+}
+
+async fn generate_title(
+    pool: &SqlitePool,
+    activity_type: &str,
+    start_time: Option<&str>,
+    distance_meters: Option<f64>,
+    first_gps: Option<(f64, f64)>,
+) -> Option<String> {
+    let type_label = activity_type_zh(activity_type);
+    let date = start_time
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.format("%m-%d").to_string())?;
+
+    let dist = distance_meters.map(format_distance);
+    let city = if let Some((lat, lon)) = first_gps {
+        geocache_city(pool, lat, lon).await
+    } else {
+        None
+    };
+
+    let title = match (dist.as_deref(), city.as_deref()) {
+        (Some(d), Some(c)) => format!("{type_label}-{date}-{d}@{c}"),
+        (Some(d), None)    => format!("{type_label}-{date}-{d}"),
+        (None, Some(c))    => format!("{type_label}-{date}@{c}"),
+        (None, None)       => format!("{type_label}-{date}"),
+    };
+    Some(title)
+}
+
+/// Update titles for activities that have `title IS NULL`.
+/// Returns `(updated, skipped_no_date)`.
+pub async fn update_titles(pool: &SqlitePool, dry_run: bool) -> (usize, usize) {
+    let rows: Vec<(i64, String, Option<String>, Option<f64>)> = sqlx::query_as(
+        "SELECT id, activity_type, start_time, distance_meters
+         FROM activities WHERE title IS NULL AND import_status = 'imported'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let (mut updated, mut skipped) = (0usize, 0usize);
+    for (id, activity_type, start_time, distance_meters) in rows {
+        let first_gps: Option<(f64, f64)> = sqlx::query_as(
+            "SELECT lat, lon FROM activity_track_points WHERE activity_id = ? ORDER BY ts LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or_default();
+
+        match generate_title(pool, &activity_type, start_time.as_deref(), distance_meters, first_gps).await {
+            Some(title) => {
+                if !dry_run {
+                    sqlx::query("UPDATE activities SET title = ? WHERE id = ?")
+                        .bind(&title)
+                        .bind(id)
+                        .execute(pool)
+                        .await
+                        .ok();
+                }
+                updated += 1;
+            }
+            None => skipped += 1,
+        }
+    }
+    (updated, skipped)
 }
 
 pub async fn import_dir_activities(
@@ -202,6 +330,20 @@ mod tests {
         let content = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">
   <trk><name>{filename}</name><type>running</type><trkseg>
+    <trkpt lat="39.9" lon="116.4"><ele>50</ele><time>{t1}</time></trkpt>
+    <trkpt lat="39.91" lon="116.41"><ele>55</ele><time>{t2}</time></trkpt>
+  </trkseg></trk>
+</gpx>"#);
+        std::fs::write(&path, content.as_bytes()).unwrap();
+        path
+    }
+
+    /// GPX without <name>, so auto-title generation kicks in.
+    fn make_gpx_untitled(filename: &str, dir: &TempDir, t1: &str, t2: &str) -> PathBuf {
+        let path = dir.path().join(filename);
+        let content = format!(r#"<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="test" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><type>running</type><trkseg>
     <trkpt lat="39.9" lon="116.4"><ele>50</ele><time>{t1}</time></trkpt>
     <trkpt lat="39.91" lon="116.41"><ele>55</ele><time>{t2}</time></trkpt>
   </trkseg></trk>
@@ -278,6 +420,100 @@ mod tests {
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM activities")
             .fetch_one(&pool).await.unwrap();
         assert_eq!(count, 0);
+    }
+
+    async fn insert_geocache(pool: &SqlitePool, lat: f64, lon: f64, city: &str, county: &str, state: &str, country: &str) {
+        let lat_key = format!("{:.4}", lat);
+        let lon_key = format!("{:.4}", lon);
+        sqlx::query(
+            "INSERT OR IGNORE INTO geocache (lat_key, lon_key, city, county, state, country) VALUES (?,?,?,?,?,?)"
+        )
+        .bind(lat_key).bind(lon_key).bind(city).bind(county).bind(state).bind(country)
+        .execute(pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn title_generated_on_import_with_geocache() {
+        let pool = test_pool().await;
+        let src_dir = TempDir::new().unwrap();
+        let act_dir = TempDir::new().unwrap();
+
+        // Insert geocache for Beijing (near GPX track point 39.9, 116.4)
+        insert_geocache(&pool, 39.9, 116.4, "北京", "", "北京市", "中国").await;
+
+        let gpx_path = make_gpx_untitled("run.gpx", &src_dir,
+            "2024-06-15T02:00:00Z", "2024-06-15T03:00:00Z");
+        import_one(&pool, &gpx_path, act_dir.path()).await.unwrap();
+
+        let title: Option<String> = sqlx::query_scalar("SELECT title FROM activities")
+            .fetch_one(&pool).await.unwrap();
+        let title = title.expect("title should be generated");
+        assert!(title.starts_with("跑步-06-15-"), "expected 跑步-06-15-…, got {title}");
+        assert!(title.ends_with("@北京"), "expected @北京, got {title}");
+    }
+
+    #[tokio::test]
+    async fn title_generated_no_gps_no_city() {
+        let pool = test_pool().await;
+        let src_dir = TempDir::new().unwrap();
+        let act_dir = TempDir::new().unwrap();
+
+        // GPX with no track points → no GPS → no city
+        let path = src_dir.path().join("no_gps.gpx");
+        std::fs::write(&path, r#"<?xml version="1.0"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><type>hiking</type><trkseg></trkseg></trk>
+</gpx>"#).unwrap();
+        import_one(&pool, &path, act_dir.path()).await.unwrap();
+
+        let title: Option<String> = sqlx::query_scalar("SELECT title FROM activities")
+            .fetch_one(&pool).await.unwrap();
+        // No date either (no track points → no start_time), title may be NULL
+        // At minimum should not panic
+        let _ = title;
+    }
+
+    #[tokio::test]
+    async fn title_city_fallback_uses_county_when_city_empty() {
+        let pool = test_pool().await;
+        let src_dir = TempDir::new().unwrap();
+        let act_dir = TempDir::new().unwrap();
+
+        // city is empty → should fall back to county
+        insert_geocache(&pool, 39.9, 116.4, "", "朝阳区", "北京市", "中国").await;
+
+        let gpx_path = make_gpx_untitled("run2.gpx", &src_dir,
+            "2024-06-15T02:00:00Z", "2024-06-15T03:00:00Z");
+        import_one(&pool, &gpx_path, act_dir.path()).await.unwrap();
+
+        let title: Option<String> = sqlx::query_scalar("SELECT title FROM activities")
+            .fetch_one(&pool).await.unwrap();
+        let title = title.expect("title should be generated");
+        assert!(title.ends_with("@朝阳区"), "should use county as fallback, got {title}");
+    }
+
+    #[tokio::test]
+    async fn update_titles_backfills_existing_activities() {
+        let pool = test_pool().await;
+        let src_dir = TempDir::new().unwrap();
+        let act_dir = TempDir::new().unwrap();
+
+        insert_geocache(&pool, 39.9, 116.4, "北京", "", "北京市", "中国").await;
+        let gpx_path = make_gpx_with_date("run.gpx", &src_dir,
+            "2024-06-20T05:00:00Z", "2024-06-20T06:00:00Z");
+        import_one(&pool, &gpx_path, act_dir.path()).await.unwrap();
+
+        // Clear the generated title to simulate pre-existing NULL
+        sqlx::query("UPDATE activities SET title = NULL").execute(&pool).await.unwrap();
+
+        let (updated, _) = update_titles(&pool, false).await;
+        assert_eq!(updated, 1);
+
+        let title: Option<String> = sqlx::query_scalar("SELECT title FROM activities")
+            .fetch_one(&pool).await.unwrap();
+        let title = title.expect("title should be generated");
+        assert!(title.contains("06-20"), "date should be in title, got {title}");
+        assert!(title.ends_with("@北京"), "city should be in title, got {title}");
     }
 
     #[test]

@@ -96,6 +96,12 @@ enum ActivitiesAction {
         #[arg(long, default_value = "GARMIN")]
         device: String,
     },
+    /// 为 title 为空的运动记录生成自动标题（{类型}-{日期}-{距离}@{城市}）
+    UpdateTitles {
+        /// 预览模式：只统计数量，不实际修改数据库
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -216,6 +222,12 @@ async fn main() -> anyhow::Result<()> {
             }
             ActivitiesAction::SyncUsb { device } => {
                 sync_usb_activities(&pool, &device, &config.activities_dir()).await?;
+            }
+            ActivitiesAction::UpdateTitles { dry_run } => {
+                let (updated, skipped) = activities::update_titles(&pool, dry_run).await;
+                let label = if dry_run { "[dry-run] " } else { "" };
+                println!("{label}完成：{}标题 {updated}，无法生成（缺日期）{skipped}",
+                    if dry_run { "可生成" } else { "已生成" });
             }
         },
         Command::Photos { action } => match action {
