@@ -3038,7 +3038,8 @@ function renderActivityPhotos(photosData, trackData) {
   }
   noPhotos.classList.add('hidden');
 
-  for (const photo of photos) {
+  for (let i = 0; i < photos.length; i++) {
+    const photo = photos[i];
     const card = document.createElement('div');
     card.className = 'photo-card';
     const img = document.createElement('img');
@@ -3046,7 +3047,7 @@ function renderActivityPhotos(photosData, trackData) {
     img.alt = '';
     img.loading = 'lazy';
     card.appendChild(img);
-    card.onclick = () => openPhotoDetail(photo.id);
+    card.onclick = () => openDetail(i, photos);
     grid.appendChild(card);
 
     // Add map marker for photos with GPS
@@ -3054,7 +3055,14 @@ function renderActivityPhotos(photosData, trackData) {
       const icon = L.divIcon({ html: '📷', className: 'camera-marker', iconSize: [20, 20] });
       const marker = L.marker([photo.gps_lat, photo.gps_lon], { icon })
         .addTo(activitiesState.activityMap)
-        .bindPopup(`<img src="/api/photos/${photo.id}/thumb" style="width:120px;border-radius:4px"><br><small>${photo.taken_at || ''}</small>`);
+        .bindPopup(`<img src="/api/photos/${photo.id}/thumb" style="width:120px;border-radius:4px"><br><small>${photo.taken_at || ''}</small>`)
+        .on('popupopen', () => {
+          const popupEl = marker.getPopup().getElement();
+          if (popupEl) {
+            popupEl.querySelector('img').style.cursor = 'pointer';
+            popupEl.querySelector('img').onclick = () => openDetail(i, photos);
+          }
+        });
       activitiesState.photoMarkers.push(marker);
     }
   }
