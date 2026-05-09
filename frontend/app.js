@@ -2860,6 +2860,8 @@ const activitiesState = {
   activityMap: null,
   activityPolyline: null,
   photoMarkers: [],
+  multiSelect: false,
+  selected: new Map(), // id → ActivityItem
 };
 
 const ACTIVITY_ICONS = {
@@ -2900,7 +2902,48 @@ function initActivitiesView() {
     }
   };
 
+  document.getElementById('act-multiselect-btn').onclick = () => {
+    activitiesState.multiSelect = true;
+    activitiesState.selected.clear();
+    document.getElementById('act-multiselect-btn').classList.add('hidden');
+    document.getElementById('act-multiselect-bar').classList.remove('hidden');
+    loadActivitiesList();
+  };
+
+  document.getElementById('act-sel-cancel-btn').onclick = exitMultiSelect;
+
+  document.getElementById('act-merge-btn').onclick = openMergeModal;
+
   loadActivitiesList();
+}
+
+function exitMultiSelect() {
+  activitiesState.multiSelect = false;
+  activitiesState.selected.clear();
+  document.getElementById('act-multiselect-btn').classList.remove('hidden');
+  document.getElementById('act-multiselect-bar').classList.add('hidden');
+  loadActivitiesList();
+}
+
+function updateMultiSelectBar() {
+  const sel = activitiesState.selected;
+  const count = sel.size;
+  document.getElementById('act-sel-count').textContent = `已选 ${count} 个运动`;
+
+  const btn = document.getElementById('act-merge-btn');
+  if (count < 2) {
+    btn.disabled = true;
+    btn.title = '请至少选择 2 个运动';
+    return;
+  }
+  const types = new Set([...sel.values()].map(a => a.activity_type));
+  if (types.size > 1) {
+    btn.disabled = true;
+    btn.title = '当前仅支持合并同类运动';
+  } else {
+    btn.disabled = false;
+    btn.title = '';
+  }
 }
 
 async function loadActivitiesList() {
@@ -2915,10 +2958,13 @@ async function loadActivitiesList() {
   const container = document.getElementById('activities-list');
   container.innerHTML = '';
 
+  const { multiSelect, selected } = activitiesState;
   for (const act of data.activities) {
     const row = document.createElement('div');
-    row.className = 'activity-row';
+    const isSelected = selected.has(act.id);
+    row.className = 'activity-row' + (multiSelect ? ' selectable' : '') + (isSelected ? ' selected' : '');
     row.innerHTML = `
+      ${multiSelect ? `<input type="checkbox" class="act-row-checkbox" ${isSelected ? 'checked' : ''}>` : ''}
       <span class="act-icon">${ACTIVITY_ICONS[act.activity_type] || '🏅'}</span>
       <div class="act-info">
         <div class="act-title">${act.title || activityDefaultTitle(act)}</div>
@@ -2931,7 +2977,20 @@ async function loadActivitiesList() {
         </div>
       </div>
     `;
-    row.onclick = () => showActivityDetail(act.id);
+    if (multiSelect) {
+      row.onclick = (e) => {
+        e.preventDefault();
+        if (selected.has(act.id)) {
+          selected.delete(act.id);
+        } else {
+          selected.set(act.id, act);
+        }
+        updateMultiSelectBar();
+        loadActivitiesList();
+      };
+    } else {
+      row.onclick = () => showActivityDetail(act.id);
+    }
     container.appendChild(row);
   }
 
@@ -3421,6 +3480,118 @@ async function saveTrim() {
   closeTrimModal();
   // Reload the activity detail to reflect new data
   showActivityDetail(activityId);
+}
+
+// ── Activity Merge ────────────────────────────────────────────────────────────
+
+function openMergeModal() {
+  const sel = activitiesState.selected;
+  if (sel.size < 2) return;
+
+  // Sort selected activities by start_time
+  const acts = [...sel.values()].sort((a, b) => {
+    if (!a.start_time) return 1;
+    if (!b.start_time) return -1;
+    return a.start_time < b.start_time ? -1 : 1;
+  });
+
+  const type = acts[0].activity_type;
+  const typeNames = { running:'跑步', hiking:'徒步', cycling:'骑行', walking:'步行', trail_running:'越野跑', swimming:'游泳', other:'运动' };
+  const typeName = typeNames[type] || '运动';
+
+  // Summary stats
+  const totalDuration = acts.reduce((s, a) => s + (a.duration_seconds || 0), 0);
+  const totalDistance = acts.reduce((s, a) => s + (a.distance_meters || 0), 0);
+  const totalElevation = acts.reduce((s, a) => s + (a.elevation_gain_meters || 0), 0);
+  const maxHr = Math.max(...acts.map(a => a.max_heart_rate || 0)) || null;
+
+  // Gap time: span from first start to last end minus total active duration
+  let gapSecs = 0;
+  const firstStart = acts[0].start_time ? new Date(acts[0].start_time) : null;
+  const lastEnd = acts[acts.length - 1].end_time ? new Date(acts[acts.length - 1].end_time) : null;
+  if (firstStart && lastEnd) {
+    const spanSecs = (lastEnd - firstStart) / 1000;
+    gapSecs = Math.max(0, spanSecs - totalDuration);
+  }
+
+  // Auto-generated title (client-side approximation, server will add city)
+  const dateStr = acts[0].start_time
+    ? new Date(acts[0].start_time).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' }).replace('/', '-')
+    : '';
+  const distStr = totalDistance >= 1000
+    ? `${(totalDistance / 1000).toFixed(1)}km`
+    : `${Math.round(totalDistance)}m`;
+  const autoTitle = dateStr ? `${typeName}-${dateStr}-${distStr}` : '';
+
+  // Populate modal
+  document.getElementById('act-merge-subtitle').textContent =
+    `即将合并以下 ${acts.length} 次${typeName}：`;
+
+  const list = document.getElementById('act-merge-list');
+  list.innerHTML = acts.map(a => {
+    const date = a.start_time ? new Date(a.start_time).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
+    const dist = a.distance_meters ? `  ${(a.distance_meters / 1000).toFixed(2)} km` : '';
+    const dur = a.duration_seconds ? `  ${formatDuration(a.duration_seconds)}` : '';
+    return `<li>${a.title || activityDefaultTitle(a)}<span style="color:#888;font-size:12px">&nbsp;${date}${dist}${dur}</span></li>`;
+  }).join('');
+
+  const stats = document.getElementById('act-merge-stats');
+  stats.innerHTML = [
+    totalDuration ? `<span style="color:#555">时长</span><span>${formatDuration(totalDuration)}（含间隔 ${formatDuration(Math.round(gapSecs))}）</span>` : '',
+    totalDistance ? `<span style="color:#555">距离</span><span>${(totalDistance / 1000).toFixed(2)} km</span>` : '',
+    totalElevation ? `<span style="color:#555">爬升</span><span>${Math.round(totalElevation)} m</span>` : '',
+    maxHr ? `<span style="color:#555">最高心率</span><span>${maxHr} bpm</span>` : '',
+  ].filter(Boolean).join('');
+
+  const gapWarn = document.getElementById('act-merge-gap-warn');
+  if (gapSecs > 86400) {
+    gapWarn.textContent = `⚠ 所选运动之间最大间隔超过 24 小时，请确认是否需要合并。`;
+    gapWarn.classList.remove('hidden');
+  } else {
+    gapWarn.classList.add('hidden');
+  }
+
+  document.getElementById('act-merge-title-input').value = autoTitle;
+
+  const modal = document.getElementById('act-merge-modal');
+  modal.classList.remove('hidden');
+
+  document.getElementById('act-merge-cancel-btn').onclick = () => modal.classList.add('hidden');
+  document.getElementById('act-merge-confirm-btn').onclick = () => saveMerge(acts);
+}
+
+async function saveMerge(acts) {
+  const titleInput = document.getElementById('act-merge-title-input').value.trim();
+  const ids = acts.map(a => a.id);
+  const body = { ids, title: titleInput || undefined };
+
+  document.getElementById('act-merge-confirm-btn').disabled = true;
+  document.getElementById('act-merge-confirm-btn').textContent = '合并中…';
+
+  const res = await fetch('/api/activities/merge', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  document.getElementById('act-merge-confirm-btn').disabled = false;
+  document.getElementById('act-merge-confirm-btn').textContent = '确认合并';
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    const msgs = {
+      type_mismatch: '类型不同，无法合并',
+      time_overlap: '所选运动时间有重叠，无法合并',
+      missing_times: '部分记录缺少时间信息，无法合并',
+      not_found: '部分记录未找到',
+      too_few: '请至少选择 2 个运动',
+    };
+    alert(msgs[err.error] || `合并失败（${res.status}）`);
+    return;
+  }
+
+  document.getElementById('act-merge-modal').classList.add('hidden');
+  exitMultiSelect();
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

@@ -105,7 +105,7 @@ picmanager/
 │           ├── people.rs    # 人物相关所有端点；compute_refined_centroid() 质心算法
 │           ├── geo.rs       # GET /api/geo/hierarchy、GET /api/geo/photos、POST /api/geo/regeocode、GET /api/geo/regeocode/status
 │           ├── animals.rs   # GET /api/animals/species、GET /api/animals/:species/photos、GET /api/photos/:id/animals
-│           └── activities.rs # GET /api/activities、GET /api/activities/:id、GET /api/activities/:id/track、GET /api/activities/:id/photos、POST /api/activities/:id/trim
+│           └── activities.rs # GET /api/activities、GET /api/activities/:id、GET /api/activities/:id/track、GET /api/activities/:id/photos、POST /api/activities/:id/trim、POST /api/activities/merge
 ├── frontend/                # 静态 HTML + CSS + JS（编译时嵌入二进制）
 ├── migrations/              # SQLx 数据库迁移文件（0001–0017）
 ├── tests/                   # 集成测试与测试 fixture

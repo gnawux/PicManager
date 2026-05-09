@@ -81,7 +81,7 @@ src/
       people.rs        GET /api/people（含 status/name_exact 过滤）, PATCH /api/people/{id}, POST /api/people/batch-update, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
       geo.rs           GET /api/geo/hierarchy
       animals.rs       GET /api/animals/species, GET /api/animals/{species}/photos, GET /api/photos/{id}/animals
-      activities.rs    GET /api/activities, GET /api/activities/{id}, GET /api/activities/{id}/track, GET /api/activities/{id}/photos, POST /api/activities/{id}/trim
+      activities.rs    GET /api/activities, GET /api/activities/{id}, GET /api/activities/{id}/track, GET /api/activities/{id}/photos, POST /api/activities/{id}/trim, POST /api/activities/merge
 frontend/              HTML + CSS + JS（编译进二进制，不依赖运行时工作目录；架构详见 docs/FRONTEND.md）
 migrations/
   0001_initial.sql     photos, albums, photo_albums, dedup_groups, dedup_members, import_sessions
@@ -287,8 +287,9 @@ sips --out /tmp/out.jpg file.heic && exiftool -n -Orientation /tmp/out.jpg  # si
 | 39g | fix(activities): FIT title 不再使用 Activity.event 字段（始终为 "activity"），改为 NULL 触发自动生成；update_titles 同时覆盖 title='activity' 的存量记录 |
 | 39h | feat(activities): 自动标题生成（{运动类型}-{MM-DD}-{距离}@{城市}）；geocache city→county→state→country 回退；CLI `picmanager activities update-titles [--dry-run]` |
 | 39i | feat(activities): trim 剪辑功能；POST /api/activities/:id/trim；前端全屏剪辑弹窗（Leaflet 地图实时预览 + canvas 把手拖拽 + 不可撤销确认） |
+| 40 | feat(activities): 合并运动；POST /api/activities/merge（同类型、无时间重叠、软删除源记录）；前端多选模式 + 合并确认框（统计预览、可编辑标题）；4 个 TDD 测试 |
 
-当前测试数：**357 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**361 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 

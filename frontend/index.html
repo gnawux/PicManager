@@ -238,6 +238,13 @@
             <button class="act-type-btn" data-type="walking">🚶 步行</button>
             <button class="act-type-btn" data-type="trail_running">⛰ 越野</button>
             <button class="act-type-btn" data-type="swimming">🏊 游泳</button>
+            <button id="act-multiselect-btn" class="btn-sm" style="margin-left:auto">多选</button>
+          </div>
+          <!-- Multi-select bottom toolbar -->
+          <div id="act-multiselect-bar" class="hidden">
+            <span id="act-sel-count">已选 0 个运动</span>
+            <button id="act-merge-btn" class="btn-primary btn-sm" disabled>合并运动</button>
+            <button id="act-sel-cancel-btn" class="btn-sm">取消</button>
           </div>
           <div id="activities-list"></div>
           <div class="activities-pagination hidden">
@@ -324,6 +331,24 @@
           <button class="btn-ghost" onclick="closeTrimModal()">取消</button>
           <button id="trim-save-btn" onclick="saveTrim()">保存剪辑</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Activity merge confirmation modal -->
+  <div id="act-merge-modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-inner" style="max-width:480px">
+      <h2 style="margin:0 0 16px">合并运动</h2>
+      <p id="act-merge-subtitle" style="margin:0 0 10px;color:#555;font-size:13px"></p>
+      <ul id="act-merge-list" style="margin:0 0 14px;padding:0 0 0 18px;font-size:13px;line-height:1.8"></ul>
+      <div id="act-merge-stats" style="background:#f6f8fa;border-radius:6px;padding:10px 14px;font-size:13px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:4px 16px"></div>
+      <div id="act-merge-gap-warn" class="hidden" style="color:#b45309;font-size:12px;margin-bottom:10px;padding:6px 10px;background:#fef9c3;border-radius:4px"></div>
+      <label style="display:block;font-size:13px;font-weight:600;margin-bottom:4px">标题</label>
+      <input id="act-merge-title-input" type="text" style="width:100%;box-sizing:border-box;padding:6px 10px;font-size:14px;border:1px solid #ccc;border-radius:4px;margin-bottom:14px">
+      <p style="color:#b91c1c;font-size:12px;margin:0 0 16px">⚠ 此操作不可撤销，原记录将被软删除。</p>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button id="act-merge-cancel-btn" class="btn-sm">取消</button>
+        <button id="act-merge-confirm-btn" class="btn-primary btn-sm">确认合并</button>
       </div>
     </div>
   </div>

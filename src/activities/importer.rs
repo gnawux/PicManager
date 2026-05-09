@@ -164,7 +164,7 @@ pub async fn import_one(
     Ok(ImportOutcome::Imported(activity_id))
 }
 
-fn activity_type_zh(ty: &str) -> &str {
+pub(crate) fn activity_type_zh(ty: &str) -> &str {
     match ty {
         "running"       => "跑步",
         "hiking"        => "徒步",
@@ -176,7 +176,7 @@ fn activity_type_zh(ty: &str) -> &str {
     }
 }
 
-fn format_distance(meters: f64) -> String {
+pub(crate) fn format_distance(meters: f64) -> String {
     if meters < 1000.0 {
         format!("{:.0}m", meters)
     } else {
@@ -184,7 +184,7 @@ fn format_distance(meters: f64) -> String {
     }
 }
 
-async fn geocache_city(pool: &SqlitePool, lat: f64, lon: f64) -> Option<String> {
+pub(crate) async fn geocache_city(pool: &SqlitePool, lat: f64, lon: f64) -> Option<String> {
     let row: (Option<String>, Option<String>, Option<String>, Option<String>) =
         sqlx::query_as(
             "SELECT city, county, state, country FROM geocache
@@ -210,7 +210,7 @@ async fn geocache_city(pool: &SqlitePool, lat: f64, lon: f64) -> Option<String> 
         .or_else(|| country.filter(|s| !s.is_empty()))
 }
 
-async fn generate_title(
+pub(crate) async fn generate_title(
     pool: &SqlitePool,
     activity_type: &str,
     start_time: Option<&str>,

@@ -4,7 +4,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use crate::activities::rdp;
+use sha2::{Digest, Sha256};
+use crate::activities::{importer, rdp};
 use crate::web::AppState;
 
 const RDP_THRESHOLD: usize = 7200;
@@ -445,4 +446,188 @@ fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
     let dlat = lat2 - lat1;
     let a = (dlat / 2.0).sin().powi(2) + lat1.cos() * lat2.cos() * (dlon / 2.0).sin().powi(2);
     2.0 * R * a.sqrt().asin()
+}
+
+// ── Merge ────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct MergeRequest {
+    pub ids: Vec<i64>,
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MergeErrorBody {
+    error: &'static str,
+}
+
+fn merge_err(status: StatusCode, code: &'static str) -> (StatusCode, Json<MergeErrorBody>) {
+    (status, Json(MergeErrorBody { error: code }))
+}
+
+type ActivityRow = (
+    i64, Option<String>, String,
+    Option<String>, Option<String>,
+    Option<i64>, Option<f64>, Option<f64>,
+    Option<i64>, Option<i64>, Option<i64>,
+    Option<String>, String,
+);
+
+pub async fn merge_activities(
+    State(state): State<AppState>,
+    Json(req): Json<MergeRequest>,
+) -> Result<Json<ActivityItem>, (StatusCode, Json<MergeErrorBody>)> {
+    if req.ids.len() < 2 {
+        return Err(merge_err(StatusCode::BAD_REQUEST, "too_few"));
+    }
+
+    let placeholders = req.ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT id, title, activity_type, start_time, end_time, duration_seconds,
+         distance_meters, elevation_gain_meters, avg_heart_rate, max_heart_rate,
+         calories, device, file_format
+         FROM activities WHERE id IN ({placeholders}) AND import_status = 'imported'"
+    );
+    let mut q = sqlx::query_as::<_, ActivityRow>(&sql);
+    for id in &req.ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(&state.pool).await
+        .map_err(|_| merge_err(StatusCode::INTERNAL_SERVER_ERROR, "db_error"))?;
+
+    if rows.len() != req.ids.len() {
+        return Err(merge_err(StatusCode::NOT_FOUND, "not_found"));
+    }
+
+    // Validate same activity type
+    let first_type = &rows[0].2;
+    if rows.iter().any(|r| &r.2 != first_type) {
+        return Err(merge_err(StatusCode::BAD_REQUEST, "type_mismatch"));
+    }
+
+    // Validate all have start/end times
+    if rows.iter().any(|r| r.3.is_none() || r.4.is_none()) {
+        return Err(merge_err(StatusCode::BAD_REQUEST, "missing_times"));
+    }
+
+    // Sort by start_time and check for overlaps
+    let mut sorted = rows;
+    sorted.sort_by(|a, b| a.3.cmp(&b.3));
+    for w in sorted.windows(2) {
+        if w[0].4.as_deref() > w[1].3.as_deref() {
+            return Err(merge_err(StatusCode::BAD_REQUEST, "time_overlap"));
+        }
+    }
+
+    let activity_type = sorted[0].2.clone();
+    let start_time = sorted.first().and_then(|r| r.3.clone());
+    let end_time = sorted.last().and_then(|r| r.4.clone());
+
+    let duration_seconds: Option<i64> = {
+        let s: i64 = sorted.iter().filter_map(|r| r.5).sum();
+        if s > 0 { Some(s) } else { None }
+    };
+    let distance_meters: Option<f64> = {
+        let s: f64 = sorted.iter().filter_map(|r| r.6).sum();
+        if s > 0.0 { Some(s) } else { None }
+    };
+    let elevation_gain_meters: Option<f64> = {
+        let s: f64 = sorted.iter().filter_map(|r| r.7).sum();
+        if s > 0.0 { Some(s) } else { None }
+    };
+    let avg_heart_rate: Option<i64> = {
+        let (mut wsum, mut wdur) = (0i64, 0i64);
+        for r in &sorted {
+            if let (Some(dur), Some(hr)) = (r.5, r.8) {
+                wsum += dur * hr;
+                wdur += dur;
+            }
+        }
+        if wdur > 0 { Some(wsum / wdur) } else { None }
+    };
+    let max_heart_rate: Option<i64> = sorted.iter().filter_map(|r| r.9).max();
+    let calories: Option<i64> = {
+        let s: i64 = sorted.iter().filter_map(|r| r.10).sum();
+        if s > 0 { Some(s) } else { None }
+    };
+    let device: Option<String> = sorted.iter().find_map(|r| r.11.clone());
+
+    // sha256 derived from sorted source IDs — unique, avoids re-merge of same set
+    let mut sorted_ids: Vec<i64> = req.ids.clone();
+    sorted_ids.sort_unstable();
+    let sha_input = format!(
+        "merged:{}",
+        sorted_ids.iter().map(|i| i.to_string()).collect::<Vec<_>>().join(",")
+    );
+    let sha256 = hex::encode(Sha256::digest(sha_input.as_bytes()));
+
+    // GPS of the first track point (for auto-title city lookup)
+    let first_id = sorted[0].0;
+    let first_gps: Option<(f64, f64)> = sqlx::query_as(
+        "SELECT lat, lon FROM activity_track_points WHERE activity_id = ? ORDER BY ts LIMIT 1",
+    )
+    .bind(first_id)
+    .fetch_optional(&state.pool)
+    .await
+    .unwrap_or(None);
+
+    let title = match req.title.filter(|t| !t.is_empty()) {
+        Some(t) => Some(t),
+        None => importer::generate_title(
+            &state.pool, &activity_type, start_time.as_deref(),
+            distance_meters, first_gps,
+        ).await,
+    };
+
+    let mut tx = state.pool.begin().await
+        .map_err(|_| merge_err(StatusCode::INTERNAL_SERVER_ERROR, "db_error"))?;
+
+    let new_id: i64 = sqlx::query_scalar(
+        "INSERT INTO activities \
+         (sha256, source_path, file_format, title, activity_type, \
+          start_time, end_time, duration_seconds, distance_meters, elevation_gain_meters, \
+          avg_heart_rate, max_heart_rate, calories, device, import_status) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'imported') RETURNING id",
+    )
+    .bind(&sha256)
+    .bind("merged")
+    .bind("merged")
+    .bind(&title)
+    .bind(&activity_type)
+    .bind(&start_time)
+    .bind(&end_time)
+    .bind(duration_seconds)
+    .bind(distance_meters)
+    .bind(elevation_gain_meters)
+    .bind(avg_heart_rate)
+    .bind(max_heart_rate)
+    .bind(calories)
+    .bind(&device)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|_| merge_err(StatusCode::INTERNAL_SERVER_ERROR, "db_error"))?;
+
+    // Re-parent all track points to the new merged activity
+    let update_pts = format!(
+        "UPDATE activity_track_points SET activity_id = ? WHERE activity_id IN ({placeholders})"
+    );
+    let mut q = sqlx::query(&update_pts).bind(new_id);
+    for id in &req.ids { q = q.bind(id); }
+    q.execute(&mut *tx).await
+        .map_err(|_| merge_err(StatusCode::INTERNAL_SERVER_ERROR, "db_error"))?;
+
+    // Soft-delete the source activities
+    let soft_del = format!(
+        "UPDATE activities SET import_status = 'merged' WHERE id IN ({placeholders})"
+    );
+    let mut q = sqlx::query(&soft_del);
+    for id in &req.ids { q = q.bind(id); }
+    q.execute(&mut *tx).await
+        .map_err(|_| merge_err(StatusCode::INTERNAL_SERVER_ERROR, "db_error"))?;
+
+    tx.commit().await
+        .map_err(|_| merge_err(StatusCode::INTERNAL_SERVER_ERROR, "db_error"))?;
+
+    get_activity(State(state), Path(new_id)).await
+        .map_err(|s| merge_err(s, "db_error"))
 }

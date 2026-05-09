@@ -2847,3 +2847,208 @@ async fn backfill_timezones_updates_null_rows() {
             .unwrap();
     assert_eq!(after, Some(480), "after backfill should be 480 (UTC+8)");
 }
+
+// ── Activity merge tests ────────────────────────────────────────────────────
+
+async fn insert_test_activity(
+    pool: &SqlitePool,
+    activity_type: &str,
+    start_time: &str,
+    end_time: &str,
+    duration_seconds: i64,
+    distance_meters: f64,
+    sha_suffix: &str,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO activities \
+         (sha256, source_path, file_format, activity_type, start_time, end_time, \
+          duration_seconds, distance_meters, import_status) \
+         VALUES (?,?,?,?,?,?,?,?,'imported') RETURNING id",
+    )
+    .bind(format!("sha_{sha_suffix}"))
+    .bind("test")
+    .bind("gpx")
+    .bind(activity_type)
+    .bind(start_time)
+    .bind(end_time)
+    .bind(duration_seconds)
+    .bind(distance_meters)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn merge_two_activities_creates_merged_record() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let id1 = insert_test_activity(
+        &pool, "running",
+        "2025-04-10T06:00:00+00:00", "2025-04-10T06:30:00+00:00",
+        1800, 5000.0, "merge1a",
+    ).await;
+    let id2 = insert_test_activity(
+        &pool, "running",
+        "2025-04-10T07:00:00+00:00", "2025-04-10T07:20:00+00:00",
+        1200, 3000.0, "merge1b",
+    ).await;
+
+    let body = serde_json::json!({ "ids": [id1, id2] });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/activities/merge")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let merged: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+    assert_eq!(merged["activity_type"], "running");
+    assert_eq!(merged["duration_seconds"], 3000); // 1800 + 1200
+    assert!((merged["distance_meters"].as_f64().unwrap() - 8000.0).abs() < 1.0);
+
+    // Source activities should be soft-deleted
+    let (status1,): (String,) =
+        sqlx::query_as("SELECT import_status FROM activities WHERE id = ?")
+            .bind(id1)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status1, "merged");
+
+    let (status2,): (String,) =
+        sqlx::query_as("SELECT import_status FROM activities WHERE id = ?")
+            .bind(id2)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status2, "merged");
+}
+
+#[tokio::test]
+async fn merge_rejects_type_mismatch() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let id1 = insert_test_activity(
+        &pool, "running",
+        "2025-04-10T06:00:00+00:00", "2025-04-10T06:30:00+00:00",
+        1800, 5000.0, "mismatch_a",
+    ).await;
+    let id2 = insert_test_activity(
+        &pool, "hiking",
+        "2025-04-10T07:00:00+00:00", "2025-04-10T07:20:00+00:00",
+        1200, 3000.0, "mismatch_b",
+    ).await;
+
+    let body = serde_json::json!({ "ids": [id1, id2] });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/activities/merge")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let err: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(err["error"], "type_mismatch");
+}
+
+#[tokio::test]
+async fn merge_rejects_time_overlap() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let id1 = insert_test_activity(
+        &pool, "running",
+        "2025-04-10T06:00:00+00:00", "2025-04-10T06:40:00+00:00",
+        2400, 5000.0, "overlap_a",
+    ).await;
+    // Starts before id1 ends → overlap
+    let id2 = insert_test_activity(
+        &pool, "running",
+        "2025-04-10T06:30:00+00:00", "2025-04-10T07:00:00+00:00",
+        1800, 3000.0, "overlap_b",
+    ).await;
+
+    let body = serde_json::json!({ "ids": [id1, id2] });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/activities/merge")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let err: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(err["error"], "time_overlap");
+}
+
+#[tokio::test]
+async fn merge_migrates_track_points() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let id1 = insert_test_activity(
+        &pool, "running",
+        "2025-04-10T06:00:00+00:00", "2025-04-10T06:30:00+00:00",
+        1800, 5000.0, "pts_a",
+    ).await;
+    let id2 = insert_test_activity(
+        &pool, "running",
+        "2025-04-10T07:00:00+00:00", "2025-04-10T07:20:00+00:00",
+        1200, 3000.0, "pts_b",
+    ).await;
+
+    // Insert track points for both
+    sqlx::query(
+        "INSERT INTO activity_track_points (activity_id, ts, lat, lon) VALUES (?,?,?,?),(?,?,?,?)"
+    )
+    .bind(id1).bind("2025-04-10T06:00:00+00:00").bind(39.9).bind(116.4)
+    .bind(id2).bind("2025-04-10T07:00:00+00:00").bind(39.91).bind(116.41)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "ids": [id1, id2] });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/activities/merge")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let merged: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let new_id = merged["id"].as_i64().unwrap();
+
+    let (pt_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM activity_track_points WHERE activity_id = ?")
+            .bind(new_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(pt_count, 2, "both track points should be migrated to merged activity");
+}
