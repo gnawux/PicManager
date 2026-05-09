@@ -1,3 +1,4 @@
+pub mod activities;
 pub mod album;
 pub mod animal;
 pub mod face;

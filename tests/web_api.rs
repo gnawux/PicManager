@@ -309,6 +309,87 @@ async fn patch_photo_updates_taken_at_and_timezone() {
     assert_eq!(tz, Some(480));
 }
 
+// ── Activities API tests ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn get_activities_empty_returns_200() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(Request::builder().uri("/api/activities").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 0);
+    assert!(json["activities"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn get_activity_not_found_returns_404() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(Request::builder().uri("/api/activities/9999").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_activity_track_after_insert() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    sqlx::query(
+        "INSERT INTO activities (id, sha256, source_path, file_format, activity_type, import_status) \
+         VALUES (1, 'abc', '/tmp/a.gpx', 'gpx', 'running', 'imported')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO activity_track_points (activity_id, ts, lat, lon) VALUES (1,'2024-06-15T10:00:00Z',39.9,116.4)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(Request::builder().uri("/api/activities/1/track").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["original_count"], 1);
+    assert_eq!(json["points"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn get_activity_photos_empty_when_no_photos() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    sqlx::query(
+        "INSERT INTO activities (id, sha256, source_path, file_format, activity_type, \
+         start_time, end_time, import_status) \
+         VALUES (1,'abc','/tmp/a.gpx','gpx','running','2024-06-15T10:00:00Z','2024-06-15T11:00:00Z','imported')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder().uri("/api/activities/1/photos").body(Body::empty()).unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(json["photos"].as_array().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn patch_photo_unknown_id_returns_404() {
     let app = test_app().await;

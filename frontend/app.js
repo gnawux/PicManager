@@ -1056,6 +1056,7 @@ function switchView(view) {
 
   if (view === 'people') loadPeopleList();
   if (view === 'locations') loadGeoHierarchy();
+  if (view === 'activities') initActivitiesView();
 }
 
 // ── Geo view ──────────────────────────────────────────────────────────────────
@@ -2848,6 +2849,255 @@ function confirmMerge() {
   } else {
     doMerge();
   }
+}
+
+// ── Activities view ───────────────────────────────────────────────────────────
+const activitiesState = {
+  currentType: '',
+  page: 1,
+  perPage: 50,
+  total: 0,
+  activityMap: null,
+  activityPolyline: null,
+  photoMarkers: [],
+};
+
+const ACTIVITY_ICONS = {
+  running: '🏃', hiking: '🥾', cycling: '🚴', walking: '🚶',
+  trail_running: '⛰', swimming: '🏊', other: '🏅',
+};
+
+function initActivitiesView() {
+  const panel = document.getElementById('activities-list-panel');
+  const detail = document.getElementById('activities-detail-panel');
+  panel.style.display = '';
+  detail.classList.add('hidden');
+
+  document.querySelectorAll('.act-type-btn').forEach(btn => {
+    btn.onclick = () => {
+      document.querySelectorAll('.act-type-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      activitiesState.currentType = btn.dataset.type;
+      activitiesState.page = 1;
+      loadActivitiesList();
+    };
+  });
+
+  document.getElementById('act-prev-btn').onclick = () => {
+    if (activitiesState.page > 1) { activitiesState.page--; loadActivitiesList(); }
+  };
+  document.getElementById('act-next-btn').onclick = () => {
+    const maxPage = Math.ceil(activitiesState.total / activitiesState.perPage);
+    if (activitiesState.page < maxPage) { activitiesState.page++; loadActivitiesList(); }
+  };
+
+  document.getElementById('act-back-btn').onclick = () => {
+    detail.classList.add('hidden');
+    panel.style.display = '';
+    if (activitiesState.activityMap) {
+      activitiesState.activityMap.remove();
+      activitiesState.activityMap = null;
+    }
+  };
+
+  loadActivitiesList();
+}
+
+async function loadActivitiesList() {
+  const { currentType, page, perPage } = activitiesState;
+  let url = `/api/activities?page=${page}&per_page=${perPage}`;
+  if (currentType) url += `&type=${encodeURIComponent(currentType)}`;
+
+  const data = await fetchJSON(url);
+  if (!data) return;
+
+  activitiesState.total = data.total;
+  const container = document.getElementById('activities-list');
+  container.innerHTML = '';
+
+  for (const act of data.activities) {
+    const row = document.createElement('div');
+    row.className = 'activity-row';
+    row.innerHTML = `
+      <span class="act-icon">${ACTIVITY_ICONS[act.activity_type] || '🏅'}</span>
+      <div class="act-info">
+        <div class="act-title">${act.title || activityDefaultTitle(act)}</div>
+        <div class="act-date">${formatActivityDate(act.start_time)}</div>
+        <div class="act-stats">
+          ${act.distance_meters ? `<span class="act-stat"><span class="act-stat-label">距离</span>${(act.distance_meters / 1000).toFixed(2)} km</span>` : ''}
+          ${act.duration_seconds ? `<span class="act-stat"><span class="act-stat-label">时长</span>${formatDuration(act.duration_seconds)}</span>` : ''}
+          ${act.elevation_gain_meters ? `<span class="act-stat"><span class="act-stat-label">爬升</span>${Math.round(act.elevation_gain_meters)} m</span>` : ''}
+          ${act.avg_heart_rate ? `<span class="act-stat"><span class="act-stat-label">心率</span>${act.avg_heart_rate} bpm</span>` : ''}
+        </div>
+      </div>
+    `;
+    row.onclick = () => showActivityDetail(act.id);
+    container.appendChild(row);
+  }
+
+  if (data.activities.length === 0) {
+    container.innerHTML = '<div style="color:#888;padding:24px;text-align:center">暂无运动记录。使用 <code>picmanager activities import &lt;目录&gt;</code> 导入 FIT/GPX 文件。</div>';
+  }
+
+  const pag = document.querySelector('.activities-pagination');
+  const maxPage = Math.ceil(data.total / perPage);
+  if (maxPage > 1) {
+    pag.classList.remove('hidden');
+    document.getElementById('act-page-info').textContent = `${page} / ${maxPage}`;
+  } else {
+    pag.classList.add('hidden');
+  }
+}
+
+async function showActivityDetail(id) {
+  const panel = document.getElementById('activities-list-panel');
+  const detail = document.getElementById('activities-detail-panel');
+  panel.style.display = 'none';
+  detail.classList.remove('hidden');
+
+  const [actData, trackData, photosData] = await Promise.all([
+    fetchJSON(`/api/activities/${id}`),
+    fetchJSON(`/api/activities/${id}/track`),
+    fetchJSON(`/api/activities/${id}/photos`),
+  ]);
+
+  if (!actData) { detail.classList.add('hidden'); panel.style.display = ''; return; }
+
+  document.getElementById('act-detail-title').textContent = actData.title || activityDefaultTitle(actData);
+  renderActivityMeta(actData);
+  renderActivityMap(trackData);
+  renderActivityPhotos(photosData, trackData);
+}
+
+function renderActivityMeta(act) {
+  const meta = document.getElementById('act-meta');
+  const rows = [
+    ['类型', activityTypeName(act.activity_type)],
+    ['开始时间', formatActivityDate(act.start_time)],
+    ['时长', act.duration_seconds ? formatDuration(act.duration_seconds) : null],
+    ['距离', act.distance_meters ? `${(act.distance_meters / 1000).toFixed(2)} km` : null],
+    ['配速/速度', formatPace(act)],
+    ['累计爬升', act.elevation_gain_meters ? `${Math.round(act.elevation_gain_meters)} m` : null],
+    ['平均/最大心率', (act.avg_heart_rate && act.max_heart_rate) ? `${act.avg_heart_rate} / ${act.max_heart_rate} bpm` : (act.avg_heart_rate ? `${act.avg_heart_rate} bpm` : null)],
+    ['卡路里', act.calories ? `${act.calories} kcal` : null],
+    ['设备', act.device || null],
+    ['格式', act.file_format.toUpperCase()],
+  ].filter(([, v]) => v !== null);
+
+  meta.innerHTML = rows.map(([label, value]) =>
+    `<div class="act-meta-row"><span class="act-meta-label">${label}</span><span class="act-meta-value">${value}</span></div>`
+  ).join('');
+}
+
+function renderActivityMap(trackData) {
+  const mapEl = document.getElementById('act-map');
+  const noTrack = document.getElementById('act-no-track');
+
+  if (activitiesState.activityMap) {
+    activitiesState.activityMap.remove();
+    activitiesState.activityMap = null;
+    activitiesState.activityPolyline = null;
+    activitiesState.photoMarkers = [];
+  }
+
+  if (!trackData || !trackData.points || trackData.points.length === 0) {
+    mapEl.style.display = 'none';
+    noTrack.classList.remove('hidden');
+    return;
+  }
+
+  mapEl.style.display = '';
+  noTrack.classList.add('hidden');
+
+  const map = L.map('act-map');
+  activitiesState.activityMap = map;
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors',
+    maxZoom: 19,
+  }).addTo(map);
+
+  const latlngs = trackData.points.map(p => [p.lat, p.lon]);
+  const polyline = L.polyline(latlngs, { color: '#4a9eff', weight: 3 }).addTo(map);
+  activitiesState.activityPolyline = polyline;
+  map.fitBounds(polyline.getBounds(), { padding: [20, 20] });
+}
+
+function renderActivityPhotos(photosData, trackData) {
+  const grid = document.getElementById('act-photos-grid');
+  const noPhotos = document.getElementById('act-no-photos');
+  const title = document.getElementById('act-photos-title');
+  grid.innerHTML = '';
+
+  const photos = photosData ? photosData.photos : [];
+  title.textContent = `本次运动中的照片（${photos.length} 张）`;
+
+  if (photos.length === 0) {
+    noPhotos.classList.remove('hidden');
+    return;
+  }
+  noPhotos.classList.add('hidden');
+
+  for (const photo of photos) {
+    const card = document.createElement('div');
+    card.className = 'photo-card';
+    const img = document.createElement('img');
+    img.src = `/api/photos/${photo.id}/thumb`;
+    img.alt = '';
+    img.loading = 'lazy';
+    card.appendChild(img);
+    card.onclick = () => openPhotoDetail(photo.id);
+    grid.appendChild(card);
+
+    // Add map marker for photos with GPS
+    if (photo.gps_lat && photo.gps_lon && activitiesState.activityMap) {
+      const icon = L.divIcon({ html: '📷', className: 'camera-marker', iconSize: [20, 20] });
+      const marker = L.marker([photo.gps_lat, photo.gps_lon], { icon })
+        .addTo(activitiesState.activityMap)
+        .bindPopup(`<img src="/api/photos/${photo.id}/thumb" style="width:120px;border-radius:4px"><br><small>${photo.taken_at || ''}</small>`);
+      activitiesState.photoMarkers.push(marker);
+    }
+  }
+}
+
+function activityDefaultTitle(act) {
+  const typeName = activityTypeName(act.activity_type);
+  const date = act.start_time ? act.start_time.slice(0, 10) : '';
+  return date ? `${date} ${typeName}` : typeName;
+}
+
+function activityTypeName(type) {
+  const names = { running: '跑步', hiking: '徒步', cycling: '骑行', walking: '步行', trail_running: '越野跑', swimming: '游泳', other: '运动' };
+  return names[type] || '运动';
+}
+
+function formatActivityDate(isoStr) {
+  if (!isoStr) return '';
+  try {
+    const d = new Date(isoStr);
+    return d.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  } catch { return isoStr.slice(0, 16); }
+}
+
+function formatDuration(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function formatPace(act) {
+  if (!act.distance_meters || !act.duration_seconds || act.distance_meters === 0) return null;
+  const type = act.activity_type;
+  if (type === 'running' || type === 'hiking' || type === 'walking' || type === 'trail_running') {
+    const secPerKm = act.duration_seconds / (act.distance_meters / 1000);
+    const m = Math.floor(secPerKm / 60);
+    const s = Math.round(secPerKm % 60);
+    return `${m}'${String(s).padStart(2, '0')}" /km`;
+  }
+  const kmh = (act.distance_meters / act.duration_seconds * 3.6).toFixed(1);
+  return `${kmh} km/h`;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

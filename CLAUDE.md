@@ -63,6 +63,11 @@ src/
   animal/
     mod.rs             detect_and_save(pool, photo_id, img)，模型不存在时静默跳过
     detector.rs        detect(img) -> Vec<AnimalDetection>；YOLOv8-nano，OnceLock<Mutex<Session>>
+  activities/
+    mod.rs             公开接口；import_dir_activities()、import_one()、ImportSummary、ActivityData、TrackPoint
+    parser.rs          parse_fit()（fitparser 0.10）、parse_gpx()（gpx 0.10）；FIT 半圆坐标转换；gpx::Time → chrono 字符串绕转
+    importer.rs        scan_dir()；SHA-256 去重；copy 到 .activities/yyyy/；批量插入轨迹点（chunk 500）
+    rdp.rs             simplify()；Ramer-Douglas-Peucker 算法（epsilon=1e-5°）
   web/
     mod.rs             AppState, router(), serve()
     embed.rs           rust-embed 静态文件服务
@@ -76,6 +81,7 @@ src/
       people.rs        GET /api/people（含 status/name_exact 过滤）, PATCH /api/people/{id}, POST /api/people/batch-update, GET /api/people/tree, POST /api/people/cluster, POST /api/people/merge, GET /api/people/{id}, POST /api/people/{id}/reparent, GET /api/faces/{id}/thumb
       geo.rs           GET /api/geo/hierarchy
       animals.rs       GET /api/animals/species, GET /api/animals/{species}/photos, GET /api/photos/{id}/animals
+      activities.rs    GET /api/activities, GET /api/activities/{id}, GET /api/activities/{id}/track, GET /api/activities/{id}/photos
 frontend/              HTML + CSS + JS（编译进二进制，不依赖运行时工作目录；架构详见 docs/FRONTEND.md）
 migrations/
   0001_initial.sql     photos, albums, photo_albums, dedup_groups, dedup_members, import_sessions
@@ -273,8 +279,13 @@ sips --out /tmp/out.jpg file.heic && exiftool -n -Orientation /tmp/out.jpg  # si
 | 38b | feat(dedup): GET /api/dedup 返回 filename/width/height 字段；migration 0014；import_one 存储尺寸；3 个 TDD 测试 |
 | 38c | feat(dedup): Web UI dedup 列表展示完整文件名 + 尺寸徽章 + 拍摄日期/相机信息；移除文件名截断 |
 | 38d | feat(dedup): Web UI 全屏比较模态框，加载原图并排展示，点击选择保留项并与主模态双向同步 |
+| 39a | feat(activities): DB migration 0017（activities + activity_track_points）；src/activities/（parser/importer/rdp）；16 个单元测试 |
+| 39b | feat(activities): CLI `picmanager activities import <path> [--dry-run]` + `activities sync-usb [--device GARMIN]` |
+| 39c | feat(activities): Web API 4 端点（list/get/track/photos）；RDP 轨迹压缩（>7200点）；haversine 照片关联（≤500m） |
+| 39d-e | feat(activities): 前端"运动"标签页；活动列表（类型/日期/距离/时长）；详情页 Leaflet 地图 + 轨迹 + 📷标记 |
+| 39f | docs: DESIGN.md 新增 4 个 API 端点 + activities 模块；ARCHITECTURE.md/CLAUDE.md 同步更新 |
 
-当前测试数：**312 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**343 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
@@ -578,6 +589,42 @@ ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "nd
 - 动物类索引 14–23（0-based COCO）：bird/cat/dog/horse/sheep/cow/elephant/bear/zebra/giraffe
 - 与 face detector 不同，YOLOv8 输入归一化为 `[0,1]` RGB，face detector 是 `(pixel-127)/128` BGR
 - 模型路径：`{config_dir}/picmanager/models/yolov8n.onnx`（约 6 MB）
+
+### activities 模块：gpx/fitparser 类型陷阱
+
+**`gpx::Time` 不是 chrono，必须字符串绕转**
+
+`gpx = "0.10"` 的 `gpx::Time` 内部用 `time::OffsetDateTime`（`time` crate），不是 chrono。`DateTime<Utc>` 无法 `From<gpx::Time>`。
+
+```rust
+// ✗ 错误：类型不兼容
+let utc: DateTime<Utc> = wpt.time.unwrap().into();
+
+// ✓ 正确：字符串绕转
+let utc = wpt.time.as_ref().and_then(|t| {
+    t.format().ok()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+        .map(|dt| dt.with_timezone(&Utc))
+});
+```
+
+**FIT `Timestamp` 内部是 `DateTime<Local>`，需转 UTC**
+
+```rust
+// ✗ 错误：直接赋值会产生类型错误或带 Local 时区
+fitparser::Value::Timestamp(dt) => Some(*dt)
+
+// ✓ 正确
+fitparser::Value::Timestamp(dt) => Some(dt.with_timezone(&Utc))
+```
+
+**FIT 位置为半圆单位，需转角度**
+
+GPS 坐标 `position_lat` / `position_long` 的原始值是 32-bit 半圆（semicircles）：
+
+```rust
+degrees = semicircles_value * (180.0 / 2_147_483_648.0)
+```
 
 ### sqlx 动态 IN 子句
 

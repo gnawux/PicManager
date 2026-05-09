@@ -61,6 +61,7 @@
         <button class="tab-btn active" data-view="photos">照片</button>
         <button class="tab-btn" data-view="people">人物</button>
         <button class="tab-btn" data-view="locations">地点</button>
+        <button class="tab-btn" data-view="activities">运动</button>
       </nav>
 
       <!-- ── Photos view ──────────────────────────────────────────── -->
@@ -224,6 +225,51 @@
         </div>
 
       </div>
+
+      <!-- ── Activities view ────────────────────────────────────────── -->
+      <div id="view-activities" class="view-section hidden">
+        <!-- List panel -->
+        <div id="activities-list-panel">
+          <div class="activities-filter-bar">
+            <button class="act-type-btn active" data-type="">全部</button>
+            <button class="act-type-btn" data-type="running">🏃 跑步</button>
+            <button class="act-type-btn" data-type="hiking">🥾 徒步</button>
+            <button class="act-type-btn" data-type="cycling">🚴 骑行</button>
+            <button class="act-type-btn" data-type="walking">🚶 步行</button>
+            <button class="act-type-btn" data-type="trail_running">⛰ 越野</button>
+            <button class="act-type-btn" data-type="swimming">🏊 游泳</button>
+          </div>
+          <div id="activities-list"></div>
+          <div class="activities-pagination hidden">
+            <button id="act-prev-btn">‹</button>
+            <span id="act-page-info"></span>
+            <button id="act-next-btn">›</button>
+          </div>
+        </div>
+
+        <!-- Detail panel (split: map left, metadata+photos right) -->
+        <div id="activities-detail-panel" class="hidden">
+          <div class="act-detail-header">
+            <button id="act-back-btn" class="btn-ghost">← 运动列表</button>
+            <span id="act-detail-title"></span>
+          </div>
+          <div class="act-detail-body">
+            <div id="act-map-container">
+              <div id="act-map"></div>
+              <div id="act-no-track" class="hidden" style="display:flex;align-items:center;justify-content:center;height:100%;color:#888;font-size:14px">此运动无 GPS 轨迹数据</div>
+            </div>
+            <div id="act-sidebar">
+              <div id="act-meta"></div>
+              <div id="act-photos-section">
+                <h3 id="act-photos-title">本次运动中的照片</h3>
+                <div id="act-photos-grid" class="photo-grid"></div>
+                <div id="act-no-photos" class="hidden" style="color:#888;font-size:13px;padding:8px 0">本次运动无关联照片</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
     </main>
   </div>
 

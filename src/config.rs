@@ -60,6 +60,10 @@ impl Config {
     pub fn bind_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
+
+    pub fn activities_dir(&self) -> PathBuf {
+        self.library_path.join(".activities")
+    }
 }
 
 fn load_file_config() -> Option<FileConfig> {

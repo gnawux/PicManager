@@ -40,6 +40,8 @@ image_hasher = "3"
 ort = { version = "=2.0.0-rc.12", features = ["download-binaries", "coreml", "ndarray"] }
 ndarray = "0.17"
 tempfile = "3"
+fitparser = "0.10"
+gpx = "0.10"
 
 [dev-dependencies]
 tower = "0.5"

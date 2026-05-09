@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, atomic::AtomicBool};
 use crate::config::Config;
 use embed::static_handler;
 use handlers::{
+    activities::{list_activities, get_activity, get_activity_track, get_activity_photos},
     albums::{list_albums, list_album_photos, merge_albums},
     collections::{list_collections, create_collection, rename_collection, delete_collection, add_photos, remove_photos, list_collection_photos},
     animals::{list_species, list_species_photos, list_photo_animals},
@@ -80,6 +81,10 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/faces/analyze", post(start_analyze))
         .route("/api/faces/jobs/{id}", get(get_job_status))
         .route("/api/photos/{id}/faces", get(list_photo_faces))
+        .route("/api/activities", get(list_activities))
+        .route("/api/activities/{id}", get(get_activity))
+        .route("/api/activities/{id}/track", get(get_activity_track))
+        .route("/api/activities/{id}/photos", get(get_activity_photos))
         .with_state(state)
         .fallback(static_handler)
 }

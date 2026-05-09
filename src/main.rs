@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{album, config::Config, face, storage, importer, dedup};
+use picmanager::{activities, album, config::Config, face, storage, importer, dedup};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -57,6 +57,29 @@ enum Command {
         /// 仅补充有 GPS 但缺地理编码的照片
         #[arg(long)]
         geo: bool,
+    },
+    /// 管理运动记录（FIT/GPX 文件）
+    Activities {
+        #[command(subcommand)]
+        action: ActivitiesAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ActivitiesAction {
+    /// 导入 FIT/GPX 文件或目录
+    Import {
+        /// 文件或目录路径
+        path: PathBuf,
+        /// 预览模式：只扫描计数，不实际导入
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// 从 USB 连接的 Garmin 设备导入新文件
+    SyncUsb {
+        /// 设备卷名（含此字符串），默认自动检测 /Volumes/ 下含 GARMIN 的卷
+        #[arg(long, default_value = "GARMIN")]
+        device: String,
     },
 }
 
@@ -172,6 +195,14 @@ async fn main() -> anyhow::Result<()> {
         Command::FillMissing { faces, geo } => {
             fill_missing(&pool, faces, geo).await?;
         }
+        Command::Activities { action } => match action {
+            ActivitiesAction::Import { path, dry_run } => {
+                import_activities(&pool, &path, &config.activities_dir(), dry_run).await?;
+            }
+            ActivitiesAction::SyncUsb { device } => {
+                sync_usb_activities(&pool, &device, &config.activities_dir()).await?;
+            }
+        },
     }
     Ok(())
 }
@@ -489,6 +520,70 @@ async fn fetch_models(config: &Config) -> anyhow::Result<()> {
     }
     let _ = config; // library path not used here
     Ok(())
+}
+
+async fn import_activities(
+    pool: &sqlx::SqlitePool,
+    path: &std::path::Path,
+    activities_dir: &std::path::Path,
+    dry_run: bool,
+) -> anyhow::Result<()> {
+    std::fs::create_dir_all(activities_dir)?;
+
+    if path.is_file() {
+        if dry_run {
+            println!("[dry-run] 将导入 1 个文件");
+            return Ok(());
+        }
+        match activities::import_one(pool, path, activities_dir).await? {
+            activities::ImportOutcome::Imported(id) => println!("已导入（id={id}）"),
+            activities::ImportOutcome::Skipped => println!("跳过（已存在相同文件）"),
+        }
+    } else {
+        let summary = activities::import_dir_activities(pool, path, activities_dir, dry_run).await;
+        if dry_run {
+            println!("[dry-run] 目录含 {} 个运动文件", summary.total);
+        } else {
+            println!(
+                "共 {} 个文件，导入 {}，跳过（重复）{}，失败 {}",
+                summary.total, summary.imported, summary.skipped, summary.failed,
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn sync_usb_activities(
+    pool: &sqlx::SqlitePool,
+    device_name: &str,
+    activities_dir: &std::path::Path,
+) -> anyhow::Result<()> {
+    let volumes = std::path::Path::new("/Volumes");
+    if !volumes.exists() {
+        anyhow::bail!("未找到 /Volumes 目录（需在 macOS 上运行）");
+    }
+
+    let garmin_vol = std::fs::read_dir(volumes)?
+        .filter_map(|e| e.ok())
+        .find(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .to_uppercase()
+                .contains(&device_name.to_uppercase())
+        })
+        .map(|e| e.path());
+
+    let vol = garmin_vol.ok_or_else(|| {
+        anyhow::anyhow!("未检测到含 '{device_name}' 的 USB 设备，请确认设备已连接")
+    })?;
+
+    let activity_src = vol.join("GARMIN").join("Activity");
+    if !activity_src.exists() {
+        anyhow::bail!("未找到 Garmin Activity 目录：{}", activity_src.display());
+    }
+
+    println!("从 {} 导入 Garmin 运动文件…", activity_src.display());
+    import_activities(pool, &activity_src, activities_dir, false).await
 }
 
 async fn bundle_models(project_dir: &std::path::Path) -> anyhow::Result<()> {
