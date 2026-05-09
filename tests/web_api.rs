@@ -2628,3 +2628,162 @@ async fn delete_collection_removes_album_and_memberships() {
     assert_eq!(count2.0, 0, "photo_albums cascade deleted");
     let _ = app;
 }
+
+// ── Activity photo association: timezone & format correctness ──────────────
+
+// Helper: insert a minimal photo row and return its id
+async fn insert_photo_with_gps(
+    pool: &SqlitePool,
+    taken_at: &str,
+    timezone_offset: Option<i64>,
+    lat: f64,
+    lon: f64,
+) -> i64 {
+    let id: (i64,) = sqlx::query_as(
+        "INSERT INTO photos (path, sha256, format, taken_at, timezone_offset, gps_lat, gps_lon, import_status) \
+         VALUES (?, ?, 'jpeg', ?, ?, ?, ?, 'imported') RETURNING id",
+    )
+    .bind(format!("/lib/{taken_at}.jpg"))
+    .bind(format!("sha{taken_at}"))
+    .bind(taken_at)
+    .bind(timezone_offset)
+    .bind(lat)
+    .bind(lon)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    id.0
+}
+
+// Helper: insert a minimal activity with start/end time (RFC3339 UTC) and one track point
+async fn insert_activity_with_track(
+    pool: &SqlitePool,
+    start_utc: &str,
+    end_utc: &str,
+    track_lat: f64,
+    track_lon: f64,
+) -> i64 {
+    let act_id: (i64,) = sqlx::query_as(
+        "INSERT INTO activities (sha256, source_path, file_format, activity_type, start_time, end_time, import_status) \
+         VALUES (?,'/tmp/a.gpx','gpx','running',?,?,'imported') RETURNING id",
+    )
+    .bind(format!("sha_act_{start_utc}"))
+    .bind(start_utc)
+    .bind(end_utc)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+
+    sqlx::query(
+        "INSERT INTO activity_track_points (activity_id, ts, lat, lon) VALUES (?,?,?,?)",
+    )
+    .bind(act_id.0)
+    .bind(start_utc)
+    .bind(track_lat)
+    .bind(track_lon)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    act_id.0
+}
+
+/// 照片 taken_at 为本地时间（UTC+8），activity 时间为 UTC，时区正确转换后应关联
+#[tokio::test]
+async fn activity_photos_associates_with_local_time_photo() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Activity: UTC 10:00–11:00 on 2024-06-15
+    let act_id = insert_activity_with_track(
+        &pool,
+        "2024-06-15T10:00:00+00:00",
+        "2024-06-15T11:00:00+00:00",
+        39.9, 116.4,
+    ).await;
+
+    // Photo taken at local 18:00 (UTC+8 → UTC 10:00), i.e. inside the activity window
+    insert_photo_with_gps(&pool, "2024-06-15 18:00:00", Some(480), 39.9, 116.4).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/activities/{act_id}/photos"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        json["photos"].as_array().unwrap().len(), 1,
+        "photo at local 18:00 (UTC+8) = UTC 10:00 should be associated with 10:00-11:00 UTC activity"
+    );
+}
+
+/// 照片在活动时间窗口之外（即使在同一天），不应关联
+#[tokio::test]
+async fn activity_photos_excludes_photo_outside_utc_window() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Activity: UTC 10:00–11:00
+    let act_id = insert_activity_with_track(
+        &pool,
+        "2024-06-15T10:00:00+00:00",
+        "2024-06-15T11:00:00+00:00",
+        39.9, 116.4,
+    ).await;
+
+    // Photo at local 12:00 (UTC+8 → UTC 04:00), outside the activity window
+    insert_photo_with_gps(&pool, "2024-06-15 12:00:00", Some(480), 39.9, 116.4).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/activities/{act_id}/photos"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["photos"].as_array().unwrap().is_empty(),
+        "photo at local 12:00 (UTC+8) = UTC 04:00 should NOT be in a 10:00-11:00 UTC activity"
+    );
+}
+
+/// 照片 GPS 距轨迹超过 500m，即使时间在窗口内也不应关联
+#[tokio::test]
+async fn activity_photos_excludes_gps_too_far() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    // Activity track near Beijing (39.9, 116.4)
+    let act_id = insert_activity_with_track(
+        &pool,
+        "2024-06-15T10:00:00+00:00",
+        "2024-06-15T11:00:00+00:00",
+        39.9, 116.4,
+    ).await;
+
+    // Photo at correct time but GPS far away (Shanghai)
+    insert_photo_with_gps(&pool, "2024-06-15 18:00:00", Some(480), 31.23, 121.47).await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/activities/{act_id}/photos"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        json["photos"].as_array().unwrap().is_empty(),
+        "photo 1000km away from track should not be associated"
+    );
+}

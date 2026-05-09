@@ -284,12 +284,19 @@ pub async fn get_activity_photos(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Fetch photos in the time window with GPS
+    // Fetch photos in the time window with GPS.
+    // Convert photo local time to UTC using timezone_offset before comparing with
+    // activity start/end (stored as RFC3339 UTC). Raw string comparison fails because
+    // photos.taken_at uses space separator ("YYYY-MM-DD HH:MM:SS") while activities
+    // use T separator ("YYYY-MM-DDTHH:MM:SS+00:00"), and space (32) < T (84).
     let candidate_photos: Vec<(i64, String, String, Option<String>, Option<f64>, Option<f64>)> =
         sqlx::query_as(
             "SELECT id, path, format, taken_at, gps_lat, gps_lon
              FROM photos
-             WHERE taken_at >= ? AND taken_at <= ?
+             WHERE datetime(taken_at, CAST(-COALESCE(timezone_offset, 0) AS TEXT) || ' minutes')
+                     >= datetime(?)
+               AND datetime(taken_at, CAST(-COALESCE(timezone_offset, 0) AS TEXT) || ' minutes')
+                     <= datetime(?)
                AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
                AND import_status = 'imported'
              ORDER BY taken_at",
