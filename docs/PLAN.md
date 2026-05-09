@@ -1,6 +1,6 @@
 # 开发计划
 
-> **状态**：Steps 1–38 全部已完成（2026-05，详见 CLAUDE.md）。Steps 39–41 为 2.0 运动记录功能。
+> **状态**：Steps 1–41 全部已完成（2026-05，详见 CLAUDE.md）。
 
 目标：以最小可运行增量推进，每步结束后都能编译并有可验证的输出。
 
@@ -1143,957 +1143,237 @@ GET  /api/people?name_exact=张三
 
 ---
 
-## Step 39 — PhotoBridge 项目脚手架
+## Steps 23–38 — 已完成功能增强（摘要）
 
-**目标**：在仓库内建立独立 Swift Package，能编译并通过 PhotoKit 权限检查。
+以下步骤均已完成，详情见 `CLAUDE.md` 开发状态表。
 
-### 39a — Swift Package 骨架
-
-在 `photobridge/` 下初始化 Swift Package Manager 项目：
-
-```
-photobridge/
-  Package.swift
-  Sources/
-    PhotoBridge/
-      main.swift         CLI 入口
-      Commands/          各子命令占位文件
-      Core/              业务逻辑占位
-  Tests/
-    PhotoBridgeTests/
-```
-
-`Package.swift` 配置：
-- Swift tools version 6.0，platform `.macOS(.v26)`
-- 依赖：`swift-argument-parser`（Apple 官方 CLI 框架）
-- Target：executable `PhotoBridge` + testTarget `PhotoBridgeTests`
-
-`main.swift` 使用 `ArgumentParser` 定义根命令及三个子命令占位：`export`、`sync`、`status`，暂时打印 "Not yet implemented"。
-
-**单元测试**：`PhotoBridgeTests` 空测试，确保 `swift test` 通过。
-
-**验收**：`swift build` 无报错；`photobridge --help` 显示三个子命令；`swift test` 通过。
+| Step | 内容摘要 |
+|------|---------|
+| 23a-b | importer SharedImportProgress + CLI 进度循环（每 5 秒检查） |
+| 24a-c | import_one 进度追踪（faces/geo 阶段）+ CLI 三段式进度格式 |
+| 25a-c | 增量人脸聚类（run_incremental_clustering）+ POST /api/people/cluster/incremental |
+| 26a-b | GET /api/albums 新增 latest_photo_at；前端相册分三类折叠展示 |
+| 27a-c | GET /api/people/{id} 改用递归 CTE；PersonNode.cover_face_id；前端人物分页 |
+| 28 | GET /api/photos/{id}/faces 含 person_id/person_name；详情模态框人物缩略图区 |
+| 29a-b | 人物列表排序 + 默认头像；GET /api/photos/{id}/file 返回原始文件 |
+| 30a-b | 邻近地理编码缓存（proximity geocache，±0.01° L2 缓存层） |
+| 31a-d | MigrationLog（NDJSON）+ import_dir_batch（batch_size/log/dry_run）+ CLI 参数 |
+| 32a-i | 人物聚类辅助：merge-suggestions / outlier-faces / centroid-faces；精炼质心算法 |
+| 33a-c | 旋转/翻转（rotation/flip_h/flip_v）+ DB migration 0011 + 前端按钮 |
+| 34a-c | EXIF Orientation 入库（migration 0012）+ 两层变换（exif + user）+ 人脸方向感知检测 |
+| 35a-c | 人物合并父→子节点保护（递归 CTE）+ 旋转后人脸重分析 + 合并确认弹窗 |
+| 36a-e | 精选集 CRUD（albums kind='curated'）+ 前端精选集侧边栏 + 批量加入/移除 |
+| 37a-c | 两层 dedup（Gradient pHash + DCT pHash）+ Union-Find 聚类 + 时间感知阈值 |
+| 38a-d | CLI dedup 纯报告模式；GET /api/dedup 含尺寸字段；dedup 全屏比较模态框 |
 
 ---
 
-### 39b — Entitlements 与权限配置
+## Step 39 — 运动记录：数据层 + 解析器 + 导入器 + CLI ✅
 
-配置照片库访问权限（macOS App Sandbox / Hardened Runtime）：
+**目标**：能从 Garmin FIT / GPX 文件解析运动数据并写入数据库，CLI 支持单文件和目录导入。
 
-- `photobridge.entitlements`：声明 `com.apple.security.personal-information.photos-library`
-- `Info.plist`（或 `PhotoBridge-Info.plist`）：`NSPhotoLibraryUsageDescription` 写入说明文字
-- 代码层：`PhotoLibraryAuth.swift`，封装 `PHPhotoLibrary.requestAuthorization(for:)` 异步授权流程，返回 `Result<Void, AuthError>`；授权被拒绝时打印友好提示并以非零退出码退出
+### 39a — DB 迁移 + 核心类型定义
 
-**单元测试**：mock `PHAuthorizationStatus` 各状态（notDetermined / authorized / denied / restricted / limited），验证 `AuthError` 枚举覆盖全部分支。
-
-**验收**：首次运行 `photobridge status` 时，macOS 弹出照片库访问授权对话框；授权后再运行无对话框。
-
----
-
-## Step 40 — 照片资产枚举与文件导出引擎
-
-**目标**：能从 Photos 库枚举全部符合条件的照片资产，并将文件写出到指定目录。
-
-### 40a — 资产枚举与资源类型过滤
-
-新建 `Core/AssetEnumerator.swift`：
-
-```swift
-struct AssetEnumerator {
-    /// 返回 Photos 库中所有需要导出的 (PHAsset, PHAssetResource) 对
-    func enumerate() -> [(PHAsset, PHAssetResource)]
-}
-```
-
-过滤规则（按优先级）：
-
-1. `PHAsset.mediaType == .image`（跳过视频）
-2. 每个 PHAsset 调用 `PHAssetResource.assetResources(for:)` 取资源列表，按以下逻辑选取**唯一一个**导出资源：
-   - 若存在 `.photo` 类型资源（JPEG 或 HEIC），取 `.photo`；跳过 `.alternatePhoto`（RAW）和 `.pairedVideo`（MOV）
-   - 若只有 `.alternatePhoto`（纯 RAW 资产，无 JPEG），**跳过整个资产**并记录日志
-3. 连拍资产（`asset.representsBurst == true`）：只保留 `burstSelectionTypes` 包含 `.userPick` 的资产；若无精选张，跳过整个连拍组
-
-**单元测试**：
-- 模拟各类资源列表（JPEG-only / HEIC-only / RAW+JPEG / Live Photo / 纯RAW），验证选取结果
-- 模拟连拍组（含 userPick / 不含 userPick），验证过滤行为
-
-**验收**：在测试照片库上运行枚举，输出资产数量，与 Photos.app 中显示的图片数一致（不含视频）。
-
----
-
-### 40b — PHAssetResourceManager 文件写出
-
-新建 `Core/AssetExporter.swift`：
-
-```swift
-struct AssetExporter {
-    /// 将单个资产资源写出到 destURL，支持网络访问（下载云端资产）
-    func export(resource: PHAssetResource, to destURL: URL) async throws
-    
-    /// 批量导出，报告进度
-    func exportBatch(
-        assets: [(PHAsset, PHAssetResource)],
-        stagingDir: URL,
-        progress: @escaping (Int, Int) -> Void
-    ) async throws -> [ExportedAsset]
-}
-
-struct ExportedAsset {
-    let localIdentifier: String   // PHAsset.localIdentifier
-    let fileURL: URL              // 写出路径
-    let takenAt: Date?
-}
-```
-
-实现细节：
-- `PHAssetResourceRequestOptions.isNetworkAccessAllowed = true`（允许从 iCloud 下载）
-- 使用 `PHAssetResourceManager.default().writeData(for:toFile:options:completionHandler:)` 写出到 `stagingDir/<localIdentifier>.<ext>`，使用 localIdentifier 而非原始文件名，避免重名冲突
-- 导出文件的扩展名从 `PHAssetResource.uniformTypeIdentifier` 推断（`public.jpeg` → `.jpg`，`public.heic` → `.heic`）
-- 写出时并发数上限 `--max-concurrent-downloads`（默认 4），避免同时触发大量 iCloud 下载
-
-**单元测试**：使用 stub PHAssetResource 验证 URL 构造逻辑和扩展名推断。
-
-**验收**：`photobridge export --output ~/staging --dry-run` 打印待导出资产数量；实际导出后 staging 目录中出现文件，每个文件可被 `image` 工具打开。
-
----
-
-### 40c — export 子命令接线
-
-将 40a/40b 接入 `Commands/ExportCommand.swift`：
-
-```
-photobridge export
-    [--output <dir>]          暂存目录（默认 ~/Library/Application Support/PhotoBridge/staging）
-    [--batch-size <n>]        每批数量（默认 200）
-    [--max-concurrent <n>]    并发下载数（默认 4）
-    [--dry-run]               只统计，不写文件
-    [--picmanager <path>]     picmanager 可执行文件路径（默认 PATH 搜索）
-```
-
-全量导出：枚举全库 → 按 batch-size 分批写出文件 → 每批调用 picmanager（Step 42 实现，本步先跳过调用，只写文件） → 打印进度。
-
-**验收**：`photobridge export --dry-run` 打印总数；`photobridge export` 在 staging 目录写出文件。
-
----
-
-## Step 41 — 增量同步状态管理
-
-**目标**：持久化 `PHPersistentChangeToken`，实现只处理上次同步以来新增照片的增量模式。
-
-### 41a — 状态文件模型
-
-新建 `Core/SyncState.swift`：
-
-```swift
-struct SyncState: Codable {
-    var lastChangeTokenData: Data?          // PHPersistentChangeToken 序列化数据
-    var exportedIdentifiers: Set<String>    // 已成功入库的 localIdentifier
-    var lastSyncDate: Date?
-    var lastSyncCount: Int
-}
-```
-
-- 持久化路径：`~/Library/Application Support/PhotoBridge/state.json`
-- 线程安全：文件读写在主 actor 序列化
-- 提供 `SyncState.load() throws -> SyncState` 和 `save()` 方法
-
-**单元测试**：
-- 序列化 → 反序列化 roundtrip 验证字段完整性
-- 文件不存在时 `load()` 返回空状态（不抛出）
-
----
-
-### 41b — PHPersistentChangeFetchRequest 增量枚举
-
-新建 `Core/IncrementalEnumerator.swift`：
-
-```swift
-struct IncrementalEnumerator {
-    /// 返回上次 changeToken 以来新增的 PHAsset，并更新 token
-    func fetchChanges(since token: PHPersistentChangeToken?) async throws
-        -> (assets: [PHAsset], newToken: PHPersistentChangeToken)
-}
-```
-
-实现细节：
-- 若 `token == nil`（首次），调用 `PHPhotoLibrary.shared().currentChangeToken` 仅获取当前令牌，不枚举资产（首次应使用全量 `AssetEnumerator`）
-- 若 `token != nil`，使用 `PHPersistentChangeFetchRequest(changeToken:)` 获取变更，过滤出 `insertions`（新增资产），对 `PHAssetChangeDetail.objectLocalIdentifiers` 批量 fetch PHAsset
-- 将新 token 回写到 `SyncState` 后再返回，确保令牌不丢失
-
-**单元测试**：mock `PHPersistentChangeFetchResult` 验证新增/删除/修改分类逻辑。
-
----
-
-### 41c — sync 子命令接线
-
-将 41a/41b 接入 `Commands/SyncCommand.swift`：
-
-```
-photobridge sync
-    [--output <dir>]
-    [--batch-size <n>]
-    [--max-concurrent <n>]
-    [--picmanager <path>]
-```
-
-流程：
-1. 加载 `SyncState`
-2. 若无历史令牌 → 提示用户先运行 `photobridge export`，退出
-3. 用 `IncrementalEnumerator.fetchChanges(since:)` 获取新增资产
-4. 跳过已在 `exportedIdentifiers` 中的资产（防御性去重）
-5. 走与 `export` 相同的 40b/40c 写文件流程
-6. 保存新 token 到状态文件
-
-**验收**：首次 `photobridge export` 后，向 Photos 库加入 1 张新照片，运行 `photobridge sync` 只处理这 1 张，进度显示 "1/1"。
-
----
-
-### 41d — status 子命令
-
-`Commands/StatusCommand.swift`：
-
-```
-photobridge status
-```
-
-输出示例：
-```
-PhotoBridge 状态
-  上次同步：2026-05-04 14:30  （5 小时前）
-  已导出：12,453 张
-  Photos 库当前资产数：12,460 张
-  待同步：约 7 张（上次以来新增）
-  状态文件：~/Library/Application Support/PhotoBridge/state.json
-```
-
-若从未同步过，打印：`尚未同步。请先运行 photobridge export 进行首次全量导出。`
-
-**验收**：分别在首次运行前、export 后、sync 后运行 `photobridge status`，输出数字与预期一致。
-
----
-
-## Step 42 — PicManager 批量导入集成
-
-**目标**：PhotoBridge 在每批文件写出后自动调用 `picmanager import`，解析 NDJSON 日志确认成功，更新状态文件，清空暂存文件。
-
-### 42a — PicManager 子进程调用与日志解析
-
-新建 `Core/PicManagerRunner.swift`：
-
-```swift
-struct PicManagerRunner {
-    let executablePath: URL
-
-    /// 对 stagingDir 调用 picmanager import --copy --batch-size N --log logFile，
-    /// 等待完成，解析 NDJSON 日志，返回成功 / 失败文件的 localIdentifier 列表
-    func importBatch(
-        stagingDir: URL,
-        batchSize: Int,
-        logFile: URL
-    ) async throws -> ImportResult
-}
-
-struct ImportResult {
-    let succeededIdentifiers: [String]    // 对应 ExportedAsset.localIdentifier
-    let failedIdentifiers: [String]
-    let skippedIdentifiers: [String]      // SHA-256 重复，已在库中
-}
-```
-
-NDJSON 日志格式（来自 `importer/log.rs`）：
-
-```json
-{"status":"Imported","path":"/tmp/staging/01ABC.heic","sha256":"..."}
-{"status":"Skipped","path":"/tmp/staging/01DEF.jpg","reason":"AlreadyImported"}
-{"status":"Failed","path":"/tmp/staging/01GHI.heic","error":"..."}
-```
-
-实现细节：
-- 暂存文件命名为 `<localIdentifier>.<ext>`，从 `path` 字段的文件名反推 localIdentifier
-- `picmanager` 可执行文件路径：先查 `--picmanager` 参数，再搜 `PATH`，找不到时给出安装提示
-- 子进程退出码非零时，保留暂存文件不清理，下次运行重试
-
-**单元测试**（不需要真实 picmanager 二进制）：
-- 解析各类 NDJSON 记录，验证分类正确
-- 测试 localIdentifier 从文件名反推逻辑
-
----
-
-### 42b — 端到端批量循环
-
-在 `AssetExporter.exportBatch` 完成后，串联以下流程（在 `ExportCommand` 和 `SyncCommand` 中复用）：
-
-```
-枚举待导出资产
-    └─→ 分批（每批 batch-size 张）
-            ├─→ PHAssetResourceManager 写文件到 staging/
-            ├─→ PicManagerRunner.importBatch()
-            │       ├─→ 成功：更新 SyncState.exportedIdentifiers
-            │       ├─→ 跳过（已在库中）：也加入 exportedIdentifiers
-            │       └─→ 失败：记录警告，本批次暂存文件保留
-            └─→ 清理本批成功/跳过文件，保留失败文件
-    └─→ 保存 SyncState
-    └─→ 打印汇总
-```
-
-汇总格式：
-```
-导出完成（耗时 3 分 42 秒）
-  处理：1,200 张  导入：1,187 张  跳过（重复）：11 张  失败：2 张
-  失败文件已保留在暂存目录，下次运行自动重试：~/Library/Application Support/PhotoBridge/staging/
-```
-
-**验收**：完整运行 `photobridge export`，PicManager DB 中出现对应照片记录；重新运行 `photobridge sync` 后无新导入（全部已跳过）。
-
----
-
-### 42c — 磁盘空间预检
-
-`export` / `sync` 启动时预检暂存目录剩余空间：
-
-- 用 `PHAsset.pixelWidth × pixelHeight × 3 / 8`（JPEG 典型压缩率）估算所有待处理资产的磁盘占用
-- 若估算值 > 暂存目录剩余空间的 80%，打印警告但继续（不强制中止，估算可能偏高）
-- 若 Photos Library 所在路径检测为系统卷（`/` 或 `/System`），打印警告：
-  ```
-  ⚠️  Photos Library 位于系统卷。导入过程中 Photos 框架会临时将云端照片下载到系统卷缓存。
-      建议将 Photos Library 迁移至外置硬盘后再导入。详见：photobridge help setup
-  ```
-
----
-
-## Step 43 — CLI 完善与文档
-
-**目标**：完善用户体验、帮助文档，补充 README 导入指南。
-
-### 43a — setup 引导子命令
-
-`photobridge setup` 打印分步设置向导（纯文本，不执行任何操作）：
-
-```
-PhotoBridge 首次设置向导
-══════════════════════════════
-
-步骤 1：迁移 Photos Library 到外置硬盘（推荐）
-  ① 打开 Photos.app → 偏好设置 → 通用
-  ② 点击"更改"，选择外置硬盘上的目标路径
-  ③ Photos 会自动移动整个库（iCloud 内容留在云端，不影响访问）
-
-步骤 2：授予照片库访问权限
-  ① 运行：photobridge status
-  ② 系统弹出授权对话框，选择"完整访问"
-
-步骤 3：首次全量导出
-  ① 确保 PicManager 已启动并配置好库路径：picmanager serve
-  ② 运行：photobridge export --batch-size 200
-  ③ 等待完成（大型库可能需要数小时，可中断后续跑）
-
-步骤 4：日常增量同步
-  在 iPhone/iPad 拍摄并同步到 iCloud 后，运行：
-  photobridge sync
-  或配置 launchd 定时任务自动执行。
-```
-
----
-
-### 43b — launchd plist 生成
-
-`photobridge setup --install-launchd [--interval-hours <n>]` 生成并安装 launchd 定时任务：
-
-- 生成 `~/Library/LaunchAgents/com.picmanager.photobridge-sync.plist`
-- 默认每 6 小时运行一次 `photobridge sync`
-- 打印 `launchctl load` 命令供用户手动执行（不自动 load，避免不必要权限提升）
-
----
-
-### 43c — README 导入指南
-
-在项目根目录 `README.md` 的"导入"章节添加 iCloud 照片导入段落，引用流程图（从 REQUIREMENTS.md 复制）和 `photobridge setup` 命令。
-
----
-
-### 43d — CLAUDE.md / 文档同步
-
-更新 `CLAUDE.md`：
-- 在"实际项目结构"中添加 `photobridge/` 目录描述
-- 在"技术栈"中注明 Swift + PhotoKit 工具
-- 记录 PhotoBridge 关键实现细节（PHPersistentChangeToken 序列化、localIdentifier 命名约定、资源类型过滤规则）
-
----
-
-## 2.0 运动记录功能（Steps 39–41）
-
-> TDD 原则：每个 Step 先写测试，测试失败后写实现，测试通过后提交。
-
----
-
-## Step 39a — DB 迁移 + 核心类型定义
-
-**目标**：建好数据层，后续模块都有地方写。
-
-### 迁移文件
-
-新增 `migrations/0015_activities.sql`：
-
-```sql
-CREATE TABLE activities (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    sha256           TEXT NOT NULL UNIQUE,
-    source_path      TEXT NOT NULL,
-    file_format      TEXT NOT NULL CHECK(file_format IN ('fit','gpx')),
-    title            TEXT NOT NULL,
-    activity_type    TEXT NOT NULL,
-    start_time       TEXT NOT NULL,   -- UTC ISO-8601
-    end_time         TEXT NOT NULL,
-    duration_seconds INTEGER NOT NULL,
-    distance_meters  REAL NOT NULL,
-    elevation_gain_meters REAL,
-    avg_heart_rate   INTEGER,
-    max_heart_rate   INTEGER,
-    calories         INTEGER,
-    device           TEXT,
-    import_status    TEXT NOT NULL DEFAULT 'imported'
-);
-
-CREATE TABLE activity_track_points (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    activity_id INTEGER NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
-    ts          TEXT NOT NULL,   -- UTC ISO-8601
-    lat         REAL NOT NULL,
-    lon         REAL NOT NULL,
-    elevation   REAL,
-    heart_rate  INTEGER,
-    cadence     INTEGER,
-    speed       REAL
-);
-
-CREATE INDEX idx_track_points_activity ON activity_track_points(activity_id);
-CREATE INDEX idx_activities_start_time ON activities(start_time DESC);
-```
-
-### 新建模块 `src/activities/`
-
-```
-src/activities/
-  mod.rs       -- pub use + ActivityData / TrackPoint 类型定义
-  fit.rs       -- FIT 文件解析
-  gpx.rs       -- GPX 文件解析
-  importer.rs  -- 导入器（去重 + 写库）
-  geo.rs       -- 地理计算工具（haversine / RDP）
-```
+新增 `migrations/0017_activities.sql`：建立 `activities`（运动元数据）和 `activity_track_points`（GPS 轨迹点）两张表。
 
 **核心类型**（`src/activities/mod.rs`）：
 
 ```rust
 pub struct TrackPoint {
-    pub ts: chrono::DateTime<chrono::Utc>,
-    pub lat: f64,
-    pub lon: f64,
+    pub ts: DateTime<Utc>,
+    pub lat: f64, pub lon: f64,
     pub elevation: Option<f64>,
-    pub heart_rate: Option<u8>,
-    pub cadence: Option<u8>,
+    pub heart_rate: Option<i64>,
+    pub cadence: Option<i64>,
     pub speed: Option<f64>,
 }
 
 pub struct ActivityData {
-    pub title: String,
-    pub activity_type: String,     // "running" / "hiking" / "cycling" / ...
-    pub start_time: chrono::DateTime<chrono::Utc>,
-    pub end_time: chrono::DateTime<chrono::Utc>,
-    pub duration_seconds: u32,
-    pub distance_meters: f64,
+    pub file_format: String,
+    pub title: Option<String>,
+    pub activity_type: String,      // running/hiking/cycling/walking/trail_running/swimming/other
+    pub start_time: Option<DateTime<Utc>>,
+    pub end_time: Option<DateTime<Utc>>,
+    pub duration_seconds: Option<i64>,
+    pub distance_meters: Option<f64>,
     pub elevation_gain_meters: Option<f64>,
-    pub avg_heart_rate: Option<u8>,
-    pub max_heart_rate: Option<u8>,
-    pub calories: Option<u32>,
+    pub avg_heart_rate: Option<i64>,
+    pub max_heart_rate: Option<i64>,
+    pub calories: Option<i64>,
     pub device: Option<String>,
-    pub track: Vec<TrackPoint>,
+    pub track_points: Vec<TrackPoint>,
 }
 ```
 
-### 地理工具（`src/activities/geo.rs`）
+**地理工具**（`src/activities/rdp.rs`）：`simplify(points, epsilon)` 实现 Ramer-Douglas-Peucker 算法（epsilon=1e-5°≈1m）。
 
-**haversine 距离**（两点间米数）：
-
-```rust
-pub fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64
-```
-
-**轨迹到点的最近距离**：
-
-```rust
-/// 点 (lat, lon) 到轨迹（有序轨迹点列表）的最近 haversine 距离（米）
-pub fn min_distance_to_track(lat: f64, lon: f64, track: &[(f64, f64)]) -> f64
-```
-
-**RDP 轨迹简化**：
-
-```rust
-/// Ramer-Douglas-Peucker，epsilon 单位为米
-/// 返回保留的索引集合
-pub fn rdp_simplify(points: &[(f64, f64)], epsilon_m: f64) -> Vec<usize>
-```
-
-### TDD 测试（`src/activities/geo.rs` 内 `#[cfg(test)]`）
-
-| 测试 | 验收条件 |
-|------|----------|
-| `haversine_known_distance` | 北京（39.9042°N, 116.4074°E）到上海（31.2304°N, 121.4737°E）≈ 1068 km，误差 < 1% |
-| `min_distance_to_track_on_point` | 点在轨迹上时距离 ≈ 0 |
-| `min_distance_to_track_nearby` | 点在已知轨迹旁 500m 处，距离 < 510m |
-| `min_distance_to_track_far` | 点在 2km 外，距离 > 1000m |
-| `rdp_simplify_straight_line` | 直线上的中间点被过滤掉 |
-| `rdp_simplify_preserves_endpoints` | 始终保留首尾两点 |
+**TDD 测试**：rdp 单元测试（直线简化、端点保留）。
 
 ---
 
-## Step 39b — FIT 文件解析
-
-**目标**：能从 `.fit` 文件提取完整 `ActivityData`，含轨迹点和运动元数据。
-
-### 依赖
-
-```toml
-# Cargo.toml
-fitparser = "0.8"   # 或 fit-parser，根据实际可用版本
-```
-
-### 实现（`src/activities/fit.rs`）
+### 39b — FIT 文件解析（`src/activities/parser.rs`）
 
 ```rust
-pub fn parse_fit(path: &Path) -> anyhow::Result<ActivityData>
+pub fn parse_fit(path: &Path) -> Result<ActivityData>
 ```
 
-解析逻辑：
-- 读取 FIT 文件的 `activity` message → `activity_type`（`sport` 字段映射）、`device`
-- 读取 `session` message → `total_elapsed_time`、`total_distance`、`total_ascent`、`avg_heart_rate`、`max_heart_rate`、`total_calories`
-- 读取所有 `record` message → `TrackPoint` 列表（timestamp / lat / lon / altitude / heart_rate / cadence / speed）
-- Garmin FIT 坐标为 semicircles（整数），转换公式：`degrees = semicircles × (180.0 / 2^31)`
-- 若无 `activity` message 中的 name，title 默认 `{date} {activity_type}`
+- `fitparser = "0.10"` 依赖
+- 读取 `session` message → 时长/距离/心率/卡路里/设备
+- 读取 `record` messages → 轨迹点（lat/lon 为半圆单位，× 180/2^31 转度）
+- FIT Timestamp 内部为 `DateTime<Local>`，需 `.with_timezone(&Utc)`
 
-**FIT sport 字段映射**：
-
-| FIT sport 值 | activity_type |
-|---|---|
-| running (1) | running |
-| cycling (2) | cycling |
-| hiking (17) | hiking |
-| walking (11) | walking |
-| trail_running (sub_sport=3) | trail_running |
-| swimming (5) | swimming |
-| 其余 | other |
-
-### TDD 测试（`src/activities/fit.rs` 内 `#[cfg(test)]`）
-
-使用用户提供的真实 FIT 文件（`tests/samples/sample.fit`）：
-
-| 测试 | 验收条件 |
-|------|----------|
-| `parse_fit_returns_ok` | `parse_fit(sample_fit)` 不报错 |
-| `parse_fit_has_track_points` | `data.track.len() > 0` |
-| `parse_fit_track_valid_coords` | 所有轨迹点 lat 在 [-90, 90]，lon 在 [-180, 180] |
-| `parse_fit_has_valid_times` | `start_time < end_time`，duration > 0 |
-| `parse_fit_distance_positive` | `distance_meters > 0` |
-| `parse_fit_activity_type_known` | `activity_type` 是合法枚举值之一 |
+**TDD 测试**：使用 `tests/samples/` 中真实 FIT 文件验证字段非空、坐标有效。
 
 ---
 
-## Step 39c — GPX 文件解析
-
-**目标**：能从 `.gpx` 文件提取完整 `ActivityData`。
-
-### 依赖
-
-```toml
-gpx = "0.10"
-```
-
-### 实现（`src/activities/gpx.rs`）
+### 39c — GPX 文件解析（`src/activities/parser.rs`）
 
 ```rust
-pub fn parse_gpx(path: &Path) -> anyhow::Result<ActivityData>
+pub fn parse_gpx(path: &Path) -> Result<ActivityData>
 ```
 
-解析逻辑：
-- 读取 `<trk><name>` → title
-- 遍历 `<trkseg><trkpt>` → `TrackPoint`（lat/lon/ele/time）
-- 读取心率扩展（`<gpxtpx:hr>` 或 `<ns3:hr>`）
-- `start_time` = 第一个点的时间，`end_time` = 最后一个点的时间
-- `distance_meters` = 所有相邻轨迹点 haversine 距离之和
-- `elevation_gain` = 所有正爬升累计（相邻点高度差 > 0 时累加）
-- `activity_type` 从 `<type>` 标签读取，映射同 FIT；无法识别时 = "other"
+- `gpx = "0.10"` 依赖；`gpx::Time` 内部为 `time::OffsetDateTime`，需字符串绕转到 chrono
+- 从 `<trk><name>` 读 title，从 `<type>` 读 activity_type
+- `distance_meters` = 相邻轨迹点 haversine 距离之和
+- `elevation_gain_meters` = 正爬升累计
 
-### TDD 测试（`src/activities/gpx.rs` 内 `#[cfg(test)]`）
-
-使用合成 GPX fixture（`tests/samples/sample.gpx`，由测试代码内嵌字符串创建，无需外部文件）：
-
-| 测试 | 验收条件 |
-|------|----------|
-| `parse_gpx_minimal_valid` | 最简 GPX（2个轨迹点）能解析不报错 |
-| `parse_gpx_track_count` | 解析后 track.len() 与 trkpt 数量一致 |
-| `parse_gpx_distance_computed` | 两点间距离 ≈ haversine 手算值，误差 < 1% |
-| `parse_gpx_elevation_gain` | 已知爬升场景（点序列高度交替升降），累计爬升值与预期一致 |
-| `parse_gpx_time_range` | start_time < end_time |
-| `parse_gpx_heart_rate_extension` | 含 gpxtpx:hr 扩展时 heart_rate 字段有值 |
-
-合成 fixture 示例（嵌在测试中）：
-```xml
-<?xml version="1.0"?>
-<gpx version="1.1" creator="test">
-  <trk><name>Test Run</name><type>running</type>
-    <trkseg>
-      <trkpt lat="39.9042" lon="116.4074"><ele>50.0</ele><time>2026-05-01T06:00:00Z</time></trkpt>
-      <trkpt lat="39.9100" lon="116.4150"><ele>55.0</ele><time>2026-05-01T06:30:00Z</time></trkpt>
-    </trkseg>
-  </trk>
-</gpx>
-```
+**TDD 测试**：合成 GPX fixture（内嵌字符串，无需外部文件），验证距离计算、爬升计算、时间范围。
 
 ---
 
-## Step 39d — 导入器
-
-**目标**：将解析好的 `ActivityData` 写入数据库，支持去重和文件管理。
-
-### 实现（`src/activities/importer.rs`）
+### 39d — 导入器（`src/activities/importer.rs`）
 
 ```rust
-pub struct ImportActivityResult {
-    pub imported: usize,
-    pub skipped: usize,   // SHA-256 重复
-    pub failed: usize,
-}
-
-/// 导入单个文件：返回 Some(activity_id) 表示新导入，None 表示跳过（重复）
-pub async fn import_activity_file(
-    pool: &SqlitePool,
-    path: &Path,
-    activities_dir: &Path,
-) -> anyhow::Result<Option<i64>>
-
-/// 批量导入目录：递归扫描 .fit/.gpx，逐一调用 import_activity_file
-pub async fn import_activities_dir(
-    pool: &SqlitePool,
-    source: &Path,
-    activities_dir: &Path,
-) -> anyhow::Result<ImportActivityResult>
+pub async fn import_one(pool, path, activities_dir) -> Result<ImportOutcome>
+pub async fn import_dir_activities(pool, dir, activities_dir, dry_run) -> ImportSummary
 ```
 
-实现要点：
-1. 计算文件 SHA-256；查询 `activities` 表，若已存在则返回 `None`（跳过）
-2. 按扩展名选 FIT/GPX parser，解析得到 `ActivityData`
-3. 将文件复制到 `activities_dir/{yyyy}/{filename}`（目录按年份，年份来自 `start_time`）
-4. 事务内写入 `activities` 行 + 批量插入 `activity_track_points` 行
-5. 返回新插入的 `activity_id`
+- 计算 SHA-256 → 查 `activities.sha256` → 跳过重复
+- 复制文件到 `{activities_dir}/{yyyy}/{filename}`
+- 事务内写入 `activities` + 批量插入 `activity_track_points`（chunk 500）
 
-### TDD 测试（`tests/web_api.rs` 或 `src/activities/importer.rs`）
-
-| 测试 | 验收条件 |
-|------|----------|
-| `import_fit_creates_activity_row` | 导入 sample.fit 后 `SELECT COUNT(*) FROM activities` = 1 |
-| `import_fit_creates_track_points` | `SELECT COUNT(*) FROM activity_track_points WHERE activity_id = 1` > 0 |
-| `import_fit_dedup` | 同一文件导入两次，第二次返回 None，activities 表仍只有 1 行 |
-| `import_fit_copies_file` | 导入后 `activities_dir/{yyyy}/` 下有对应文件 |
-| `import_gpx_creates_activity_row` | 类似 FIT，用合成 GPX fixture |
-| `import_unknown_extension_returns_error` | 导入 .txt 文件返回 Err |
-| `import_dir_counts_correctly` | 含 1 个 FIT + 1 个 GPX 的目录，ImportActivityResult.imported = 2 |
+**TDD 测试**：导入去重、目录混合扫描（.fit + .gpx + 其他扩展名被忽略）。
 
 ---
 
-## Step 39e — CLI 命令
-
-**目标**：`picmanager activities import <path>` 可用，输出清晰汇总。
-
-### 实现（`src/main.rs`）
-
-在 `clap` 的 CLI 结构中新增 `activities` 子命令：
+### 39e — CLI 命令（`src/main.rs`）
 
 ```
 picmanager activities import <path> [--dry-run]
+picmanager activities sync-usb [--device GARMIN]
 ```
 
-输出格式：
-```
-扫描到 12 个运动文件（10 个 FIT，2 个 GPX）
-导入 10，跳过（重复）2，失败 0
-耗时 3.2 秒
-```
+`sync-usb` 扫描 `/Volumes/` 下卷名含 `GARMIN` 的设备，读取 `{volume}/GARMIN/Activity/`。
 
-`--dry-run` 时只打印扫描结果，不写库：
-```
-（预览）扫描到 12 个运动文件（10 个 FIT，2 个 GPX），实际导入前请移除 --dry-run
-```
+输出格式：`共 N 个文件，导入 X，跳过（重复）Y，失败 Z`
 
-### Config 扩展（`src/config.rs`）
-
-新增字段：
-```rust
-pub activities_dir: PathBuf,   // 默认 {library}/activities/
-```
-
-### TDD 测试
-
-CLI 命令通过 `Command::new("picmanager").get_matches_from(...)` 单元测试验证参数解析；导入逻辑测试复用 Step 39d 的测试。
+**`Config::activities_dir()`**：`library_path.join(".activities")`
 
 ---
 
-## Step 40a — API：运动列表
+## Step 40 — 运动记录：Web API ✅
 
-**目标**：`GET /api/activities` 返回分页列表，支持类型过滤。
+**目标**：4 个 REST 端点，支持列表分页/过滤、详情、轨迹（自动降采样）、关联照片。
 
-### 路由
+### 40a — GET /api/activities（列表）
 
 ```
 GET /api/activities?page=1&per_page=50&type=running
 ```
 
-**响应 JSON**：
+响应：`{ total, page, per_page, activities: [{id, title, activity_type, start_time, duration_seconds, distance_meters, elevation_gain_meters, avg_heart_rate, max_heart_rate, calories}] }`
+
+**TDD 测试**：空列表、分页、type 过滤、start_time 降序。
+
+---
+
+### 40b — GET /api/activities/:id（详情）
+
+响应同列表单条，额外含 `device`、`file_format`、`source_path`。
+
+**TDD 测试**：存在 → 200；不存在 → 404。
+
+---
+
+### 40c — GET /api/activities/:id/track（轨迹点，含 RDP）
 
 ```json
-{
-  "total": 123,
-  "page": 1,
-  "per_page": 50,
-  "activities": [
-    {
-      "id": 1,
-      "title": "2026-05-01 跑步",
-      "activity_type": "running",
-      "start_time": "2026-05-01T06:00:00Z",
-      "duration_seconds": 3600,
-      "distance_meters": 10234.5,
-      "elevation_gain_meters": 85.0,
-      "avg_heart_rate": 152,
-      "max_heart_rate": 178,
-      "calories": 620
-    }
-  ]
-}
+{ "activity_id": 1, "total_points": 7280, "returned_points": 1200, "sampled": true, "points": [...] }
 ```
 
-### TDD 测试（`tests/web_api.rs`）
+- 轨迹点 > 7200 时，用 RDP 算法（epsilon=1e-5°）降采样后返回
+- `sampled: true` 表示做了降采样；首尾点始终保留
 
-| 测试 | 验收条件 |
-|------|----------|
-| `get_activities_empty` | 无数据时返回 200，total=0，activities=[] |
-| `get_activities_returns_imported` | 导入 1 条后，total=1，activities.len()=1 |
-| `get_activities_pagination` | 导入 3 条，per_page=2，page=1 返回 2 条，page=2 返回 1 条 |
-| `get_activities_filter_by_type` | 导入 running+hiking 各 1 条，type=running 只返回 1 条 |
-| `get_activities_sorted_desc` | 返回按 start_time 降序排列 |
+**TDD 测试**：100 点不降采样；8000 点触发降采样；首尾点保留。
 
 ---
 
-## Step 40b — API：运动详情
-
-**目标**：`GET /api/activities/:id` 返回单次运动完整元数据。
-
-### 路由
-
-```
-GET /api/activities/:id
-```
-
-**响应**：同列表中单条记录，额外包含 `device`、`file_format`、`source_path` 字段。
-
-### TDD 测试
-
-| 测试 | 验收条件 |
-|------|----------|
-| `get_activity_detail_ok` | 存在的 id 返回 200 + 正确字段 |
-| `get_activity_detail_not_found` | 不存在的 id 返回 404 |
-
----
-
-## Step 40c — API：轨迹点（含 RDP 降采样）
-
-**目标**：`GET /api/activities/:id/track` 返回适合前端渲染的轨迹点数组。
-
-### 路由
-
-```
-GET /api/activities/:id/track
-```
-
-**响应 JSON**：
+### 40d — GET /api/activities/:id/photos（关联照片）
 
 ```json
-{
-  "activity_id": 1,
-  "total_points": 7280,
-  "returned_points": 1200,
-  "sampled": true,
-  "points": [
-    {"ts": "2026-05-01T06:00:00Z", "lat": 39.9042, "lon": 116.4074, "elevation": 50.0},
-    ...
-  ]
-}
+{ "activity_id": 1, "photos": [{"id":42, "taken_at":"...", "gps_lat":39.91, "gps_lon":116.42, "distance_to_track_m": 32.5}] }
 ```
 
-实现逻辑：
-- 从 DB 读取该活动全部轨迹点（按 ts 排序）
-- 若点数 > 7200，对 lat/lon 序列用 RDP 算法降采样，epsilon 取 10m
-- 返回降采样后的点；`sampled: true` 表示做了降采样
+实现：
+1. 查活动 start_time / end_time + 全部轨迹点
+2. 查 photos 表：`taken_at BETWEEN start AND end AND gps_lat IS NOT NULL`
+3. haversine 到轨迹最小距离，过滤 > 500m
+4. 返回通过过滤的照片（含 distance_to_track_m）
 
-### TDD 测试
-
-| 测试 | 验收条件 |
-|------|----------|
-| `get_track_ok` | 存在的 id 返回 200，points 非空 |
-| `get_track_not_found` | 不存在的 id 返回 404 |
-| `get_track_no_downsampling_below_threshold` | 导入 100 点的合成活动，`sampled=false`，returned=total |
-| `get_track_downsampling_above_threshold` | 导入 8000 点的合成活动，`sampled=true`，returned < 8000 |
-| `get_track_preserves_endpoints` | 降采样后首尾点与原始首尾一致 |
+**TDD 测试**：无照片、时间匹配 + GPS 近（关联）、时间匹配但 GPS 远（不关联）、时间在外（不关联）、无 GPS（不关联）。
 
 ---
 
-## Step 40d — API：关联照片
+## Step 41 — 运动记录：前端 + 文档 ✅
 
-**目标**：`GET /api/activities/:id/photos` 返回时间 + GPS 双重过滤后的照片列表。
+**目标**：导航栏新增「运动」标签页，支持列表浏览、Leaflet 轨迹地图、关联照片展示。
 
-### 路由
+### 41a — 前端：运动标签页 + 列表视图
 
-```
-GET /api/activities/:id/photos
-```
-
-**响应 JSON**：
-
-```json
-{
-  "activity_id": 1,
-  "photos": [
-    {
-      "id": 42,
-      "path": "2026-05-01/IMG_1234.HEIC",
-      "taken_at": "2026-05-01T06:23:11Z",
-      "gps_lat": 39.9120,
-      "gps_lon": 116.4200,
-      "distance_to_track_m": 32.5
-    }
-  ]
-}
-```
-
-实现逻辑：
-1. 查活动的 `start_time` / `end_time` + 全部轨迹点（lat/lon）
-2. 查 `photos` 表：`taken_at BETWEEN start_time AND end_time AND gps_lat IS NOT NULL`
-3. 对每张候选照片，调用 `min_distance_to_track(photo_lat, photo_lon, track_latlons)`
-4. 过滤掉距离 > 500m 的照片
-5. 返回通过过滤的照片列表（含 `distance_to_track_m` 字段）
-
-### TDD 测试
-
-| 测试 | 验收条件 |
-|------|----------|
-| `get_activity_photos_empty` | 无照片时返回空数组 |
-| `get_activity_photos_time_match` | 时间在区间内、GPS 在轨迹 100m 内的照片被关联 |
-| `get_activity_photos_time_outside` | 时间在区间外的照片不关联，即使 GPS 位置很近 |
-| `get_activity_photos_too_far` | 时间在区间内但 GPS 距轨迹 > 500m 的照片不关联 |
-| `get_activity_photos_no_gps` | 无 GPS 的照片不关联 |
-| `get_activity_photos_sorted_by_time` | 返回列表按 taken_at 升序排列 |
+- 顶部导航新增 `<button data-view="activities">运动</button>`
+- 列表：类型筛选栏（全部/跑步/徒步/骑行…）+ 分页列表
+- 每条展示：类型图标、日期、标题、距离、时长、爬升（有数据时）、平均心率（有数据时）
+- 辅助函数：`formatDuration(s)`、`formatDistance(m)`、`formatPace(s,m)`、`activityTypeIcon(type)`
 
 ---
 
-## Step 41a — 前端：运动标签页 + 列表视图
-
-**目标**：导航栏新增「运动」标签，点击后展示运动列表。
-
-### HTML/JS 变更
-
-- 顶部导航新增 `<button id="tab-activities">运动</button>`，对应视图 `#view-activities`
-- 视图内：顶部类型筛选栏（全部 / 跑步 / 徒步 / 骑行 / 其他）+ 分页列表
-- 每条列表项展示：类型图标、日期、标题、距离、时长、爬升（有数据时）、平均心率（有数据时）
-- 点击列表项跳转运动详情视图
-
-**辅助函数**：
-- `formatDuration(seconds)` → "1:23:45"
-- `formatDistance(meters)` → "10.23 km"
-- `formatPace(seconds, meters)` → "5'32\"/km"（跑步/徒步用）或 "28.3 km/h"（骑行用）
-- `activityTypeIcon(type)` → emoji 或 SVG 图标
-
-**验收**：
-- 导航切换正常，无布局错位
-- 列表加载、分页、筛选功能正常
-- 空状态（无运动数据）有提示文字
-
----
-
-## Step 41b — 前端：运动详情 + Leaflet 地图 + 元数据
-
-**目标**：点击列表项后进入分屏详情视图，地图展示轨迹，右侧展示元数据。
-
-### 布局
+### 41b — 前端：运动详情 + Leaflet 地图 + 元数据
 
 ```
 ┌─────────────────────────────┬──────────────────┐
-│                             │  运动元数据       │
-│         Leaflet 地图        │  ─────────────── │
-│       （轨迹折线）          │  距离 / 时长     │
-│                             │  配速 / 心率     │
-│                             │  爬升 / 卡路里   │
-│                             │  设备 / 文件     │
-│                             │  ─────────────── │
-│                             │  关联照片（N张） │
-│                             │  [缩略图网格]    │
+│         Leaflet 地图（65%） │  运动元数据（35%）│
+│        （轨迹蓝色折线）     │  距离/时长/配速  │
+│                             │  心率/爬升/卡路里 │
+│                             │  设备/文件名     │
 └─────────────────────────────┴──────────────────┘
 ```
 
-### Leaflet 集成
-
-- 调用 `GET /api/activities/:id/track` 获取轨迹点，用 `L.polyline` 绘制，蓝色
-- 调用 `fitBounds` 自动缩放到轨迹包围盒
-- 不需要额外引入 Leaflet（项目地理视图已有）
-
-### 元数据渲染
-
-- 距离：`formatDistance(distance_meters)`
-- 时长：`formatDuration(duration_seconds)`
-- 配速/速度：依 `activity_type` 选择格式（running/hiking/trail_running → 配速，cycling → 速度）
-- 心率、爬升、卡路里、设备：有值时显示，null 时该行不渲染
-
-**验收**：
-- 地图正常渲染轨迹折线
-- 元数据信息齐全，格式正确
-- 左右分屏布局在常见窗口宽度下不错位
+- `GET /api/activities/:id/track` → `L.polyline` 绘制，`fitBounds` 自适应
+- 配速（running/hiking）：`duration_seconds / distance_meters * 1000 / 60` → `mm:ss /km`
+- 速度（cycling）：`distance_meters / duration_seconds * 3.6` → `X.X km/h`
+- NULL 字段不渲染对应行
 
 ---
 
-## Step 41c — 前端：照片标记 + 关联照片网格
+### 41c — 前端：照片标记 + 关联照片网格
 
-**目标**：地图上显示关联照片图标，右侧展示照片缩略图，点击可跳转详情。
-
-### 地图照片标记
-
-- 调用 `GET /api/activities/:id/photos` 获取关联照片（仅取有 GPS 的）
-- 每张照片用 `L.marker` 标注在地图上，图标为相机 emoji 或小缩略图
-- 点击标记弹出 Leaflet popup，显示 100×100 缩略图（复用 `GET /api/photos/:id/thumb`）
-- popup 内「查看照片」链接，点击切换到该照片的照片详情视图
-
-### 关联照片网格
-
-- 右侧元数据区下方展示「本次运动照片（N张）」
-- 同照片浏览视图缩略图网格样式（3列，正方形裁剪）
-- 按拍摄时间升序排列
-- 点击缩略图跳转照片详情
-- 0张时显示「本次运动无关联照片」
-
-**验收**：
-- 地图标记位置与照片 GPS 一致
-- popup 缩略图正常加载
-- 右侧网格与地图标记数量一致（GPS 照片同时出现在两处，无 GPS 照片仅出现在网格）
-- 点击跳转正常
+- `GET /api/activities/:id/photos` → 有 GPS 的照片用 `L.marker`（📷 图标）标注在地图上
+- popup 显示 100×100 缩略图（`/api/photos/:id/thumb`）+ "查看照片"链接
+- 右侧元数据区下方：「本次运动照片（N 张）」缩略图网格（3 列），按 taken_at 升序
+- 无 GPS 的关联照片仅出现在网格，不在地图上标注
 
 ---
 
-## Step 41d — 文档同步
+### 41d — 文档同步
 
-**目标**：所有文档与实现保持一致。
+- `DESIGN.md`：新增 4 个 API 端点 + activities/activity_track_points 表 schema
+- `ARCHITECTURE.md`：新增 `src/activities/` 模块说明
+- `CLAUDE.md`：更新目录结构、步骤表、关键陷阱（gpx::Time、FIT 半圆坐标、fitparser Timestamp）
 
-- **REQUIREMENTS.md**：确认运动记录章节与实现一致（特别是 API 路径、字段名）
-- **DESIGN.md**：新增 4 个 API 端点说明（`/api/activities` 相关）；新增 `activities` / `activity_track_points` 表 schema
-- **ARCHITECTURE.md**：新增 `src/activities/` 模块描述
-- **CLAUDE.md**：
-  - `src/` 目录结构中新增 `activities/` 模块
-  - 新增 FIT/GPX 解析关键细节（crate 版本、坐标转换、字段映射）
-  - 新增 `tests/samples/sample.fit` 说明
-  - 更新当前测试数量
+---
 
+## 待规划
+
+### Step 42 — TBD
+
+### Step 43 — TBD
