@@ -107,7 +107,7 @@ pub fn parse_fit(path: &Path) -> Result<ActivityData> {
     let records = fitparser::from_reader(&mut file).context("parse fit")?;
 
     let mut activity_type = "other".to_string();
-    let mut title: Option<String> = None;
+    let title: Option<String> = None;
     let mut duration_seconds: Option<i64> = None;
     let mut distance_meters: Option<f64> = None;
     let mut avg_heart_rate: Option<i64> = None;
@@ -144,13 +144,8 @@ pub fn parse_fit(path: &Path) -> Result<ActivityData> {
                 }
             }
             fitparser::profile::MesgNum::Activity => {
-                for field in record.fields() {
-                    if field.name() == "event" {
-                        if let fitparser::Value::String(s) = field.value() {
-                            title = Some(s.clone());
-                        }
-                    }
-                }
+                // Activity.event is always "activity" (a FIT protocol enum), not a user title.
+                // FIT files don't embed user-editable names; skip this field.
             }
             fitparser::profile::MesgNum::DeviceInfo => {
                 for field in record.fields() {

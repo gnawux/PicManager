@@ -243,7 +243,8 @@ async fn generate_title(
 pub async fn update_titles(pool: &SqlitePool, dry_run: bool) -> (usize, usize) {
     let rows: Vec<(i64, String, Option<String>, Option<f64>)> = sqlx::query_as(
         "SELECT id, activity_type, start_time, distance_meters
-         FROM activities WHERE title IS NULL AND import_status = 'imported'",
+         FROM activities
+         WHERE (title IS NULL OR title = 'activity') AND import_status = 'imported'",
     )
     .fetch_all(pool)
     .await
