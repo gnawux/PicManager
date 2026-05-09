@@ -1,4 +1,14 @@
 import ArgumentParser
+import Foundation
+
+/// Resolves a user-supplied executable path (absolute or relative) to an absolute URL.
+/// `URL(fileURLWithPath:)` preserves `..` literally, which causes Foundation's pre-flight
+/// existence check in `Process.run()` to resolve incorrectly. This function uses
+/// `standardized` after anchoring the path to CWD so `../foo` works as expected.
+func resolveExecutableURL(_ path: String) -> URL {
+    let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+    return URL(fileURLWithPath: path, relativeTo: cwd).standardized
+}
 
 @main
 @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)

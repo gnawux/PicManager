@@ -161,7 +161,7 @@ struct ExportCommand: AsyncParsableCommand {
 
     private func resolveRunner() -> PicManagerRunner? {
         if let path = picmanager {
-            return PicManagerRunner(executableURL: URL(fileURLWithPath: path))
+            return PicManagerRunner(executableURL: resolveExecutableURL(path))
         }
         if let url = PicManagerRunner.findInPath() {
             return PicManagerRunner(executableURL: url)
