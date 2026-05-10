@@ -1,6 +1,27 @@
 # PicManager
 
+## Project Overview
+
+This is a Rust photo manager application with a web frontend (HTML/JS/CSS). The backend uses cargo and the test suite is run with `cargo nextest run` (or `cargo test`).
+
 家庭照片与图片管理工具。支持自动整理、去重、按时间/地点/相机分相册，提供 Web 界面和命令行界面。
+
+## Workflow
+
+1. **Test before committing**: Always run the full test suite (`cargo nextest run`) after any code changes and confirm all tests pass before committing.
+2. **Update documentation**: After completing feature implementations or significant changes, update the relevant docs — `docs/ARCHITECTURE.md`, `docs/DESIGN.md`, `CLAUDE.md` — and `docs/FRONTEND.md` for frontend changes.
+
+## Development Approach
+
+Use TDD: write failing tests first, then implement the feature to make them pass.
+
+## Tool Usage
+
+Prefer the `Read` tool (with `offset`/`limit`) for viewing specific line ranges instead of `sed`, `head`, or `tail` — these require approval and are slower than the dedicated tool.
+
+## Testing
+
+When working with test fixtures, always copy files rather than moving them (`copy_only=true` in import calls, or `std::fs::copy` in tests) to avoid breaking other tests or requiring fixture regeneration.
 
 ## 技术栈
 
