@@ -102,6 +102,12 @@ enum ActivitiesAction {
         #[arg(long)]
         dry_run: bool,
     },
+    /// 从已保存的 FIT 文件重新读取设备名称和传感器信息（不改动标题/时间/轨迹点）
+    FixMetadata {
+        /// 预览模式：只统计数量，不实际修改数据库
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -228,6 +234,11 @@ async fn main() -> anyhow::Result<()> {
                 let label = if dry_run { "[dry-run] " } else { "" };
                 println!("{label}完成：{}标题 {updated}，无法生成（缺日期）{skipped}",
                     if dry_run { "可生成" } else { "已生成" });
+            }
+            ActivitiesAction::FixMetadata { dry_run } => {
+                let (fixed, skipped, failed) = activities::fix_metadata(&pool, dry_run).await;
+                let label = if dry_run { "[dry-run] " } else { "" };
+                println!("{label}完成：已修复 {fixed}，跳过（文件不存在/无法匹配）{skipped}，解析失败 {failed}");
             }
         },
         Command::Photos { action } => match action {

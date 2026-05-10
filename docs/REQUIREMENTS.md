@@ -422,6 +422,7 @@ picmanager activities import --dry-run <file_or_dir>  # 仅统计数量，不写
 picmanager activities sync-usb                        # 从 USB 连接的 Garmin 设备导入新文件
 picmanager activities sync-usb --device GARMIN        # 指定 USB 卷名（默认自动检测）
 picmanager activities update-titles [--dry-run]  # 为 title 为空的运动补全自动标题
+picmanager activities fix-metadata [--dry-run]   # 从已保存的 FIT 文件重新读取设备名称和传感器信息
 ```
 
 行为规范：

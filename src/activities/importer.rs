@@ -284,6 +284,93 @@ pub async fn update_titles(pool: &SqlitePool, dry_run: bool) -> (usize, usize) {
     (updated, skipped)
 }
 
+/// Re-read `device` and `sensors` from saved FIT files without touching any other fields.
+/// Returns `(fixed, skipped, failed)`.
+pub async fn fix_metadata(pool: &SqlitePool, dry_run: bool) -> (usize, usize, usize) {
+    let fit_rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, source_path FROM activities WHERE file_format = 'fit'",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    let (mut fixed, mut skipped, mut failed) = (0usize, 0usize, 0usize);
+
+    for (id, source_path) in &fit_rows {
+        let path = Path::new(source_path);
+        if !path.exists() {
+            tracing::warn!("fix-metadata: file not found for activity {id}: {source_path}");
+            skipped += 1;
+            continue;
+        }
+        match super::parser::parse_fit(path) {
+            Ok(data) => {
+                if !dry_run {
+                    let sensors_json: Option<String> = if data.sensors.is_empty() {
+                        None
+                    } else {
+                        serde_json::to_string(&data.sensors).ok()
+                    };
+                    sqlx::query("UPDATE activities SET device = ?, sensors = ? WHERE id = ?")
+                        .bind(&data.device)
+                        .bind(&sensors_json)
+                        .bind(id)
+                        .execute(pool)
+                        .await
+                        .ok();
+                }
+                fixed += 1;
+            }
+            Err(e) => {
+                tracing::warn!("fix-metadata: parse failed for activity {id}: {e}");
+                failed += 1;
+            }
+        }
+    }
+
+    // For merged activities with device=NULL, find an overlapping FIT source activity.
+    let merged_rows: Vec<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, start_time, end_time FROM activities
+         WHERE file_format = 'merged' AND device IS NULL
+           AND start_time IS NOT NULL AND end_time IS NOT NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for (id, start_time, end_time) in &merged_rows {
+        let device: Option<String> = sqlx::query_scalar(
+            "SELECT device FROM activities
+             WHERE file_format = 'fit' AND import_status = 'merged'
+               AND device IS NOT NULL
+               AND start_time <= ? AND end_time >= ?
+             ORDER BY start_time
+             LIMIT 1",
+        )
+        .bind(end_time)
+        .bind(start_time)
+        .fetch_optional(pool)
+        .await
+        .unwrap_or_default();
+
+        if let Some(device) = device {
+            if !dry_run {
+                sqlx::query("UPDATE activities SET device = ? WHERE id = ?")
+                    .bind(&device)
+                    .bind(id)
+                    .execute(pool)
+                    .await
+                    .ok();
+            }
+            fixed += 1;
+        } else {
+            skipped += 1;
+        }
+    }
+
+    (fixed, skipped, failed)
+}
+
 pub async fn import_dir_activities(
     pool: &SqlitePool,
     dir: &Path,
