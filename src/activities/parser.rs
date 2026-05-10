@@ -1,6 +1,17 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use std::path::Path;
+
+/// An external sensor connected via ANT+ during the activity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SensorInfo {
+    pub sensor_type: String,           // "heart_rate", "bike_power", "bike_cadence", etc.
+    pub name: Option<String>,          // product_name or garmin_product
+    pub manufacturer: Option<String>,
+    pub battery_level: Option<i64>,   // 0–100 (not always available)
+    pub battery_status: Option<String>, // "good", "ok", "low", "critical"
+}
 
 #[derive(Debug, Clone)]
 pub struct TrackPoint {
@@ -27,7 +38,38 @@ pub struct ActivityData {
     pub max_heart_rate: Option<i64>,
     pub calories: Option<i64>,
     pub device: Option<String>,
+    pub sensors: Vec<SensorInfo>,
     pub track_points: Vec<TrackPoint>,
+}
+
+/// Intermediate accumulator for a single device_info record.
+#[derive(Debug, Default, Clone)]
+struct DeviceRaw {
+    source_type: Option<String>,
+    manufacturer: Option<String>,
+    garmin_product: Option<String>,
+    product_name: Option<String>,
+    software_version: Option<f64>,
+    antplus_device_type: Option<String>,
+    battery_status: Option<String>,
+    battery_level: Option<i64>,
+}
+
+fn merge_device_raw(dst: &mut DeviceRaw, src: DeviceRaw) {
+    // Prefer the first non-None value for each field.
+    macro_rules! take {
+        ($field:ident) => {
+            if dst.$field.is_none() { dst.$field = src.$field; }
+        };
+    }
+    take!(source_type);
+    take!(manufacturer);
+    take!(garmin_product);
+    take!(product_name);
+    take!(software_version);
+    take!(antplus_device_type);
+    take!(battery_status);
+    take!(battery_level);
 }
 
 pub fn parse_gpx(path: &Path) -> Result<ActivityData> {
@@ -98,6 +140,7 @@ pub fn parse_gpx(path: &Path) -> Result<ActivityData> {
         max_heart_rate: None,
         calories: None,
         device: None,
+        sensors: vec![],
         track_points,
     })
 }
@@ -113,7 +156,8 @@ pub fn parse_fit(path: &Path) -> Result<ActivityData> {
     let mut avg_heart_rate: Option<i64> = None;
     let mut max_heart_rate: Option<i64> = None;
     let mut calories: Option<i64> = None;
-    let mut device: Option<String> = None;
+    // device_index → DeviceRaw (accumulate across duplicate device_info messages)
+    let mut devices: std::collections::HashMap<String, DeviceRaw> = std::collections::HashMap::new();
     let mut track_points: Vec<TrackPoint> = Vec::new();
 
     for record in &records {
@@ -148,14 +192,60 @@ pub fn parse_fit(path: &Path) -> Result<ActivityData> {
                 // FIT files don't embed user-editable names; skip this field.
             }
             fitparser::profile::MesgNum::DeviceInfo => {
+                let mut idx = String::new();
+                let mut raw = DeviceRaw::default();
                 for field in record.fields() {
-                    if field.name() == "product_name" {
-                        if let fitparser::Value::String(s) = field.value() {
-                            if !s.is_empty() {
-                                device = Some(s.clone());
+                    match field.name() {
+                        "device_index" => {
+                            idx = match field.value() {
+                                fitparser::Value::String(s) => s.clone(),
+                                fitparser::Value::UInt8(0) => "creator".to_string(),
+                                fitparser::Value::UInt8(n) => n.to_string(),
+                                v => format!("{v:?}"),
+                            };
+                        }
+                        "source_type" => {
+                            if let fitparser::Value::String(s) = field.value() {
+                                raw.source_type = Some(s.clone());
                             }
                         }
+                        "manufacturer" => {
+                            if let fitparser::Value::String(s) = field.value() {
+                                raw.manufacturer = Some(s.clone());
+                            }
+                        }
+                        "garmin_product" => {
+                            if let fitparser::Value::String(s) = field.value() {
+                                if !s.is_empty() { raw.garmin_product = Some(s.clone()); }
+                            }
+                        }
+                        "product_name" => {
+                            if let fitparser::Value::String(s) = field.value() {
+                                if !s.is_empty() { raw.product_name = Some(s.clone()); }
+                            }
+                        }
+                        "software_version" => {
+                            raw.software_version = value_as_f64(field.value());
+                        }
+                        "antplus_device_type" => {
+                            if let fitparser::Value::String(s) = field.value() {
+                                if !s.is_empty() { raw.antplus_device_type = Some(s.clone()); }
+                            }
+                        }
+                        "battery_status" => {
+                            if let fitparser::Value::String(s) = field.value() {
+                                raw.battery_status = Some(s.clone());
+                            }
+                        }
+                        "battery_level" => {
+                            raw.battery_level = value_as_f64(field.value()).map(|f| f as i64);
+                        }
+                        _ => {}
                     }
+                }
+                if !idx.is_empty() {
+                    let entry = devices.entry(idx).or_insert_with(DeviceRaw::default);
+                    merge_device_raw(entry, raw);
                 }
             }
             fitparser::profile::MesgNum::Record => {
@@ -222,6 +312,40 @@ pub fn parse_fit(path: &Path) -> Result<ActivityData> {
         distance_meters = compute_distance_m(&track_points);
     }
 
+    // Extract main device name from "creator" (device_index 0) entry.
+    // Prefer product_name > garmin_product; append firmware version if available.
+    let creator = devices.get("creator")
+        .or_else(|| devices.values().find(|d| {
+            d.source_type.as_deref() == Some("local") && d.garmin_product.is_some()
+        }));
+    let device = creator.and_then(|d| {
+        let base = d.product_name.clone()
+            .or_else(|| d.garmin_product.as_ref().map(|p| format_product_name(p, d.manufacturer.as_deref())));
+        base.map(|b| match d.software_version {
+            Some(v) => format!("{b} (v{v:.2})"),
+            None => b,
+        })
+    });
+
+    // Collect external ANT+ sensors (deduplicated by device_index already).
+    let mut sensors: Vec<SensorInfo> = devices.values()
+        .filter(|d| d.source_type.as_deref() == Some("antplus"))
+        .filter(|d| d.antplus_device_type.is_some())
+        .map(|d| {
+            let name = d.product_name.clone()
+                .or_else(|| d.garmin_product.as_ref().map(|p| format_product_name(p, d.manufacturer.as_deref())));
+            SensorInfo {
+                sensor_type: d.antplus_device_type.clone().unwrap_or_default(),
+                name,
+                manufacturer: d.manufacturer.clone(),
+                battery_level: d.battery_level,
+                battery_status: d.battery_status.clone(),
+            }
+        })
+        .collect();
+    // Stable ordering: sort by sensor_type so output is deterministic.
+    sensors.sort_by(|a, b| a.sensor_type.cmp(&b.sensor_type));
+
     Ok(ActivityData {
         file_format: "fit".to_string(),
         title,
@@ -235,8 +359,47 @@ pub fn parse_fit(path: &Path) -> Result<ActivityData> {
         max_heart_rate,
         calories,
         device,
+        sensors,
         track_points,
     })
+}
+
+/// Format a raw FIT product name into a human-readable string.
+/// "fenix7" → "Fenix 7", "edge_explore2" → "Edge Explore 2"
+fn format_product_name(raw: &str, manufacturer: Option<&str>) -> String {
+    let words: Vec<String> = raw.split(|c: char| c == '_' || c == ' ')
+        .filter(|s| !s.is_empty())
+        .map(|part| {
+            // Insert space before digit runs: "fenix7" → "Fenix 7"
+            let mut out = String::new();
+            let mut prev_alpha = false;
+            for (i, c) in part.chars().enumerate() {
+                if i == 0 {
+                    out.extend(c.to_uppercase());
+                } else if c.is_ascii_digit() && prev_alpha {
+                    out.push(' ');
+                    out.push(c);
+                } else {
+                    out.push(c);
+                }
+                prev_alpha = c.is_alphabetic();
+            }
+            out
+        })
+        .collect();
+    let product = words.join(" ");
+    // Prepend manufacturer if it's a recognizable brand and the product doesn't already start with it.
+    match manufacturer {
+        Some(m) if !m.is_empty() && !m.eq_ignore_ascii_case("garmin") => {
+            let brand: String = {
+                let mut s = m.to_string();
+                if let Some(c) = s.get_mut(0..1) { c.make_ascii_uppercase(); }
+                s
+            };
+            format!("{brand} {product}")
+        }
+        _ => product,
+    }
 }
 
 fn fit_value_to_sport(v: &fitparser::Value) -> String {
@@ -418,3 +581,20 @@ mod tests {
         assert_eq!(fit_sport_code_to_type(99), "other");
     }
 }
+
+    #[test]
+    fn parse_fit_real_extracts_device_and_sensors() {
+        let fit_path = std::path::Path::new(
+            "/Volumes/PLATEA/Pictures/PicManager/.activities/2025/521040895_ACTIVITY.fit"
+        );
+        if !fit_path.exists() { return; }
+        let data = parse_fit(fit_path).unwrap();
+        // Device should be non-empty (Edge Explore 2)
+        println!("device: {:?}", data.device);
+        assert!(data.device.is_some(), "device should be extracted");
+        // Should have at least one external sensor (HR or power)
+        println!("sensors: {:?}", data.sensors);
+        assert!(!data.sensors.is_empty(), "sensors should be non-empty for this cycling file");
+        // Heart rate sensor should be present
+        assert!(data.sensors.iter().any(|s| s.sensor_type == "heart_rate"));
+    }

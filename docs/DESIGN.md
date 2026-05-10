@@ -104,6 +104,7 @@ migrations/
   0015_collections.sql     albums.kind 列（'auto' / 'curated'）
   0016_people_extras.sql   people 额外字段
   0017_activities.sql      activities 表（运动记录元数据）+ activity_track_points 表（GPS 轨迹点）
+  0018_activity_sensors.sql  activities.sensors TEXT 列（ANT+ 传感器 JSON 数组）
 docs/
   REQUIREMENTS.md
   PLAN.md

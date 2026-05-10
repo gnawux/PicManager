@@ -65,7 +65,7 @@ src/
     detector.rs        detect(img) -> Vec<AnimalDetection>；YOLOv8-nano，OnceLock<Mutex<Session>>
   activities/
     mod.rs             公开接口；import_dir_activities()、import_one()、ImportSummary、ActivityData、TrackPoint
-    parser.rs          parse_fit()（fitparser 0.10）、parse_gpx()（gpx 0.10）；FIT 半圆坐标转换；gpx::Time → chrono 字符串绕转
+    parser.rs          parse_fit()（fitparser 0.10）、parse_gpx()（gpx 0.10）；FIT 半圆坐标转换；gpx::Time → chrono 字符串绕转；SensorInfo + DeviceRaw；format_product_name()
     importer.rs        scan_dir()；SHA-256 去重；copy 到 .activities/yyyy/；批量插入轨迹点（chunk 500）
     rdp.rs             simplify()；Ramer-Douglas-Peucker 算法（epsilon=1e-5°）
   web/
@@ -94,6 +94,8 @@ migrations/
   0008_geocache_hierarchy.sql geocache 新增 country/state/county 列
   0009_animals.sql     animals 表（动物检测结果，photo_id/species/confidence/bbox）
   0010_people_status.sql  people.status 列（active / ignored / not_a_person）
+  0017_activities.sql  activities 表（运动记录元数据）+ activity_track_points 表（GPS 轨迹点）
+  0018_activity_sensors.sql  activities.sensors TEXT 列（ANT+ 传感器 JSON 数组，SensorInfo[]）
 tests/
   web_api.rs           Web API 集成测试（tower::ServiceExt::oneshot）
   fixtures/            测试 fixture JPEG 文件（由 make_fixtures.py 生成）
@@ -287,9 +289,10 @@ sips --out /tmp/out.jpg file.heic && exiftool -n -Orientation /tmp/out.jpg  # si
 | 39g | fix(activities): FIT title 不再使用 Activity.event 字段（始终为 "activity"），改为 NULL 触发自动生成；update_titles 同时覆盖 title='activity' 的存量记录 |
 | 39h | feat(activities): 自动标题生成（{运动类型}-{MM-DD}-{距离}@{城市}）；geocache city→county→state→country 回退；CLI `picmanager activities update-titles [--dry-run]` |
 | 39i | feat(activities): trim 剪辑功能；POST /api/activities/:id/trim；前端全屏剪辑弹窗（Leaflet 地图实时预览 + canvas 把手拖拽 + 不可撤销确认） |
-| 40 | feat(activities): 合并运动；POST /api/activities/merge（同类型、无时间重叠、软删除源记录）；前端多选模式 + 合并确认框（统计预览、可编辑标题）；4 个 TDD 测试 |
+| 40a | feat(activities): merge 合并功能；POST /api/activities/merge（同类型、无重叠时间、2+ 条）；加权合并统计；前端多选模式 + 合并弹窗；4 个 TDD 测试 |
+| 40b | feat(activities): migration 0018（sensors 列）；FIT DeviceInfo 完整解析（garmin_product + software_version + ANT+ 传感器）；SensorInfo 结构体；前端设备+传感器元数据展示（图标+电量） |
 
-当前测试数：**361 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**365 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 
@@ -633,6 +636,19 @@ GPS 坐标 `position_lat` / `position_long` 的原始值是 32-bit 半圆（semi
 ```rust
 degrees = semicircles_value * (180.0 / 2_147_483_648.0)
 ```
+
+**FIT DeviceInfo：device_index 键值多态**
+
+FIT 文件中每个 `DeviceInfo` message 的 `device_index` 字段可能有两种表示：
+
+- 主设备（记录器）：`Value::String("creator")` 或 `Value::UInt8(0)` — 两者均映射到 `"creator"` key
+- 外接传感器：`Value::UInt8(n)`（n ≥ 1）— 映射到 `n.to_string()` 作为 key
+
+同一设备可能跨会话边界多次发出 `DeviceInfo`，用 `HashMap<String, DeviceRaw>` 累积、"first non-None wins" 合并策略（`merge_device_raw!` 宏）处理重复消息。
+
+主设备提取：优先 `product_name`（用户可读字符串），次用 `garmin_product`（枚举 slug，经 `format_product_name()` 格式化后追加 `software_version`）。
+
+外接传感器（ANT+ 设备）通过 `antplus_device_type` 字段识别类型（`heart_rate` / `bike_power` / `bike_cadence` / `bike_speed` 等），序列化为 `sensors TEXT`（JSON 数组）存储，详情页加载时反序列化展示。
 
 ### sqlx 动态 IN 子句
 

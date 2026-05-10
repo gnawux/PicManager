@@ -3028,6 +3028,58 @@ async function showActivityDetail(id) {
   renderActivityPhotos(photosData, trackData);
 }
 
+const SENSOR_ICONS = {
+  heart_rate: '🫀',
+  bike_power: '⚡',
+  bike_cadence: '🔄',
+  bike_speed: '📡',
+  bike_speed_cadence: '📡',
+  footpod: '👟',
+  stride_speed_distance: '👟',
+  muscle_oxygen: '💧',
+  running_dynamics: '📊',
+};
+const SENSOR_NAMES = {
+  heart_rate: '心率',
+  bike_power: '功率计',
+  bike_cadence: '踏频',
+  bike_speed: '速度',
+  bike_speed_cadence: '速踏频',
+  footpod: '足舱',
+  stride_speed_distance: '步频',
+  muscle_oxygen: '肌氧',
+  running_dynamics: '跑步动态',
+};
+const BATTERY_STATUS_ZH = { good: '充足', ok: '正常', low: '偏低', critical: '严重不足', unknown: '未知' };
+
+function formatSensorBattery(sensor) {
+  if (sensor.battery_level != null) return `${sensor.battery_level}%`;
+  if (sensor.battery_status) return BATTERY_STATUS_ZH[sensor.battery_status] || sensor.battery_status;
+  return null;
+}
+
+function formatSensorName(sensor) {
+  // product name or fall back to a capitalised manufacturer label
+  if (sensor.name) return sensor.name;
+  if (sensor.manufacturer) {
+    return sensor.manufacturer.charAt(0).toUpperCase() + sensor.manufacturer.slice(1);
+  }
+  return null;
+}
+
+function renderSensors(sensors) {
+  if (!sensors || sensors.length === 0) return '';
+  const items = sensors.map(s => {
+    const icon = SENSOR_ICONS[s.sensor_type] || '📡';
+    const label = SENSOR_NAMES[s.sensor_type] || s.sensor_type;
+    const name = formatSensorName(s);
+    const battery = formatSensorBattery(s);
+    let detail = [name, battery ? `${battery}电量` : null].filter(Boolean).join(' · ');
+    return `<div class="act-sensor-item">${icon} <span class="act-sensor-label">${label}</span>${detail ? `<span class="act-sensor-detail">${detail}</span>` : ''}</div>`;
+  }).join('');
+  return `<div class="act-meta-row"><span class="act-meta-label">传感器</span><span class="act-meta-value"><div class="act-sensor-list">${items}</div></span></div>`;
+}
+
 function renderActivityMeta(act) {
   const meta = document.getElementById('act-meta');
   const rows = [
@@ -3046,6 +3098,7 @@ function renderActivityMeta(act) {
   meta.innerHTML = rows.map(([label, value]) =>
     `<div class="act-meta-row"><span class="act-meta-label">${label}</span><span class="act-meta-value">${value}</span></div>`
   ).join('') +
+  renderSensors(act.sensors) +
   `<div style="margin-top:10px">
      <a href="#" style="font-size:12px;color:#3b82f6" onclick="openTrimModal(${act.id});return false">✂ 剪辑运动</a>
    </div>`;

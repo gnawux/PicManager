@@ -528,6 +528,10 @@ dialog .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .act-meta-row { display: flex; gap: 8px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
 .act-meta-label { color: #888; flex-shrink: 0; min-width: 80px; }
 .act-meta-value { color: #222; font-weight: 500; }
+.act-sensor-list { display: flex; flex-direction: column; gap: 3px; }
+.act-sensor-item { display: flex; align-items: center; gap: 5px; font-weight: 500; }
+.act-sensor-label { color: #374151; }
+.act-sensor-detail { color: #6b7280; font-weight: 400; font-size: 12px; }
 
 #act-photos-section h3 { font-size: 13px; font-weight: 600; margin-bottom: 8px; color: #555; }
 #act-photos-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 4px; grid-auto-rows: max-content; align-items: start; }

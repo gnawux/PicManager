@@ -100,13 +100,18 @@ pub async fn import_one(
     let source_path = dest_path.to_string_lossy().to_string();
     let start_str = data.start_time.map(|t| t.to_rfc3339());
     let end_str = data.end_time.map(|t| t.to_rfc3339());
+    let sensors_json: Option<String> = if data.sensors.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&data.sensors).ok()
+    };
 
     let activity_id: i64 = sqlx::query_scalar(
         "INSERT INTO activities \
          (sha256, source_path, file_format, title, activity_type, \
           start_time, end_time, duration_seconds, distance_meters, elevation_gain_meters, \
-          avg_heart_rate, max_heart_rate, calories, device, import_status) \
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'imported') RETURNING id",
+          avg_heart_rate, max_heart_rate, calories, device, sensors, import_status) \
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'imported') RETURNING id",
     )
     .bind(&sha256)
     .bind(&source_path)
@@ -122,6 +127,7 @@ pub async fn import_one(
     .bind(data.max_heart_rate)
     .bind(data.calories)
     .bind(&data.device)
+    .bind(&sensors_json)
     .fetch_one(pool)
     .await?;
 

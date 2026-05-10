@@ -40,6 +40,8 @@ pub struct ActivityItem {
     pub calories: Option<i64>,
     pub device: Option<String>,
     pub file_format: String,
+    /// Sensors JSON parsed from DB — only populated by `get_activity` (detail view).
+    pub sensors: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -157,6 +159,7 @@ pub async fn list_activities(
                 calories,
                 device,
                 file_format,
+                sensors: None,
             }
         })
         .collect();
@@ -168,11 +171,11 @@ pub async fn get_activity(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<ActivityItem>, StatusCode> {
-    let row: Option<(i64, Option<String>, String, Option<String>, Option<String>, Option<i64>, Option<f64>, Option<f64>, Option<i64>, Option<i64>, Option<i64>, Option<String>, String)> =
+    let row: Option<(i64, Option<String>, String, Option<String>, Option<String>, Option<i64>, Option<f64>, Option<f64>, Option<i64>, Option<i64>, Option<i64>, Option<String>, String, Option<String>)> =
         sqlx::query_as(
             "SELECT id, title, activity_type, start_time, end_time, duration_seconds,
              distance_meters, elevation_gain_meters, avg_heart_rate, max_heart_rate,
-             calories, device, file_format
+             calories, device, file_format, sensors
              FROM activities WHERE id=? AND import_status='imported'",
         )
         .bind(id)
@@ -180,8 +183,12 @@ pub async fn get_activity(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (id, title, activity_type, start_time, end_time, duration_seconds, distance_meters, elevation_gain_meters, avg_heart_rate, max_heart_rate, calories, device, file_format) =
+    let (id, title, activity_type, start_time, end_time, duration_seconds, distance_meters, elevation_gain_meters, avg_heart_rate, max_heart_rate, calories, device, file_format, sensors_json) =
         row.ok_or(StatusCode::NOT_FOUND)?;
+
+    let sensors = sensors_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok());
 
     Ok(Json(ActivityItem {
         id,
@@ -197,6 +204,7 @@ pub async fn get_activity(
         calories,
         device,
         file_format,
+        sensors,
     }))
 }
 
