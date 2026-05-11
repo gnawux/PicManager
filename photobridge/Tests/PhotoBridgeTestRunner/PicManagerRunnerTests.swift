@@ -2,6 +2,37 @@ import Foundation
 import PhotoBridgeLib
 
 func runPicManagerRunnerTests() {
+    suite("resolveExecutableURL") {
+        test("absolute path returned unchanged") {
+            let url = resolveExecutableURL("/usr/local/bin/picmanager")
+            try expect(url.path == "/usr/local/bin/picmanager", "absolute path unchanged")
+        }
+
+        test("relative path resolved against CWD") {
+            let cwd = FileManager.default.currentDirectoryPath
+            let url = resolveExecutableURL("target/release/picmanager")
+            try expect(url.path == "\(cwd)/target/release/picmanager", "simple relative path")
+        }
+
+        test("parent-relative path (../) resolved correctly") {
+            // This is the regression case: ../target/release/picmanager must go UP one
+            // directory from CWD, not drop the .. and stay in CWD.
+            let cwd = FileManager.default.currentDirectoryPath
+            let parent = (cwd as NSString).deletingLastPathComponent
+            let url = resolveExecutableURL("../target/release/picmanager")
+            try expect(url.path == "\(parent)/target/release/picmanager",
+                       ".. correctly backs up one directory (got \(url.path))")
+        }
+
+        test("multiple .. segments resolved correctly") {
+            let cwd = FileManager.default.currentDirectoryPath
+            let grandparent = ((cwd as NSString).deletingLastPathComponent as NSString).deletingLastPathComponent
+            let url = resolveExecutableURL("../../bin/picmanager")
+            try expect(url.path == "\(grandparent)/bin/picmanager",
+                       "multiple .. resolved (got \(url.path))")
+        }
+    }
+
     suite("PicManagerRunner NDJSON parsing") {
         test("all-imported log → all in succeededPaths") {
             let log = """

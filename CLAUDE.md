@@ -690,6 +690,26 @@ let result = q.execute(&pool).await?;
 
 注意用 `sqlx::query`（非宏版本），且 `rows_affected()` 是 `u64`，与 `ids.len()` 比较时需转型。
 
+### SQLite 绑定变量上限（999）：大批量 IN 子句必须分块
+
+SQLite 默认限制单条语句的绑定变量数为 **999**。当 `IN (?, ?, ...)` 的参数来自可能很大的集合（如一次导入 10000 张照片后的地理编码），必须分块查询：
+
+```rust
+const CHUNK: usize = 500;
+let mut results = Vec::new();
+for chunk in ids.chunks(CHUNK) {
+    let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!("SELECT ... WHERE id IN ({placeholders})");
+    let mut q = sqlx::query_as::<_, Row>(&sql);
+    for id in chunk { q = q.bind(id); }
+    results.extend(q.fetch_all(pool).await?);
+}
+```
+
+**已踩坑**：`group_by_location_scoped` 导入 10000 张照片后，`newly_imported_ids` 全部传入 IN 子句，触发 `too many SQL variables` 错误，导入结束阶段地理编码报错退出。
+
+**规则**：任何可能接收来自整批导入结果的 ID 列表的 IN 查询，都必须加分块逻辑。
+
 ### NMS 结果收集不能用 Vec::remove
 
 `Vec::remove(i)` 会把后续元素前移，对 NMS 返回的原始索引集合逐一调用会导致越界 panic（移除第一个元素后，后续原始索引全部偏移）。
@@ -977,6 +997,35 @@ PHAsset.localIdentifier = "B5A8F3C2-1234-5678-ABCD-000000000001/L0/001"
 - `"failed"`   → 失败，保留暂存文件等下次重试
 
 Swift 侧 `parseImportLog()` 解析此格式；未知 status 归入 failedPaths（保守处理）。
+
+### PhotoBridge：`URL.standardized` 不能正确解析 `..` — 用 NSString 路径 API
+
+Swift Foundation 的 `URL.standardized` 对含 `..` 的路径处理有缺陷：它**删除 `..` 组件，但不退一级目录**。例如：
+
+```swift
+// URL.standardized 的错误行为
+// cwd = /a/b/photobridge
+URL(fileURLWithPath: "../target/bin", relativeTo: cwd).standardized
+// → /a/b/photobridge/target/bin   ✗（.. 被删除但未退目录）
+```
+
+正确做法是用 `NSString` 的路径 API，它能正确处理 `..`：
+
+```swift
+func resolveExecutableURL(_ path: String) -> URL {
+    let nsPath = path as NSString
+    let absolute = nsPath.isAbsolutePath
+        ? path
+        : (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(path)
+    return URL(fileURLWithPath: (absolute as NSString).standardizingPath)
+}
+```
+
+**已踩坑**：`--picmanager ../target/release/picmanager` 经 `URL.standardized` 解析后变成 `photobridge/target/release/picmanager`，触发 "The file doesn't exist" 错误（两次修复才根治）。
+
+**规则**：Swift 中解析含 `..` 的用户输入路径，必须用 `NSString.appendingPathComponent` + `NSString.standardizingPath`，不要用 `URL(fileURLWithPath:relativeTo:).standardized`。
+
+**可测试性**：`resolveExecutableURL` 定义在 `PhotoBridgeLib`（而非 `PhotoBridge` 可执行 target），以便测试 target 能直接导入验证。
 
 ## 常用命令
 

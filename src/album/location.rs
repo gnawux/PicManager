@@ -276,17 +276,22 @@ pub async fn group_by_location_scoped(
         return Ok(());
     }
 
-    let placeholders = photo_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT id, gps_lat, gps_lon FROM photos \
-         WHERE id IN ({placeholders}) AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL \
-         ORDER BY gps_lat, gps_lon"
-    );
-    let mut q = sqlx::query_as::<_, (i64, f64, f64)>(&sql);
-    for id in photo_ids {
-        q = q.bind(id);
+    // SQLite limits bind variables to 999; chunk to stay well under that limit.
+    const CHUNK: usize = 500;
+    let mut photos: Vec<(i64, f64, f64)> = Vec::with_capacity(photo_ids.len());
+    for chunk in photo_ids.chunks(CHUNK) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, gps_lat, gps_lon FROM photos \
+             WHERE id IN ({placeholders}) AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL"
+        );
+        let mut q = sqlx::query_as::<_, (i64, f64, f64)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        photos.extend(q.fetch_all(pool).await?);
     }
-    let photos = q.fetch_all(pool).await?;
+    photos.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap().then(a.2.partial_cmp(&b.2).unwrap()));
 
     geo_total.store(photos.len(), Relaxed);
 
