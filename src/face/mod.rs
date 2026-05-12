@@ -2,6 +2,7 @@ pub mod cluster;
 pub mod detector;
 pub mod embedder;
 pub mod job;
+pub mod pca;
 
 pub use detector::{detect, FaceRegion};
 pub use embedder::Embedder;

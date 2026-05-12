@@ -81,6 +81,7 @@ src/
     embedder.rs        Embedder::load(path)/extract(img, region) -> Vec<f32> 512D L2归一化
     job.rs             run_job(pool, scope) -> job_id；execute_job() pub(crate) 供测试调用
     cluster.rs         DBSCAN 聚类（cosine 距离），run_clustering(pool)
+    pca.rs             pca_2d(embeddings) -> Vec<(id,x,y)>；power iteration 求前 2 主成分；坐标归一化到 [−1,1]
   animal/
     mod.rs             detect_and_save(pool, photo_id, img)，模型不存在时静默跳过
     detector.rs        detect(img) -> Vec<AnimalDetection>；YOLOv8-nano，OnceLock<Mutex<Session>>
@@ -313,8 +314,11 @@ sips --out /tmp/out.jpg file.heic && exiftool -n -Orientation /tmp/out.jpg  # si
 | 40a | feat(activities): merge 合并功能；POST /api/activities/merge（同类型、无重叠时间、2+ 条）；加权合并统计；前端多选模式 + 合并弹窗；4 个 TDD 测试 |
 | 40b | feat(activities): migration 0018（sensors 列）；FIT DeviceInfo 完整解析（garmin_product + software_version + ANT+ 传感器）；SensorInfo 结构体；前端设备+传感器元数据展示（图标+电量） |
 | 40c | fix(activities): `picmanager activities fix-metadata [--dry-run]`；从已保存 FIT 文件重新读取 device/sensors（不动标题/时间/轨迹点）；merged 活动从重叠的 FIT 源活动补填 device |
+| 41a | feat(face/pca): `pca_2d()`，power iteration 求前 2 主成分，坐标归一化到 [−1,1]；6 个单元测试 |
+| 41b | feat(people): `GET /api/people/{id}/embedding-map`，递归 CTE 取子树所有人脸 embedding，调用 pca_2d，返回含 face_id/photo_id/person_id/x/y/confidence/taken_at 的点集；5 个集成测试 |
+| 41c/d | feat(frontend): 人物详情页"分布图"折叠面板；Canvas 渲染散点图，颜色区分子人物（透明度按置信度）；hover 气泡（人脸缩略图+日期+置信度+人物名）；点击跳转照片详情；右上角图例 |
 
-当前测试数：**365 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
+当前测试数：**373 个**（`cargo nextest run` 全部通过，另有 1 个 `#[ignore]` 需 yolov8n.onnx）
 
 ## 关键实现细节（避免踩坑）
 

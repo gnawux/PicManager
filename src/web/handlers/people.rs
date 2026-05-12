@@ -1125,6 +1125,115 @@ pub async fn eject_face(
     Ok(Json(EjectFaceResponse { new_person_id }))
 }
 
+// ── embedding-map ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize)]
+pub struct EmbeddingPoint {
+    pub face_id: i64,
+    pub photo_id: i64,
+    pub person_id: i64,
+    pub x: f32,
+    pub y: f32,
+    pub confidence: f32,
+    pub taken_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct EmbeddingMapResponse {
+    pub points: Vec<EmbeddingPoint>,
+    pub total: usize,
+}
+
+pub async fn get_embedding_map(
+    State(state): State<AppState>,
+    Path(person_id): Path<i64>,
+) -> Result<Json<EmbeddingMapResponse>, StatusCode> {
+    use crate::face::embedder::decode_embedding;
+    use crate::face::pca::pca_2d;
+
+    // 404 if person doesn't exist
+    let exists: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM people WHERE id = ?")
+        .bind(person_id)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if exists.0 == 0 {
+        return Err(StatusCode::NOT_FOUND);
+    }
+
+    // Fetch faces for person and all descendants via recursive CTE
+    let rows: Vec<(i64, i64, i64, Vec<u8>, f32)> = sqlx::query_as(
+        "WITH RECURSIVE subtree(id) AS (
+           SELECT id FROM people WHERE id = ?
+           UNION ALL
+           SELECT p.id FROM people p JOIN subtree s ON p.parent_id = s.id
+         )
+         SELECT f.id, f.photo_id, pf.person_id, f.embedding, COALESCE(f.confidence, 0.0)
+         FROM person_faces pf
+         JOIN faces f ON f.id = pf.face_id
+         JOIN subtree s ON pf.person_id = s.id
+         WHERE f.embedding IS NOT NULL",
+    )
+    .bind(person_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if rows.is_empty() {
+        return Ok(Json(EmbeddingMapResponse { points: vec![], total: 0 }));
+    }
+
+    // Decode embeddings and project to 2D
+    let emb_input: Vec<(i64, Vec<f32>)> = rows
+        .iter()
+        .map(|(face_id, _, _, bytes, _)| (*face_id, decode_embedding(bytes)))
+        .collect();
+    let coords: std::collections::HashMap<i64, (f32, f32)> = pca_2d(&emb_input)
+        .into_iter()
+        .map(|(id, x, y)| (id, (x, y)))
+        .collect();
+
+    // Batch-fetch taken_at (chunk to stay under SQLite's 999-variable limit)
+    let photo_ids: Vec<i64> = rows.iter().map(|(_, pid, _, _, _)| *pid).collect();
+    let mut taken_at_map: std::collections::HashMap<i64, Option<String>> =
+        std::collections::HashMap::new();
+    const CHUNK: usize = 500;
+    for chunk in photo_ids.chunks(CHUNK) {
+        let placeholders = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT id, taken_at FROM photos WHERE id IN ({placeholders})");
+        let mut q = sqlx::query_as::<_, (i64, Option<String>)>(&sql);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        let chunk_rows = q
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        for (id, ta) in chunk_rows {
+            taken_at_map.insert(id, ta);
+        }
+    }
+
+    let total = rows.len();
+    let points = rows
+        .into_iter()
+        .filter_map(|(face_id, photo_id, pid, _, confidence)| {
+            let (x, y) = *coords.get(&face_id)?;
+            Some(EmbeddingPoint {
+                face_id,
+                photo_id,
+                person_id: pid,
+                x,
+                y,
+                confidence,
+                taken_at: taken_at_map.get(&photo_id).and_then(|v| v.clone()),
+            })
+        })
+        .collect();
+
+    Ok(Json(EmbeddingMapResponse { points, total }))
+}
+
 pub async fn lift_person(
     State(state): State<AppState>,
     Path(id): Path<i64>,

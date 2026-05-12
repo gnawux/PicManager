@@ -1535,6 +1535,9 @@ async function showPersonDetail(personId) {
   // Load centroid photo IDs for highlight
   await loadCentroidPhotoIds(personId);
   renderPersonDetailPhotos(state.personDetailPhotos);
+
+  // Lazy-load embedding map (reset collapsed panel; data loads on expand)
+  resetEmbeddingMapPanel(personId);
 }
 
 async function loadCentroidPhotoIds(personId) {
@@ -1567,6 +1570,186 @@ function renderCentroidStats(data) {
   // Show panel even if no outlier faces, so centroid stats are always accessible
   panel.classList.remove('hidden');
 }
+
+// ── Embedding map ─────────────────────────────────────────────────────────────
+
+const EMB_COLORS = ['#4c72b0','#dd8452','#55a868','#c44e52','#8172b2','#937860','#da8bc3','#8c8c8c'];
+const EMB_CANVAS_H = 360;
+const EMB_POINT_R  = 6;   // hit radius for hover/click
+let   embMapState  = null; // { points, personColorMap, canvas, tooltip context }
+
+function resetEmbeddingMapPanel(personId) {
+  const panel = document.getElementById('embedding-map-panel');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  panel.classList.add('panel-collapsed');
+  panel.dataset.personId = personId;
+  delete panel.dataset.loaded;
+  const arrow = panel.querySelector('.panel-toggle-arrow');
+  if (arrow) arrow.textContent = '▶';
+  const body = document.getElementById('embedding-map-body');
+  if (body) body.style.display = 'none';
+  const canvas = document.getElementById('embedding-map-canvas');
+  if (canvas) { canvas.width = 0; canvas.height = 0; }
+  document.getElementById('embedding-map-empty').style.display = 'none';
+  embMapState = null;
+}
+
+async function loadEmbeddingMap(personId) {
+  const canvas  = document.getElementById('embedding-map-canvas');
+  const empty   = document.getElementById('embedding-map-empty');
+  const data    = await fetchJSON(`/api/people/${personId}/embedding-map`);
+  if (!data || data.total < 2) {
+    canvas.style.display = 'none';
+    empty.style.display  = '';
+    return;
+  }
+
+  canvas.style.display = '';
+  empty.style.display  = 'none';
+
+  const W = canvas.parentElement.clientWidth || 400;
+  const H = EMB_CANVAS_H;
+  canvas.width  = W;
+  canvas.height = H;
+
+  // Assign a colour per person_id
+  const personIds = [...new Set(data.points.map(p => p.person_id))].sort((a,b)=>a-b);
+  const colorMap  = {};
+  personIds.forEach((pid, i) => { colorMap[pid] = EMB_COLORS[i % EMB_COLORS.length]; });
+
+  // Compute canvas coordinates ([-1,1] → [pad, W-pad])
+  const PAD = 24;
+  const toCanvasX = x => PAD + (x + 1) / 2 * (W - 2*PAD);
+  const toCanvasY = y => PAD + (1 - (y + 1) / 2) * (H - 2*PAD);
+  const displayPoints = data.points.map(pt => ({
+    ...pt,
+    cx: toCanvasX(pt.x),
+    cy: toCanvasY(pt.y),
+    color: colorMap[pt.person_id],
+  }));
+
+  embMapState = { points: displayPoints, colorMap, personIds, canvas, personId };
+  drawEmbeddingMap();
+}
+
+function drawEmbeddingMap() {
+  if (!embMapState) return;
+  const { points, canvas } = embMapState;
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  // Subtle grid lines
+  ctx.strokeStyle = '#e8e8e8';
+  ctx.lineWidth = 1;
+  const cx = W / 2, cy = H / 2;
+  ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(W, cy); ctx.stroke();
+
+  // Draw points
+  for (const pt of points) {
+    ctx.beginPath();
+    ctx.arc(pt.cx, pt.cy, EMB_POINT_R, 0, Math.PI * 2);
+    ctx.fillStyle = pt.color;
+    ctx.globalAlpha = 0.35 + 0.65 * Math.min(pt.confidence, 1.0);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  // Legend (top-right)
+  drawEmbMapLegend(ctx, W);
+}
+
+function drawEmbMapLegend(ctx, W) {
+  const { personIds, colorMap } = embMapState;
+  const allPeople = state.allPeople || [];
+  let y = 16;
+  const x = W - 12;
+  ctx.font = '11px system-ui,sans-serif';
+  ctx.textAlign = 'right';
+  const maxShown = 8;
+  const shown = personIds.slice(0, maxShown);
+  for (const pid of shown) {
+    const p = allPeople.find(pp => pp.id === pid);
+    const label = p?.name || `#${pid}`;
+    ctx.fillStyle = colorMap[pid];
+    ctx.beginPath();
+    ctx.arc(x - ctx.measureText(label).width - 14, y - 3, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#555';
+    ctx.fillText(label, x, y);
+    y += 16;
+  }
+  if (personIds.length > maxShown) {
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(`及其他 ${personIds.length - maxShown} 人`, x, y);
+  }
+  ctx.textAlign = 'left';
+}
+
+function embMapHitTest(cx, cy) {
+  if (!embMapState) return null;
+  let best = null, bestDist = EMB_POINT_R * 2;
+  for (const pt of embMapState.points) {
+    const d = Math.hypot(pt.cx - cx, pt.cy - cy);
+    if (d < bestDist) { bestDist = d; best = pt; }
+  }
+  return best;
+}
+
+(function wireEmbeddingMapEvents() {
+  const canvas  = document.getElementById('embedding-map-canvas');
+  const tooltip = document.getElementById('emb-tooltip');
+  if (!canvas || !tooltip) return;
+
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left)  * scaleX;
+    const cy = (e.clientY - rect.top)   * scaleY;
+    const pt = embMapHitTest(cx, cy);
+    if (!pt) {
+      tooltip.style.display = 'none';
+      return;
+    }
+    // Position tooltip
+    const W = window.innerWidth, H = window.innerHeight;
+    let left = e.clientX + 12, top = e.clientY + 12;
+    tooltip.style.display = '';
+    const tw = tooltip.offsetWidth  || 100;
+    const th = tooltip.offsetHeight || 90;
+    if (left + tw > W - 8) left = e.clientX - tw - 12;
+    if (top  + th > H - 8) top  = e.clientY - th - 12;
+    tooltip.style.left = `${Math.max(8, left)}px`;
+    tooltip.style.top  = `${Math.max(8, top)}px`;
+
+    // Fill tooltip content
+    document.getElementById('emb-tooltip-img').src = `/api/faces/${pt.face_id}/thumb`;
+    document.getElementById('emb-tooltip-date').textContent = pt.taken_at ? pt.taken_at.slice(0, 10) : '';
+    document.getElementById('emb-tooltip-conf').textContent = `置信度 ${Math.round(pt.confidence * 100)}%`;
+    const person = (state.allPeople || []).find(p => p.id === pt.person_id);
+    document.getElementById('emb-tooltip-person').textContent = person?.name || '';
+  });
+
+  canvas.addEventListener('mouseleave', () => {
+    tooltip.style.display = 'none';
+  });
+
+  canvas.addEventListener('click', e => {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width  / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = (e.clientX - rect.left) * scaleX;
+    const cy = (e.clientY - rect.top)  * scaleY;
+    const pt = embMapHitTest(cx, cy);
+    if (pt) openPhotoDetail(pt.photo_id);
+  });
+})();
 
 function showFaceLightbox(src) {
   const lb = document.getElementById('face-lightbox');
@@ -1713,6 +1896,15 @@ document.addEventListener('DOMContentLoaded', () => {
     panel.classList.toggle('panel-collapsed');
     const arrow = header.querySelector('.panel-toggle-arrow');
     if (arrow) arrow.textContent = panel.classList.contains('panel-collapsed') ? '▶' : '▼';
+    // Lazy-load embedding map on first expand
+    if (panel.id === 'embedding-map-panel' && !panel.classList.contains('panel-collapsed')) {
+      const body = document.getElementById('embedding-map-body');
+      if (body) body.style.display = '';
+      if (panel.dataset.personId && !panel.dataset.loaded) {
+        panel.dataset.loaded = '1';
+        loadEmbeddingMap(parseInt(panel.dataset.personId));
+      }
+    }
   });
 });
 

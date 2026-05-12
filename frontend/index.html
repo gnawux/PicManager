@@ -215,6 +215,17 @@
             <div id="outlier-faces-list" style="display:flex;gap:8px;overflow-x:auto;padding-bottom:4px"></div>
           </div>
 
+          <!-- Embedding map panel -->
+          <div id="embedding-map-panel" class="hidden panel-collapsed" style="padding:8px 12px;border-bottom:1px solid #eee">
+            <div class="panel-toggle-header" style="font-size:12px;color:#888;font-weight:600;margin-bottom:6px;cursor:pointer;display:flex;align-items:center;gap:4px">
+              <span class="panel-toggle-arrow">▶</span><span>分布图</span>
+            </div>
+            <div id="embedding-map-body" style="display:none">
+              <canvas id="embedding-map-canvas" style="display:block;width:100%;border-radius:8px;background:#f8f8f8;cursor:crosshair"></canvas>
+              <div id="embedding-map-empty" style="display:none;padding:24px;text-align:center;color:#bbb;font-size:13px">人脸数量不足，无法生成分布图</div>
+            </div>
+          </div>
+
           <!-- Sub-persons panel -->
           <div id="subpeople-panel" class="subpeople-panel">
             <h3>子人物</h3>
@@ -550,6 +561,14 @@
         <button id="rename-collection-cancel-btn" class="btn-ghost">取消</button>
       </div>
     </div>
+  </div>
+
+  <!-- Embedding map hover tooltip -->
+  <div id="emb-tooltip" style="display:none;position:fixed;z-index:8000;background:#fff;border:1px solid #ddd;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,0.15);padding:8px;pointer-events:none;min-width:90px;text-align:center">
+    <img id="emb-tooltip-img" style="width:60px;height:60px;object-fit:cover;border-radius:4px;display:block;margin-bottom:4px" src="" />
+    <div id="emb-tooltip-date" style="font-size:11px;color:#555"></div>
+    <div id="emb-tooltip-conf" style="font-size:10px;color:#aaa"></div>
+    <div id="emb-tooltip-person" style="font-size:10px;color:#888"></div>
   </div>
 
   <!-- Face thumbnail lightbox -->

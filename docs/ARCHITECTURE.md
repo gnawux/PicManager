@@ -80,7 +80,8 @@ picmanager/
 │   │   ├── detector.rs      # detect()，ultraface-slim-320，OnceLock<Mutex<Session>>
 │   │   ├── embedder.rs      # Embedder::load/extract，ArcFace，512D L2 归一化
 │   │   ├── job.rs           # run_job()、execute_job()、reanalyze_one_photo()，批量重分析
-│   │   └── cluster.rs       # 两阶段 DBSCAN；run_clustering()；run_incremental_clustering()
+│   │   ├── cluster.rs       # 两阶段 DBSCAN；run_clustering()；run_incremental_clustering()
+│   │   └── pca.rs           # pca_2d()；power iteration 求前 2 主成分；坐标归一化到 [−1,1]
 │   ├── animal/
 │   │   ├── mod.rs           # detect_and_save()，导入时调用，模型不存在时静默跳过
 │   │   └── detector.rs      # detect()，YOLOv8-nano，OnceLock<Mutex<Session>>

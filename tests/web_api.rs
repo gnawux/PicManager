@@ -3052,3 +3052,162 @@ async fn merge_migrates_track_points() {
             .unwrap();
     assert_eq!(pt_count, 2, "both track points should be migrated to merged activity");
 }
+
+// ── embedding-map tests ───────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn embedding_map_returns_404_for_unknown_person() {
+    let app = test_app().await;
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/people/9999/embedding-map")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn embedding_map_returns_empty_for_person_with_no_faces() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let pid = create_named_person(&pool, "Ghost").await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/embedding-map"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(json["points"].as_array().unwrap().is_empty());
+    assert_eq!(json["total"].as_i64().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn embedding_map_returns_points_with_required_fields() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pid = create_named_person(&pool, "Alice").await;
+    let p1 = insert_photo_plain(&pool, "em1").await;
+    let p2 = insert_photo_plain(&pool, "em2").await;
+    // Two clearly different unit vectors so PCA can produce a meaningful result
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(16, 0)).await;
+    let f2 = insert_face_emb(&pool, p2, &unit_emb(16, 8)).await;
+    link_face(&pool, pid, f1).await;
+    link_face(&pool, pid, f2).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/embedding-map"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let points = json["points"].as_array().unwrap();
+    assert_eq!(points.len(), 2);
+    assert_eq!(json["total"].as_i64().unwrap(), 2);
+
+    for pt in points {
+        assert!(pt["face_id"].is_i64(), "missing face_id");
+        assert!(pt["photo_id"].is_i64(), "missing photo_id");
+        assert!(pt["person_id"].is_i64(), "missing person_id");
+        assert!(pt["x"].is_f64(), "missing x");
+        assert!(pt["y"].is_f64(), "missing y");
+        assert!(pt["confidence"].is_f64(), "missing confidence");
+        let x = pt["x"].as_f64().unwrap();
+        let y = pt["y"].as_f64().unwrap();
+        assert!(x >= -1.001 && x <= 1.001, "x out of range: {x}");
+        assert!(y >= -1.001 && y <= 1.001, "y out of range: {y}");
+    }
+}
+
+#[tokio::test]
+async fn embedding_map_includes_child_person_faces() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let parent_id = create_named_person(&pool, "Parent").await;
+    let child_id: i64 = sqlx::query_scalar(
+        "INSERT INTO people (name, parent_id) VALUES ('Child', ?) RETURNING id",
+    )
+    .bind(parent_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // One face for parent, one for child
+    let p1 = insert_photo_plain(&pool, "ec1").await;
+    let p2 = insert_photo_plain(&pool, "ec2").await;
+    let f1 = insert_face_emb(&pool, p1, &unit_emb(16, 0)).await;
+    let f2 = insert_face_emb(&pool, p2, &unit_emb(16, 8)).await;
+    link_face(&pool, parent_id, f1).await;
+    link_face(&pool, child_id, f2).await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{parent_id}/embedding-map"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let points = json["points"].as_array().unwrap();
+
+    // Both faces returned
+    assert_eq!(points.len(), 2, "should include parent and child faces");
+
+    let person_ids: Vec<i64> = points.iter().map(|p| p["person_id"].as_i64().unwrap()).collect();
+    assert!(person_ids.contains(&parent_id), "parent face must appear");
+    assert!(person_ids.contains(&child_id), "child face must appear");
+}
+
+#[tokio::test]
+async fn embedding_map_coordinates_in_range_with_many_faces() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    let pid = create_named_person(&pool, "Many").await;
+    for i in 0..20i64 {
+        let p = insert_photo_plain(&pool, &format!("mr{i}")).await;
+        // Vary the hot dimension across the 16-dim space
+        let f = insert_face_emb(&pool, p, &unit_emb(16, (i as usize) % 16)).await;
+        link_face(&pool, pid, f).await;
+    }
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri(&format!("/api/people/{pid}/embedding-map"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let points = json["points"].as_array().unwrap();
+    assert_eq!(points.len(), 20);
+
+    for pt in points {
+        let x = pt["x"].as_f64().unwrap();
+        let y = pt["y"].as_f64().unwrap();
+        assert!(x >= -1.001 && x <= 1.001, "x={x} out of range");
+        assert!(y >= -1.001 && y <= 1.001, "y={y} out of range");
+    }
+}
