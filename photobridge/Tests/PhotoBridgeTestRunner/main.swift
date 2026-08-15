@@ -37,5 +37,6 @@ runInventoryRecordTests()
 runRenditionExportTests()
 
 runMacAppConfigurationTests()
+runOnboardingReadinessTests()
 
 finish()

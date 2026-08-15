@@ -7,6 +7,7 @@ public enum PhotoPresentationMode: String, Codable, CaseIterable, Sendable {
 
 public struct MacAppConfiguration: Codable, Equatable, Sendable {
     public var libraryPath: String
+    public var libraryBookmark: Data?
     public var serviceExecutablePath: String?
     public var host: String
     public var port: UInt16
@@ -15,6 +16,7 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
 
     public init(
         libraryPath: String,
+        libraryBookmark: Data? = nil,
         serviceExecutablePath: String? = nil,
         host: String = "127.0.0.1",
         port: UInt16 = 8080,
@@ -22,6 +24,7 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
         launchAtLogin: Bool = false
     ) {
         self.libraryPath = libraryPath
+        self.libraryBookmark = libraryBookmark
         self.serviceExecutablePath = serviceExecutablePath
         self.host = host
         self.port = port
