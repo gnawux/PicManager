@@ -88,22 +88,43 @@ export interface TaskPage {
 
 export interface AppleSourceSummary {
   id: number;
+  asset_id: number | null;
+  photo_id: number | null;
   external_id: string;
   original_filename: string | null;
   media_type: string | null;
   width: number | null;
   height: number | null;
   taken_at: string | null;
-  status: string;
+  sync_status: string;
   exclusion_reason: string | null;
   last_error: string | null;
+  last_seen_at: string | null;
+  updated_at: string;
 }
 
 export interface AppleSourcePage {
   sources: AppleSourceSummary[];
-  total: number;
-  counts: Record<string, number>;
-  next_cursor: number | null;
+  status_counts: Record<string, number>;
+  next_before_id: number | null;
+}
+
+export interface AppleLinkCandidate {
+  id: number;
+  source_id: number;
+  photo_id: number;
+  method: string;
+  confidence: number;
+  status: string;
+  evidence_json: string | null;
+  original_filename: string | null;
+  source_taken_at: string | null;
+  source_width: number | null;
+  source_height: number | null;
+  photo_path: string;
+  photo_taken_at: string | null;
+  photo_width: number | null;
+  photo_height: number | null;
 }
 
 export interface AlbumSummary {

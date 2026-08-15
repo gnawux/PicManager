@@ -123,4 +123,16 @@ describe('API client', () => {
       '/api/geo/photos?page=1&per_page=200&country=%E4%B8%AD%E5%9B%BD&state=%E4%B8%8A%E6%B5%B7%E5%B8%82&city=%E4%B8%8A%E6%B5%B7',
     );
   });
+
+  it('queries Apple inventory by status and original filename', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ sources: [], status_counts: {}, next_before_id: null }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.apple.sources('failed', 'IMG 42');
+    expect(fetcher.mock.calls[0][0]).toBe('/api/apple/sources?limit=100&status=failed&search=IMG+42');
+  });
 });

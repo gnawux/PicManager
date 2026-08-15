@@ -1,6 +1,8 @@
 import type {
   ApiErrorEnvelope,
   AppleSourcePage,
+  AppleSourceSummary,
+  AppleLinkCandidate,
   AlbumPhotoPage,
   AlbumSummary,
   ActivityPage,
@@ -93,12 +95,22 @@ export function createApiClient(options: ApiClientOptions = {}) {
       list: () => request<TaskPage>('/api/tasks?limit=50'),
     },
     apple: {
-      sources: (status?: string) => {
-        const query = status ? `?status=${encodeURIComponent(status)}` : '';
-        return request<AppleSourcePage>(`/api/apple/sources${query}`);
+      sources: (status?: string, search?: string, beforeId?: number) => {
+        const query = new URLSearchParams({ limit: '100' });
+        if (status && status !== 'all') query.set('status', status);
+        if (search) query.set('search', search);
+        if (beforeId) query.set('before_id', String(beforeId));
+        return request<AppleSourcePage>(`/api/apple/sources?${query}`);
       },
       retry: (sourceId: number) =>
-        request<unknown>(`/api/apple/sources/${sourceId}/retry`, { method: 'POST' }),
+        request<{ job_id: number; source: AppleSourceSummary }>(`/api/apple/sources/${sourceId}/retry`, { method: 'POST' }),
+      candidates: () => request<AppleLinkCandidate[]>('/api/apple/link-candidates?limit=100'),
+      reviewCandidate: (id: number, accept: boolean) =>
+        request<{ job_id: number | null }>(`/api/apple/link-candidates/${id}/review`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ accept }),
+        }),
     },
     albums: {
       list: () => request<AlbumSummary[]>('/api/albums'),

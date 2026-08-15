@@ -5,6 +5,7 @@
   import PeopleView from './lib/people/PeopleView.svelte';
   import PlacesView from './lib/places/PlacesView.svelte';
   import ActivitiesView from './lib/activities/ActivitiesView.svelte';
+  import AppleSyncView from './lib/apple/AppleSyncView.svelte';
   import StatusBadge from './lib/components/StatusBadge.svelte';
   import TimelineView from './lib/timeline/TimelineView.svelte';
   import { createHashRouter, routes } from './lib/router';
@@ -74,6 +75,11 @@
         <div><p class="eyebrow">Activities</p><h1 id="page-title">活动</h1><p class="subtitle">把运动路线、指标和沿途照片放在一起。</p></div>
       </section>
       <ActivitiesView {api} />
+    {:else if $router.id === 'apple'}
+      <section class="page-heading" aria-labelledby="page-title">
+        <div><p class="eyebrow">Apple Photos</p><h1 id="page-title">Apple 照片</h1><p class="subtitle">明确看见已同步、未同步和需要处理的每一项。</p></div>
+      </section>
+      <AppleSyncView {api} />
     {:else}
       <section class="page-heading" aria-labelledby="page-title">
         <div>
