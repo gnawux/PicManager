@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, apple, config::Config, face, metadata, migration, storage, importer, dedup};
+use picmanager::{activities, album, application::{Application, CallerKind, ImportCommand}, apple, config::Config, face, metadata, migration, storage, importer, dedup};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -220,10 +220,11 @@ async fn main() -> anyhow::Result<()> {
 
     std::fs::create_dir_all(&config.library_path)?;
     let pool = storage::connect(&config.db_url()).await?;
+    let application = Application::new(pool.clone(), config.clone());
 
     match cli.command {
         Command::Import { dir, copy, batch_size, log, dry_run } => {
-            import_with_progress(&pool, &dir, &config.library_path, copy, batch_size, log.as_deref(), dry_run).await?;
+            import_with_progress(&application, &dir, copy, batch_size, log.as_deref(), dry_run).await?;
         }
         Command::Dedup { full } => {
             let n = if full {
@@ -473,9 +474,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn import_with_progress(
-    pool: &sqlx::SqlitePool,
+    application: &Application,
     dir: &std::path::Path,
-    library_path: &std::path::Path,
     copy: bool,
     batch_size: Option<usize>,
     log_path: Option<&std::path::Path>,
@@ -485,9 +485,14 @@ async fn import_with_progress(
 
     if dry_run {
         let progress = importer::SharedImportProgress::default();
-        let result = importer::import_dir_batch(
-            pool, dir, library_path, copy,
-            batch_size, log_path, true, progress,
+        let context = application.request_context(CallerKind::Cli);
+        let result = application.imports().execute(
+            &context,
+            ImportCommand {
+                source_dir: dir.to_path_buf(), copy_only: copy, batch_size,
+                log_path: log_path.map(|path| path.to_path_buf()), dry_run: true,
+            },
+            progress,
         ).await?;
         println!(
             "[dry-run] 目录 {} 个文件，将处理 {} 个（本批），剩余 {} 个待处理",
@@ -499,17 +504,16 @@ async fn import_with_progress(
     }
 
     let progress = importer::SharedImportProgress::default();
-    let pool2 = pool.clone();
-    let dir2 = dir.to_path_buf();
-    let lib2 = library_path.to_path_buf();
+    let application2 = application.clone();
+    let context = application.request_context(CallerKind::Cli);
     let progress2 = progress.clone();
-    let log2 = log_path.map(|p| p.to_path_buf());
+    let command = ImportCommand {
+        source_dir: dir.to_path_buf(), copy_only: copy, batch_size,
+        log_path: log_path.map(|path| path.to_path_buf()), dry_run: false,
+    };
 
     let handle = tokio::spawn(async move {
-        importer::import_dir_batch(
-            &pool2, &dir2, &lib2, copy,
-            batch_size, log2.as_deref(), false, progress2,
-        ).await
+        application2.imports().execute(&context, command, progress2).await
     });
 
     let start = std::time::Instant::now();

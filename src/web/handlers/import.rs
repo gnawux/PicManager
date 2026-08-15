@@ -1,11 +1,13 @@
+use crate::application::{CallerKind, ImportCommand};
+use crate::importer::SharedImportProgress;
+use crate::web::AppState;
 use axum::{
+    Json,
     extract::{Query, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use crate::web::AppState;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ImportStatus {
@@ -41,21 +43,23 @@ pub async fn start_import(
     };
     drop(status);
 
-    let pool = state.pool.clone();
+    let application = state.application.clone();
+    let context = application.request_context(CallerKind::LocalWeb);
     let import_status = state.import_status.clone();
-    let dir = std::path::PathBuf::from(req.dir.clone());
-    let library_path = state.config.library_path.clone();
-    let copy_only = req.copy;
+    let command = ImportCommand::directory(&req.dir, req.copy);
 
     tokio::spawn(async move {
-        let result = crate::importer::import_dir(&pool, &dir, &library_path, copy_only).await;
+        let result = application
+            .imports()
+            .execute(&context, command, SharedImportProgress::default())
+            .await;
         let mut status = import_status.lock().unwrap();
         match result {
-            Ok(summary) => {
-                status.total = summary.total;
-                status.imported = summary.imported;
-                status.skipped = summary.skipped;
-                status.errors = summary.errors;
+            Ok(result) => {
+                status.total = result.summary.total;
+                status.imported = result.summary.imported;
+                status.skipped = result.summary.skipped;
+                status.errors = result.summary.errors;
             }
             Err(e) => {
                 tracing::error!("import failed: {e}");
@@ -65,7 +69,9 @@ pub async fn start_import(
         status.running = false;
     });
 
-    Ok(Json(serde_json::json!({ "status": "started", "dir": req.dir })))
+    Ok(Json(
+        serde_json::json!({ "status": "started", "dir": req.dir }),
+    ))
 }
 
 pub async fn get_import_status(

@@ -8,6 +8,7 @@ use axum::{
 use sqlx::SqlitePool;
 use std::sync::{Arc, Mutex, atomic::AtomicBool};
 use crate::config::Config;
+use crate::application::Application;
 use embed::static_handler;
 use handlers::{
     activities::{list_activities, get_activity, get_activity_track, get_activity_photos, trim_activity, merge_activities},
@@ -27,6 +28,7 @@ use handlers::{
 
 #[derive(Clone)]
 pub struct AppState {
+    pub application: Application,
     pub pool: SqlitePool,
     pub config: Config,
     pub import_status: Arc<Mutex<ImportStatus>>,
@@ -35,7 +37,9 @@ pub struct AppState {
 
 pub fn router(pool: SqlitePool, config: Config) -> Router {
     std::fs::create_dir_all(&config.thumb_cache_dir).ok();
+    let application = Application::new(pool.clone(), config.clone());
     let state = AppState {
+        application,
         pool,
         config,
         import_status: Arc::new(Mutex::new(ImportStatus::default())),

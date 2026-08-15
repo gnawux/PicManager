@@ -97,6 +97,10 @@ impl Application {
             idempotency_key: None,
         }
     }
+
+    pub fn imports(&self) -> super::ImportService {
+        super::ImportService::new(self.clone())
+    }
 }
 
 #[cfg(test)]
