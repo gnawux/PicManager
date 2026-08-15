@@ -28,6 +28,77 @@ pub struct GeoHierarchy {
     pub countries: Vec<CountryEntry>,
 }
 
+const DEFAULT_CLUSTER_COLUMNS: i64 = 48;
+const DEFAULT_CLUSTER_ROWS: i64 = 24;
+const MAX_CLUSTER_COLUMNS: i64 = 64;
+const MAX_CLUSTER_ROWS: i64 = 32;
+
+#[derive(Debug, Deserialize)]
+pub struct GeoClustersQuery {
+    #[serde(default = "default_cluster_columns")]
+    pub columns: i64,
+    #[serde(default = "default_cluster_rows")]
+    pub rows: i64,
+}
+
+fn default_cluster_columns() -> i64 { DEFAULT_CLUSTER_COLUMNS }
+fn default_cluster_rows() -> i64 { DEFAULT_CLUSTER_ROWS }
+
+#[derive(Debug, Serialize)]
+pub struct GeoCluster {
+    pub x_bin: i64,
+    pub y_bin: i64,
+    pub gps_lat: f64,
+    pub gps_lon: f64,
+    pub photo_count: i64,
+    pub representative_photo_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GeoClusterPage {
+    pub clusters: Vec<GeoCluster>,
+    pub total_photos: i64,
+}
+
+pub async fn get_geo_clusters(
+    State(state): State<AppState>,
+    Query(params): Query<GeoClustersQuery>,
+) -> Result<Json<GeoClusterPage>, StatusCode> {
+    let columns = params.columns.clamp(1, MAX_CLUSTER_COLUMNS);
+    let rows = params.rows.clamp(1, MAX_CLUSTER_ROWS);
+    let result: Vec<(i64, i64, f64, f64, i64, i64)> = sqlx::query_as(
+        "WITH valid_photos AS (
+             SELECT id, gps_lat, gps_lon,
+                    MIN(? - 1, CAST(((gps_lon + 180.0) / 360.0) * ? AS INTEGER)) AS x_bin,
+                    MIN(? - 1, CAST(((90.0 - gps_lat) / 180.0) * ? AS INTEGER)) AS y_bin
+             FROM photos
+             WHERE import_status = 'imported'
+               AND gps_lat BETWEEN -90.0 AND 90.0
+               AND gps_lon BETWEEN -180.0 AND 180.0
+         )
+         SELECT x_bin, y_bin, AVG(gps_lat), AVG(gps_lon), COUNT(*), MIN(id)
+         FROM valid_photos
+         GROUP BY x_bin, y_bin
+         ORDER BY y_bin, x_bin",
+    )
+    .bind(columns)
+    .bind(columns)
+    .bind(rows)
+    .bind(rows)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let clusters = result.into_iter().map(
+        |(x_bin, y_bin, gps_lat, gps_lon, photo_count, representative_photo_id)| GeoCluster {
+            x_bin, y_bin, gps_lat, gps_lon, photo_count, representative_photo_id,
+        },
+    ).collect::<Vec<_>>();
+    let total_photos = clusters.iter().map(|cluster| cluster.photo_count).sum();
+
+    Ok(Json(GeoClusterPage { clusters, total_photos }))
+}
+
 pub async fn get_geo_hierarchy(
     State(state): State<AppState>,
 ) -> Result<Json<GeoHierarchy>, StatusCode> {

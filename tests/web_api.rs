@@ -1113,6 +1113,68 @@ async fn get_photos_gps_points_returns_only_gps_photos() {
 }
 
 #[tokio::test]
+async fn geo_clusters_groups_photos_and_reports_the_full_count() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    for (path, hash, lat, lon) in [
+        ("/sf-1.jpg", "sf1", 37.7749, -122.4194),
+        ("/sf-2.jpg", "sf2", 37.7750, -122.4195),
+        ("/sydney.jpg", "syd", -33.8688, 151.2093),
+    ] {
+        sqlx::query(
+            "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+             VALUES (?, ?, 'jpeg', 'imported', ?, ?)",
+        )
+        .bind(path).bind(hash).bind(lat).bind(lon)
+        .execute(&pool).await.unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+         VALUES ('/pending.jpg', 'pending', 'jpeg', 'pending', 37.77, -122.41),
+                ('/invalid.jpg', 'invalid', 'jpeg', 'imported', 120.0, 200.0)",
+    ).execute(&pool).await.unwrap();
+
+    let response = app.oneshot(
+        Request::builder().uri("/api/geo/clusters?columns=48&rows=24")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let clusters = json["clusters"].as_array().unwrap();
+    assert_eq!(json["total_photos"], 3);
+    assert_eq!(clusters.len(), 2);
+    assert_eq!(clusters.iter().map(|cluster| cluster["photo_count"].as_i64().unwrap()).max(), Some(2));
+    assert!(clusters.iter().all(|cluster| cluster["representative_photo_id"].is_number()));
+}
+
+#[tokio::test]
+async fn geo_clusters_clamps_grid_dimensions_and_bounds_large_results() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    sqlx::query(
+        "WITH RECURSIVE sequence(value) AS (
+             SELECT 0
+             UNION ALL SELECT value + 1 FROM sequence WHERE value < 9999
+         )
+         INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+         SELECT '/cluster-' || value || '.jpg', 'cluster-' || value, 'jpeg', 'imported',
+                -89.9 + (value % 100) * 1.79,
+                -179.9 + ((value / 100) % 100) * 3.59
+         FROM sequence",
+    ).execute(&pool).await.unwrap();
+
+    let response = app.oneshot(
+        Request::builder().uri("/api/geo/clusters?columns=999&rows=999")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total_photos"], 10_000);
+    assert!(json["clusters"].as_array().unwrap().len() <= 64 * 32);
+}
+
+#[tokio::test]
 async fn geo_hierarchy_groups_by_country_state_city() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 
