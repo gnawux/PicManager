@@ -143,6 +143,25 @@ export interface PersonSummary {
   status: string;
 }
 
+export interface GeoHierarchy {
+  countries: Array<{
+    name: string;
+    photo_count: number;
+    states: Array<{
+      name: string;
+      photo_count: number;
+      cities: Array<{ name: string; photo_count: number }>;
+    }>;
+  }>;
+}
+
+export interface GeoPoint {
+  id: number;
+  taken_at: string | null;
+  gps_lat: number;
+  gps_lon: number;
+}
+
 export interface ApiErrorEnvelope {
   error?: {
     code?: string;

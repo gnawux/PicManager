@@ -3,6 +3,7 @@
   import { createApiClient } from './lib/api/client';
   import AlbumsView from './lib/albums/AlbumsView.svelte';
   import PeopleView from './lib/people/PeopleView.svelte';
+  import PlacesView from './lib/places/PlacesView.svelte';
   import StatusBadge from './lib/components/StatusBadge.svelte';
   import TimelineView from './lib/timeline/TimelineView.svelte';
   import { createHashRouter, routes } from './lib/router';
@@ -62,6 +63,11 @@
         <div><p class="eyebrow">People</p><h1 id="page-title">人物</h1><p class="subtitle">按人物浏览照片，并整理识别结果。</p></div>
       </section>
       <PeopleView {api} />
+    {:else if $router.id === 'places'}
+      <section class="page-heading" aria-labelledby="page-title">
+        <div><p class="eyebrow">Places</p><h1 id="page-title">地点</h1><p class="subtitle">在地图和地点层级中重新发现照片。</p></div>
+      </section>
+      <PlacesView {api} />
     {:else}
       <section class="page-heading" aria-labelledby="page-title">
         <div>

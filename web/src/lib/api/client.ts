@@ -8,6 +8,8 @@ import type {
   PersonSummary,
   PhotoPage,
   CollectionSummary,
+  GeoHierarchy,
+  GeoPoint,
   TaskPage,
   TimelinePage,
 } from './types';
@@ -121,6 +123,18 @@ export function createApiClient(options: ApiClientOptions = {}) {
           body: JSON.stringify(update),
         }),
       discover: () => request<{ people_created: number }>('/api/people/cluster/incremental', {
+        method: 'POST',
+      }),
+    },
+    geo: {
+      hierarchy: () => request<GeoHierarchy>('/api/geo/hierarchy'),
+      points: () => request<GeoPoint[]>('/api/photos/gps-points'),
+      photos: (filters: { country?: string; state?: string; city?: string }) => {
+        const query = new URLSearchParams({ page: '1', per_page: '200' });
+        for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);
+        return request<AlbumPhotoPage>(`/api/geo/photos?${query}`);
+      },
+      regeocode: () => request<{ status: string; count?: number }>('/api/geo/regeocode', {
         method: 'POST',
       }),
     },

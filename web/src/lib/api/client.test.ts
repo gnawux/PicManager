@@ -109,4 +109,18 @@ describe('API client', () => {
       body: JSON.stringify({ name: '小明' }),
     }));
   });
+
+  it('encodes geographic filters without manual string concatenation', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ photos: [], total: 0, page: 1, per_page: 200 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.geo.photos({ country: '中国', state: '上海市', city: '上海' });
+    expect(fetcher.mock.calls[0][0]).toBe(
+      '/api/geo/photos?page=1&per_page=200&country=%E4%B8%AD%E5%9B%BD&state=%E4%B8%8A%E6%B5%B7%E5%B8%82&city=%E4%B8%8A%E6%B5%B7',
+    );
+  });
 });
