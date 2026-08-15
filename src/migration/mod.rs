@@ -1,3 +1,7 @@
+mod backfill;
+
+pub use backfill::{backfill_legacy_local, BackfillReport};
+
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 use std::collections::BTreeMap;

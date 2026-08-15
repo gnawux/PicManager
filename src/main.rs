@@ -86,6 +86,15 @@ enum MigrateAction {
         #[arg(long)]
         skip_files: bool,
     },
+    /// 为现有 photos 记录建立兼容的本地来源和文件版本目录
+    BackfillLocal {
+        /// 只报告将要创建的目录记录，不写数据库
+        #[arg(long)]
+        dry_run: bool,
+        /// 输出 JSON 报告
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -296,6 +305,27 @@ async fn main() -> anyhow::Result<()> {
                 }
                 if !report.is_healthy() {
                     std::process::exit(2);
+                }
+            }
+            MigrateAction::BackfillLocal { dry_run, json } => {
+                let report = migration::backfill_legacy_local(&pool, dry_run).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("legacy photos       : {}", report.total_photos);
+                    println!("existing assets     : {}", report.existing_assets);
+                    println!("existing sources    : {}", report.existing_sources);
+                    println!("existing variants   : {}", report.existing_variants);
+                    if dry_run {
+                        println!("mode                : dry-run (no changes written)");
+                        println!("assets to create    : {}", report.total_photos - report.existing_assets);
+                    } else {
+                        println!("created assets      : {}", report.created_assets);
+                        println!("created sources     : {}", report.created_sources);
+                        println!("created variants    : {}", report.created_variants);
+                        println!("created links       : {}", report.created_links);
+                        println!("migration run       : {}", report.migration_run_id.unwrap_or_default());
+                    }
                 }
             }
         },
