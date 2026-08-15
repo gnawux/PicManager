@@ -14,6 +14,30 @@ export interface PhotoPage {
   per_page: number;
 }
 
+export interface PhotoDetail {
+  id: number;
+  path: string;
+  format: string;
+  taken_at: string | null;
+  timezone_offset: number | null;
+  camera: string | null;
+  gps_lat: number | null;
+  gps_lon: number | null;
+  import_status: string;
+  width: number | null;
+  height: number | null;
+  sources: Array<{
+    provider: string;
+    original_filename: string | null;
+    sync_status: string;
+  }>;
+  renditions: {
+    display: string;
+    original: string | null;
+    current: string | null;
+  };
+}
+
 export interface BatchPhotoUpdate {
   taken_at?: string;
   timezone_offset?: number;

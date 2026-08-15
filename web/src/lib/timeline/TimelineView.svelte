@@ -3,6 +3,7 @@
   import type { ApiClient } from '../api/client';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
+  import PhotoViewer from './PhotoViewer.svelte';
   import SelectionBar from './SelectionBar.svelte';
   import { groupTimelineItems } from './layout';
   import { createTimelineStore } from './store';
@@ -20,7 +21,12 @@
   let anchorId = $state<number | null>(null);
   let batchBusy = $state(false);
   let batchError = $state<string | null>(null);
+  let viewerId = $state<number | null>(null);
   let groups = $derived(groupTimelineItems($timeline.items));
+  let viewerIndex = $derived(viewerId === null
+    ? -1
+    : $timeline.items.findIndex((item) => item.id === viewerId));
+  let viewerItem = $derived(viewerIndex >= 0 ? $timeline.items[viewerIndex] : null);
 
   onMount(() => {
     void timeline.reload();
@@ -59,7 +65,12 @@
   }
 
   function handlePhotoKey(itemId: number, event: KeyboardEvent) {
-    if (event.key === 'Enter' || event.key === ' ') {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      viewerId = itemId;
+      return;
+    }
+    if (event.key === ' ') {
       event.preventDefault();
       toggleSelection(itemId, event);
       return;
@@ -78,6 +89,27 @@
     const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-photo-id]')];
     const index = buttons.findIndex((button) => Number(button.dataset.photoId) === itemId);
     buttons[index + direction]?.focus();
+  }
+
+  function openPhoto(itemId: number, event: MouseEvent) {
+    if (event.shiftKey || event.metaKey || event.ctrlKey) {
+      toggleSelection(itemId, event);
+    } else {
+      viewerId = itemId;
+    }
+  }
+
+  async function navigateViewer(direction: -1 | 1) {
+    const index = viewerIndex;
+    const target = $timeline.items[index + direction];
+    if (target) {
+      viewerId = target.id;
+      return;
+    }
+    if (direction === 1 && $timeline.hasMore) {
+      await timeline.loadMore();
+      viewerId = $timeline.items[index + 1]?.id ?? viewerId;
+    }
   }
 
   function selectAllLoaded() {
@@ -138,6 +170,7 @@
         {width}
         targetHeight={density}
         {selected}
+        onopen={(item, event) => openPhoto(item.id, event)}
         onselect={(item, event) => toggleSelection(item.id, event)}
         onkey={(item, event) => handlePhotoKey(item.id, event)}
       />
@@ -168,6 +201,17 @@
     error={batchError}
     onaction={runBatch}
     onclear={() => { selected = new Set(); }}
+  />
+{/if}
+
+{#if viewerItem}
+  <PhotoViewer
+    api={client}
+    item={viewerItem}
+    previous={$timeline.items[viewerIndex - 1]}
+    next={$timeline.items[viewerIndex + 1]}
+    onclose={() => { viewerId = null; }}
+    onnavigate={(direction) => { void navigateViewer(direction); }}
   />
 {/if}
 

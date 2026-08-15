@@ -3,7 +3,7 @@ import { ApiError, createApiClient } from './client';
 
 describe('API client', () => {
   it('builds typed photo queries and decodes successful responses', async () => {
-    const fetcher = vi.fn(async () =>
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify({ photos: [], total: 0, page: 2, per_page: 40 }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -16,6 +16,18 @@ describe('API client', () => {
       'http://test/api/photos?page=2&per_page=40&order=asc',
       expect.objectContaining({ headers: expect.objectContaining({ accept: 'application/json' }) }),
     );
+  });
+
+  it('loads a photo detail by stable catalog id', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ id: 42 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    expect((await client.photos.get(42)).id).toBe(42);
+    expect(fetcher.mock.calls[0][0]).toBe('/api/photos/42');
   });
 
   it('normalizes structured backend errors', async () => {

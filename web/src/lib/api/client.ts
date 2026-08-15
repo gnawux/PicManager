@@ -2,6 +2,7 @@ import type {
   ApiErrorEnvelope,
   AppleSourcePage,
   BatchPhotoUpdate,
+  PhotoDetail,
   PhotoPage,
   TaskPage,
   TimelinePage,
@@ -58,6 +59,7 @@ export function createApiClient(options: ApiClientOptions = {}) {
 
   return {
     photos: {
+      get: (id: number) => request<PhotoDetail>(`/api/photos/${id}`),
       list: (page = 1, perPage = 100, order: 'asc' | 'desc' = 'desc') =>
         request<PhotoPage>(
           `/api/photos?page=${page}&per_page=${perPage}&order=${order}`,
