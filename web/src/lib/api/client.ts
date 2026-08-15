@@ -14,8 +14,8 @@ import type {
   PersonSummary,
   PhotoPage,
   CollectionSummary,
+  GeoClusterPage,
   GeoHierarchy,
-  GeoPoint,
   DedupGroup,
   TaskDetail,
   TaskPage,
@@ -157,7 +157,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
     },
     geo: {
       hierarchy: () => request<GeoHierarchy>('/api/geo/hierarchy'),
-      points: () => request<GeoPoint[]>('/api/photos/gps-points'),
+      clusters: (columns = 48, rows = 24) =>
+        request<GeoClusterPage>(`/api/geo/clusters?columns=${columns}&rows=${rows}`),
       photos: (filters: { country?: string; state?: string; city?: string }) => {
         const query = new URLSearchParams({ page: '1', per_page: '200' });
         for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);

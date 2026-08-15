@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { ApiClient } from '../api/client';
-  import type { AlbumPhotoPage, GeoHierarchy, GeoPoint } from '../api/types';
+  import type { AlbumPhotoPage, GeoCluster, GeoClusterPage, GeoHierarchy } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
 
   interface Props { api: ApiClient }
   let { api }: Props = $props();
   let hierarchy = $state<GeoHierarchy | null>(null);
-  let points = $state<GeoPoint[]>([]);
+  let clusterPage = $state<GeoClusterPage>({ clusters: [], total_photos: 0 });
   let status = $state<'loading' | 'ready' | 'error'>('loading');
   let error = $state<string | null>(null);
   let selection = $state<{ country: string; state?: string; city?: string } | null>(null);
@@ -22,7 +22,7 @@
   async function reload() {
     status = 'loading';
     try {
-      [hierarchy, points] = await Promise.all([api.geo.hierarchy(), api.geo.points()]);
+      [hierarchy, clusterPage] = await Promise.all([api.geo.hierarchy(), api.geo.clusters()]);
       status = 'ready';
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
@@ -56,8 +56,11 @@
     }
   }
 
-  function x(point: GeoPoint) { return ((point.gps_lon + 180) / 360) * 100; }
-  function y(point: GeoPoint) { return ((90 - point.gps_lat) / 180) * 100; }
+  function x(cluster: GeoCluster) { return ((cluster.gps_lon + 180) / 360) * 100; }
+  function y(cluster: GeoCluster) { return ((90 - cluster.gps_lat) / 180) * 100; }
+  function clusterSize(cluster: GeoCluster) {
+    return Math.min(42, 16 + Math.log10(Math.max(1, cluster.photo_count)) * 7);
+  }
 </script>
 
 {#if status === 'loading'}
@@ -67,25 +70,31 @@
 {:else}
   <section class="map-section" aria-labelledby="map-title">
     <div class="view-heading">
-      <div><p>Map</p><h2 id="map-title">照片地图</h2><span>{points.length} 张照片带有位置信息</span></div>
+      <div><p>Map</p><h2 id="map-title">照片地图</h2><span>{clusterPage.total_photos} 张照片带有位置信息</span></div>
       <Button disabled={updating} onclick={regeocode}>{updating ? '启动中…' : '更新地点信息'}</Button>
     </div>
     {#if updateMessage}<p class="notice" role="status">{updateMessage}</p>{/if}
-    {#if points.length === 0}
+    {#if clusterPage.total_photos === 0}
       <PageState kind="empty" title="没有带位置的照片" message="保留 GPS 信息的照片会显示在这里。" />
     {:else}
-      <div class="map" role="img" aria-label={`包含 ${points.length} 张照片的位置概览`}>
+      <div class="map" role="img" aria-label={`包含 ${clusterPage.total_photos} 张照片的位置概览`}>
         <div class="grid" aria-hidden="true"></div>
-        {#each points as point (point.id)}
+        {#each clusterPage.clusters as cluster (`${cluster.x_bin}:${cluster.y_bin}`)}
           <button
-            class="map-point"
-            class:active={mapPhoto === point.id}
+            class="map-cluster"
+            class:active={mapPhoto === cluster.representative_photo_id}
             type="button"
-            aria-label={`查看地图照片 ${point.id}`}
-            style:left={`${x(point)}%`}
-            style:top={`${y(point)}%`}
-            onclick={() => { mapPhoto = mapPhoto === point.id ? null : point.id; }}
-          ></button>
+            aria-label={`查看此区域的 ${cluster.photo_count} 张照片`}
+            style:left={`${x(cluster)}%`}
+            style:top={`${y(cluster)}%`}
+            style:width={`${clusterSize(cluster)}px`}
+            style:height={`${clusterSize(cluster)}px`}
+            onclick={() => {
+              mapPhoto = mapPhoto === cluster.representative_photo_id
+                ? null
+                : cluster.representative_photo_id;
+            }}
+          >{cluster.photo_count > 1 ? cluster.photo_count : ''}</button>
         {/each}
         {#if mapPhoto}
           <div class="map-preview"><img src={`/api/photos/${mapPhoto}/thumb?size=512`} alt={`地图照片 ${mapPhoto}`} /></div>
@@ -139,8 +148,8 @@
   .notice { padding: 10px 14px; border-radius: 10px; color: #126137; background: #e8f7ee; }
   .map { position: relative; height: min(46vw, 500px); min-height: 300px; overflow: hidden; border: 1px solid rgba(23,105,224,.14); border-radius: 22px; background: linear-gradient(145deg, #dceaf5, #eef2e8 54%, #dce5ee); }
   .grid { position: absolute; inset: 0; opacity: .28; background-image: linear-gradient(rgba(42,83,116,.25) 1px, transparent 1px), linear-gradient(90deg, rgba(42,83,116,.25) 1px, transparent 1px); background-size: 12.5% 25%; }
-  .map-point { position: absolute; width: 15px; height: 15px; padding: 0; border: 3px solid white; border-radius: 50%; background: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.28); transform: translate(-50%,-50%); cursor: pointer; }
-  .map-point.active { width: 22px; height: 22px; background: #e5484d; }
+  .map-cluster { position: absolute; display: grid; min-width: 16px; min-height: 16px; padding: 0; place-items: center; border: 2px solid white; border-radius: 50%; color: white; background: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.28); transform: translate(-50%,-50%); cursor: pointer; font-size: 9px; font-weight: 750; line-height: 1; }
+  .map-cluster.active { z-index: 2; background: #e5484d; transform: translate(-50%,-50%) scale(1.15); }
   .map-preview { position: absolute; right: 18px; bottom: 18px; width: 150px; padding: 7px; border-radius: 14px; background: white; box-shadow: 0 14px 40px rgba(0,0,0,.2); }
   .map-preview img { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 9px; }
   .browse { padding-top: 28px; border-top: 1px solid var(--line); }

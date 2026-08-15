@@ -124,6 +124,18 @@ describe('API client', () => {
     );
   });
 
+  it('requests a bounded geographic cluster grid', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ clusters: [], total_photos: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.geo.clusters();
+    expect(fetcher.mock.calls[0][0]).toBe('/api/geo/clusters?columns=48&rows=24');
+  });
+
   it('queries Apple inventory by status and original filename', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify({ sources: [], status_counts: {}, next_before_id: null }), {

@@ -215,11 +215,18 @@ export interface GeoHierarchy {
   }>;
 }
 
-export interface GeoPoint {
-  id: number;
-  taken_at: string | null;
+export interface GeoCluster {
+  x_bin: number;
+  y_bin: number;
   gps_lat: number;
   gps_lon: number;
+  photo_count: number;
+  representative_photo_id: number;
+}
+
+export interface GeoClusterPage {
+  clusters: GeoCluster[];
+  total_photos: number;
 }
 
 export interface ActivitySummary {
