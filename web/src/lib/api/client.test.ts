@@ -97,4 +97,16 @@ describe('API client', () => {
       body: JSON.stringify({ name: '旅行' }),
     }));
   });
+
+  it('accepts empty successful responses when updating people', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(null, { status: 200 }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await expect(client.people.update(7, { name: '小明' })).resolves.toBeUndefined();
+    expect(fetcher).toHaveBeenCalledWith('/api/people/7', expect.objectContaining({
+      method: 'PATCH',
+      body: JSON.stringify({ name: '小明' }),
+    }));
+  });
 });

@@ -5,6 +5,7 @@ import type {
   AlbumSummary,
   BatchPhotoUpdate,
   PhotoDetail,
+  PersonSummary,
   PhotoPage,
   CollectionSummary,
   TaskPage,
@@ -57,7 +58,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
     if (response.status === 204) {
       return undefined as T;
     }
-    return (await response.json()) as T;
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
 
   return {
@@ -106,6 +108,21 @@ export function createApiClient(options: ApiClientOptions = {}) {
       }),
       photos: (id: number, page = 1, perPage = 100) =>
         request<AlbumPhotoPage>(`/api/collections/${id}/photos?page=${page}&per_page=${perPage}`),
+    },
+    people: {
+      list: (status = 'active') =>
+        request<PersonSummary[]>(`/api/people?status=${encodeURIComponent(status)}`),
+      photos: (id: number, page = 1, perPage = 100) =>
+        request<PhotoPage>(`/api/people/${id}?page=${page}&per_page=${perPage}`),
+      update: (id: number, update: { name?: string; status?: string }) =>
+        request<void>(`/api/people/${id}`, {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(update),
+        }),
+      discover: () => request<{ people_created: number }>('/api/people/cluster/incremental', {
+        method: 'POST',
+      }),
     },
     request,
   };

@@ -133,6 +133,16 @@ export interface AlbumPhotoPage {
   per_page: number;
 }
 
+export interface PersonSummary {
+  id: number;
+  name: string | null;
+  parent_id: number | null;
+  cover_face_id: number | null;
+  face_count: number;
+  photo_count: number;
+  status: string;
+}
+
 export interface ApiErrorEnvelope {
   error?: {
     code?: string;

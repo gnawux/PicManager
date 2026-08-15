@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { createApiClient } from './lib/api/client';
   import AlbumsView from './lib/albums/AlbumsView.svelte';
+  import PeopleView from './lib/people/PeopleView.svelte';
   import StatusBadge from './lib/components/StatusBadge.svelte';
   import TimelineView from './lib/timeline/TimelineView.svelte';
   import { createHashRouter, routes } from './lib/router';
@@ -56,6 +57,11 @@
         <div><p class="eyebrow">Collections</p><h1 id="page-title">相册</h1><p class="subtitle">浏览自动整理的图库，也建立自己的精选集。</p></div>
       </section>
       <AlbumsView {api} />
+    {:else if $router.id === 'people'}
+      <section class="page-heading" aria-labelledby="page-title">
+        <div><p class="eyebrow">People</p><h1 id="page-title">人物</h1><p class="subtitle">按人物浏览照片，并整理识别结果。</p></div>
+      </section>
+      <PeopleView {api} />
     {:else}
       <section class="page-heading" aria-labelledby="page-title">
         <div>
