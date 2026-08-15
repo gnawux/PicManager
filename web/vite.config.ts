@@ -8,6 +8,7 @@ export default defineConfig({
     outDir: '../frontend',
     emptyOutDir: false,
     sourcemap: false,
+    minify: 'terser',
     rollupOptions: {
       output: {
         entryFileNames: 'assets/app.js',

@@ -13,6 +13,8 @@
   --focus: rgba(23, 105, 224, 0.28);
   --fill-subtle: rgba(118, 118, 128, 0.09);
   --radius-control: 10px;
+  --page: #f7f7f5;
+  --danger: #b42318;
 }
 
 * {
@@ -109,7 +111,7 @@ nav button.active {
 }
 
 main {
-  width: min(1440px, 100%);
+  width: min(1800px, 100%);
   margin: 0 auto;
   padding: 72px 32px;
 }

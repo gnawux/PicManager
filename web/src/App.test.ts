@@ -8,7 +8,7 @@ describe('application shell', () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
-        new Response(JSON.stringify({ photos: [], total: 0, page: 1, per_page: 100 }), {
+        new Response(JSON.stringify({ items: [], next_cursor: null, has_more: false }), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         }),

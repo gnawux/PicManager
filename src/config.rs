@@ -50,7 +50,7 @@ impl Config {
             if let Some(p) = file_cfg.port   { cfg.port = p; }
             if let Some(s) = file_cfg.thumb_size { cfg.thumb_size = s; }
         }
-        cfg
+        apply_env_overrides(cfg, |key| std::env::var(key).ok())
     }
 
     pub fn db_url(&self) -> String {
@@ -64,6 +64,24 @@ impl Config {
     pub fn activities_dir(&self) -> PathBuf {
         self.library_path.join(".activities")
     }
+}
+
+fn apply_env_overrides(
+    mut config: Config,
+    get: impl Fn(&str) -> Option<String>,
+) -> Config {
+    if let Some(path) = get("PICMANAGER_LIBRARY_PATH").filter(|value| !value.is_empty()) {
+        config.library_path = PathBuf::from(path);
+        config.db_path = config.library_path.join("picmanager.db");
+        config.thumb_cache_dir = config.library_path.join(".thumbs");
+    }
+    if let Some(host) = get("PICMANAGER_HOST").filter(|value| !value.is_empty()) {
+        config.host = host;
+    }
+    if let Some(port) = get("PICMANAGER_PORT").and_then(|value| value.parse().ok()) {
+        config.port = port;
+    }
+    config
 }
 
 fn load_file_config() -> Option<FileConfig> {
@@ -103,6 +121,20 @@ mod tests {
     #[test]
     fn bind_addr_format() {
         assert_eq!(Config::default().bind_addr(), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn environment_overrides_relocate_all_library_paths_and_server_address() {
+        let config = apply_env_overrides(Config::default(), |key| match key {
+            "PICMANAGER_LIBRARY_PATH" => Some("/tmp/picmanager-isolated".into()),
+            "PICMANAGER_HOST" => Some("0.0.0.0".into()),
+            "PICMANAGER_PORT" => Some("18080".into()),
+            _ => None,
+        });
+        assert_eq!(config.library_path, PathBuf::from("/tmp/picmanager-isolated"));
+        assert_eq!(config.db_path, PathBuf::from("/tmp/picmanager-isolated/picmanager.db"));
+        assert_eq!(config.thumb_cache_dir, PathBuf::from("/tmp/picmanager-isolated/.thumbs"));
+        assert_eq!(config.bind_addr(), "0.0.0.0:18080");
     }
 
     #[test]
