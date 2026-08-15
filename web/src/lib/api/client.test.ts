@@ -47,4 +47,27 @@ describe('API client', () => {
       '/api/timeline?limit=80&order=desc&cursor=opaque_cursor',
     );
   });
+
+  it('posts batch photo updates with stable field names', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ updated: 2 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.photos.batchUpdate([7, 9], { rotation_delta: 90, flip_h_toggle: true });
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/photos/batch-update',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          photo_ids: [7, 9],
+          rotation_delta: 90,
+          flip_h_toggle: true,
+        }),
+      }),
+    );
+  });
 });

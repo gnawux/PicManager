@@ -3,18 +3,23 @@
   import type { ApiClient } from '../api/client';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
+  import SelectionBar from './SelectionBar.svelte';
   import { groupTimelineItems } from './layout';
   import { createTimelineStore } from './store';
   import VirtualDateGroup from './VirtualDateGroup.svelte';
 
   interface Props { api: ApiClient }
-  let { api }: Props = $props();
+  let { api: client }: Props = $props();
   const timeline = createTimelineStore({
-    timeline: { page: (cursor?: string) => api.timeline.page(cursor) },
+    timeline: { page: (cursor?: string) => client.timeline.page(cursor) },
   } as ApiClient);
   let host: HTMLElement;
   let width = $state(1200);
   let density = $state(190);
+  let selected = $state(new Set<number>());
+  let anchorId = $state<number | null>(null);
+  let batchBusy = $state(false);
+  let batchError = $state<string | null>(null);
   let groups = $derived(groupTimelineItems($timeline.items));
 
   onMount(() => {
@@ -33,6 +38,72 @@
       void timeline.loadMore();
     }
   }
+
+  function toggleSelection(itemId: number, event: { shiftKey: boolean }) {
+    const next = new Set(selected);
+    const ids = $timeline.items.map((item) => item.id);
+    if (event.shiftKey && anchorId !== null) {
+      const start = ids.indexOf(anchorId);
+      const end = ids.indexOf(itemId);
+      if (start >= 0 && end >= 0) {
+        for (const id of ids.slice(Math.min(start, end), Math.max(start, end) + 1)) next.add(id);
+      }
+    } else if (next.has(itemId)) {
+      next.delete(itemId);
+    } else {
+      next.add(itemId);
+    }
+    anchorId = itemId;
+    selected = next;
+    batchError = null;
+  }
+
+  function handlePhotoKey(itemId: number, event: KeyboardEvent) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      toggleSelection(itemId, event);
+      return;
+    }
+    if (event.key === 'Escape') {
+      selected = new Set();
+      return;
+    }
+    const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+      ? 1
+      : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+        ? -1
+        : 0;
+    if (!direction) return;
+    event.preventDefault();
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-photo-id]')];
+    const index = buttons.findIndex((button) => Number(button.dataset.photoId) === itemId);
+    buttons[index + direction]?.focus();
+  }
+
+  function selectAllLoaded() {
+    selected = new Set($timeline.items.map((item) => item.id));
+    anchorId = $timeline.items.at(-1)?.id ?? null;
+  }
+
+  async function runBatch(action: 'rotate_left' | 'rotate_right' | 'flip_h' | 'flip_v') {
+    if (selected.size === 0 || batchBusy) return;
+    batchBusy = true;
+    batchError = null;
+    const update = action === 'rotate_left' ? { rotation_delta: -90 }
+      : action === 'rotate_right' ? { rotation_delta: 90 }
+      : action === 'flip_h' ? { flip_h_toggle: true }
+      : { flip_v_toggle: true };
+    try {
+      await client.photos.batchUpdate([...selected], update);
+      selected = new Set();
+      anchorId = null;
+      await timeline.reload();
+    } catch (error) {
+      batchError = error instanceof Error ? error.message : String(error);
+    } finally {
+      batchBusy = false;
+    }
+  }
 </script>
 
 <svelte:window onscroll={maybeLoadMore} />
@@ -43,6 +114,13 @@
     <span>密度</span>
     <input aria-label="照片密度" type="range" min="120" max="280" step="10" bind:value={density} />
   </label>
+  <div class="selection-actions">
+    {#if selected.size > 0}
+      <button type="button" onclick={() => { selected = new Set(); }}>清空选择</button>
+    {:else}
+      <button type="button" onclick={selectAllLoaded} disabled={$timeline.items.length === 0}>全选已载入</button>
+    {/if}
+  </div>
 </div>
 
 <div class="timeline" bind:this={host} aria-busy={$timeline.status === 'loading'}>
@@ -59,6 +137,9 @@
         items={group.items}
         {width}
         targetHeight={density}
+        {selected}
+        onselect={(item, event) => toggleSelection(item.id, event)}
+        onkey={(item, event) => handlePhotoKey(item.id, event)}
       />
     {/each}
 
@@ -80,10 +161,22 @@
   {/if}
 </div>
 
+{#if selected.size > 0}
+  <SelectionBar
+    count={selected.size}
+    busy={batchBusy}
+    error={batchError}
+    onaction={runBatch}
+    onclear={() => { selected = new Set(); }}
+  />
+{/if}
+
 <style>
   .timeline-controls { position: sticky; top: 64px; z-index: 6; display: flex; justify-content: space-between; align-items: center; min-height: 48px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; background: color-mix(in srgb, var(--page) 88%, transparent); backdrop-filter: blur(18px); }
   label { display: flex; align-items: center; gap: 9px; }
   input { width: 112px; accent-color: var(--accent); }
+  .selection-actions button { padding: 6px 10px; border: 0; border-radius: 8px; color: var(--accent); background: transparent; cursor: pointer; }
+  .selection-actions button:disabled { color: var(--muted); cursor: default; }
   .timeline { width: 100%; min-height: 50vh; }
   .load-more { display: grid; place-items: center; padding: 32px; }
   .end-marker { margin: 0; padding: 36px; color: var(--muted); text-align: center; }

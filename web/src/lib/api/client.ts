@@ -1,6 +1,7 @@
 import type {
   ApiErrorEnvelope,
   AppleSourcePage,
+  BatchPhotoUpdate,
   PhotoPage,
   TaskPage,
   TimelinePage,
@@ -61,6 +62,12 @@ export function createApiClient(options: ApiClientOptions = {}) {
         request<PhotoPage>(
           `/api/photos?page=${page}&per_page=${perPage}&order=${order}`,
         ),
+      batchUpdate: (photoIds: number[], update: BatchPhotoUpdate) =>
+        request<{ updated: number }>('/api/photos/batch-update', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ photo_ids: photoIds, ...update }),
+        }),
     },
     timeline: {
       page: (cursor?: string, limit = 120, order: 'asc' | 'desc' = 'desc') => {

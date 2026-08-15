@@ -14,6 +14,14 @@ export interface PhotoPage {
   per_page: number;
 }
 
+export interface BatchPhotoUpdate {
+  taken_at?: string;
+  timezone_offset?: number;
+  rotation_delta?: number;
+  flip_h_toggle?: boolean;
+  flip_v_toggle?: boolean;
+}
+
 export interface TimelineItem {
   id: number;
   taken_at: string | null;
