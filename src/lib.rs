@@ -1,5 +1,6 @@
 pub mod activities;
 pub mod album;
+pub mod apple;
 pub mod animal;
 pub mod catalog;
 pub mod face;

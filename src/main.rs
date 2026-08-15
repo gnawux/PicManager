@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, config::Config, face, metadata, migration, storage, importer, dedup};
+use picmanager::{activities, album, apple, config::Config, face, metadata, migration, storage, importer, dedup};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -72,6 +72,23 @@ enum Command {
     Migrate {
         #[command(subcommand)]
         action: MigrateAction,
+    },
+    /// Apple Photos inventory and synchronization
+    Apple {
+        #[command(subcommand)]
+        action: AppleAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AppleAction {
+    /// Ingest a complete metadata-only inventory produced by photobridge
+    Inventory {
+        file: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -386,6 +403,22 @@ async fn main() -> anyhow::Result<()> {
                             println!("        error: {error}");
                         }
                     }
+                }
+            }
+        },
+        Command::Apple { action } => match action {
+            AppleAction::Inventory { file, dry_run, json } => {
+                let report = apple::ingest_inventory(&pool, &file, dry_run).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("Photos assets      : {}", report.total_assets);
+                    println!("exact legacy links : {}", report.exact_links);
+                    println!("ambiguous links    : {}", report.ambiguous_links);
+                    println!("queued for export  : {}", report.queued_assets);
+                    println!("policy excluded    : {}", report.excluded_assets);
+                    println!("now missing        : {}", report.missing_assets);
+                    println!("mode               : {}", if dry_run { "dry-run" } else { "committed" });
                 }
             }
         },
