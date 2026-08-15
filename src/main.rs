@@ -96,6 +96,14 @@ enum AppleAction {
         #[arg(long)]
         json: bool,
     },
+    /// Verify and commit a completed PhotoBridge rendition package
+    CommitPackage {
+        #[arg(long)]
+        source_id: i64,
+        package: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -439,6 +447,21 @@ async fn main() -> anyhow::Result<()> {
                     println!("review candidates  : {}", report.review_candidates);
                     println!("queued work        : {}", report.queued_assets);
                     println!("sync job           : {}", report.job_id);
+                }
+            }
+            AppleAction::CommitPackage { source_id, package, json } => {
+                let result = apple::commit_rendition_package(&pool, source_id, &package).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    println!("source             : {}", result.source_id);
+                    println!("photo              : {}", result.photo_id);
+                    println!("asset              : {}", result.asset_id);
+                    println!("original variant   : {}", result.original_variant_id);
+                    println!("current variant    : {}", result.current_variant_id.map(|id| id.to_string()).unwrap_or_else(|| "none".into()));
+                    println!("master variant     : {}", result.master_variant_id);
+                    println!("display variant    : {}", result.display_variant_id);
+                    println!("display revision   : {}", result.display_revision);
                 }
             }
         },
