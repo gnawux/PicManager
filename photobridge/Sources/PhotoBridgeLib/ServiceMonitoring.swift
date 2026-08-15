@@ -1,5 +1,33 @@
 import Foundation
 
+public enum ServiceReadinessDecision: Equatable, Sendable {
+    case retry
+    case fail
+    case timedOut
+}
+
+public struct ServiceReadinessPolicy: Equatable, Sendable {
+    public let maximumAttempts: Int
+    public let pollInterval: Duration
+
+    public init(maximumAttempts: Int = 60, pollInterval: Duration = .milliseconds(500)) {
+        self.maximumAttempts = max(1, maximumAttempts)
+        self.pollInterval = pollInterval
+    }
+
+    public func decision(afterAttempt attempt: Int, error: Error) -> ServiceReadinessDecision {
+        if let serviceError = error as? ServiceDashboardError {
+            switch serviceError {
+            case .invalidBaseURL, .incompatibleAPI, .libraryMismatch:
+                return .fail
+            case .response:
+                break
+            }
+        }
+        return attempt < maximumAttempts ? .retry : .timedOut
+    }
+}
+
 public struct ServiceFailureAlertPolicy: Equatable, Sendable {
     public let failureThreshold: Int
     private(set) public var consecutiveFailures = 0

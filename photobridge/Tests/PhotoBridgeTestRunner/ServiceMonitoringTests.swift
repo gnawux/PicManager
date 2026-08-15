@@ -3,6 +3,26 @@ import PhotoBridgeLib
 
 func runServiceMonitoringTests() {
     suite("Native service monitoring") {
+        test("retries startup connection failures within a bounded readiness window") {
+            let policy = ServiceReadinessPolicy(maximumAttempts: 3, pollInterval: .zero)
+            try expect(
+                policy.decision(afterAttempt: 1, error: URLError(.cannotConnectToHost)),
+                equals: .retry
+            )
+            try expect(
+                policy.decision(afterAttempt: 3, error: URLError(.cannotConnectToHost)),
+                equals: .timedOut
+            )
+        }
+
+        test("fails readiness immediately for a different library") {
+            let policy = ServiceReadinessPolicy(maximumAttempts: 3, pollInterval: .zero)
+            try expect(
+                policy.decision(afterAttempt: 1, error: ServiceDashboardError.libraryMismatch),
+                equals: .fail
+            )
+        }
+
         test("alerts once after consecutive failures and resets after recovery") {
             var policy = ServiceFailureAlertPolicy(failureThreshold: 2)
             try expect(!policy.record(success: false))

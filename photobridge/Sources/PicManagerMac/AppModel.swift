@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     private let notifications = NativeNotifications()
     private var healthMonitorTask: Task<Void, Never>?
     private var alertPolicy = ServiceFailureAlertPolicy()
+    private let readinessPolicy = ServiceReadinessPolicy()
     private var libraryOwnership: LibraryOwnershipLock?
     private let launchAtLogin = LaunchAtLoginController()
 
@@ -214,7 +215,45 @@ final class AppModel: ObservableObject {
             }
         }
         serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration)
-        return true
+        serviceStatus = "Preparing library"
+        lastError = nil
+        return await waitForServiceReadiness(at: configuration.serviceURL)
+    }
+
+    private func waitForServiceReadiness(at serviceURL: URL?) async -> Bool {
+        guard let serviceURL else {
+            serviceStatus = "Invalid configuration"
+            lastError = ServiceDashboardError.invalidBaseURL.localizedDescription
+            return false
+        }
+        let client = dashboardClient(baseURL: serviceURL)
+        for attempt in 1...readinessPolicy.maximumAttempts {
+            guard !Task.isCancelled else { return false }
+            do {
+                dashboard = try await client.load()
+                serviceStatus = dashboard?.health.status.capitalized ?? "Available"
+                lastError = nil
+                return true
+            } catch {
+                switch readinessPolicy.decision(afterAttempt: attempt, error: error) {
+                case .retry:
+                    serviceStatus = "Preparing library (check \(attempt)/\(readinessPolicy.maximumAttempts))"
+                    lastError = nil
+                    try? await Task.sleep(for: readinessPolicy.pollInterval)
+                case .fail:
+                    dashboard = nil
+                    serviceStatus = error is ServiceDashboardError ? "Incompatible service" : "Unavailable"
+                    lastError = error.localizedDescription
+                    return false
+                case .timedOut:
+                    dashboard = nil
+                    serviceStatus = "Startup timed out"
+                    lastError = "The local service did not become ready within 30 seconds. Check diagnostics for startup errors."
+                    return false
+                }
+            }
+        }
+        return false
     }
 
     func stopService() {
