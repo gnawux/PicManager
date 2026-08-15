@@ -24,5 +24,8 @@
     "terser": "^5.50.0",
     "typescript": "latest",
     "vitest": "latest"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true
   }
 }
