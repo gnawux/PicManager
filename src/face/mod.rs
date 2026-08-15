@@ -21,11 +21,11 @@ use crate::orientation::{DisplayTransform, OrientationMode};
 /// stored in display space.
 pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) -> usize {
     // Fetch orientation data and build an effectively-oriented image.
-    let oriented = {
-        let row: Option<(i32, i32, i32, i32, String, Option<i64>, String)> = sqlx::query_as(
+    let (oriented, analyzed_revision) = {
+        let row: Option<(i32, i32, i32, i32, String, Option<i64>, String, i64)> = sqlx::query_as(
             "SELECT p.exif_orientation, p.rotation, p.flip_h, p.flip_v, \
                     COALESCE(vr.orientation_mode, 'legacy_unknown'), \
-                    vr.display_orientation, COALESCE(dv.path, p.path) \
+                    vr.display_orientation, COALESCE(dv.path, p.path), p.render_revision \
              FROM photos p \
              LEFT JOIN assets a ON a.photo_id = p.id \
              LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
@@ -37,8 +37,8 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) -
         .await
         .ok()
         .flatten();
-        if let Some((exif_orient, db_rot, db_flip_h, db_flip_v, mode, display_orient, path)) = row {
-            DisplayTransform::new(
+        if let Some((exif_orient, db_rot, db_flip_h, db_flip_v, mode, display_orient, path, revision)) = row {
+            let oriented = DisplayTransform::new(
                 OrientationMode::from_catalog(Some(&mode)),
                 display_orient.map(|value| value as u8),
                 exif_orient as u8,
@@ -47,9 +47,10 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) -
                 db_flip_h != 0,
                 db_flip_v != 0,
             )
-            .apply(img.clone())
+            .apply(img.clone());
+            (oriented, revision)
         } else {
-            img.clone()
+            (img.clone(), 0)
         }
     };
 
@@ -76,7 +77,19 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) -
         return 0;
     }
 
-    let face_ids = save_faces(pool, photo_id, &faces).await;
+    let current_revision: i64 = sqlx::query_scalar("SELECT render_revision FROM photos WHERE id = ?")
+        .bind(photo_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0);
+    if current_revision != analyzed_revision {
+        tracing::info!(
+            "discarding face analysis for photo {photo_id}: render revision changed from \
+             {analyzed_revision} to {current_revision}"
+        );
+        return 0;
+    }
+    let face_ids = save_faces(pool, photo_id, analyzed_revision, &faces).await;
 
     for (i, maybe_emb) in embeddings.into_iter().enumerate() {
         let Some(&face_id) = face_ids.get(i) else { continue };
@@ -98,12 +111,20 @@ pub async fn analyze_one(pool: &SqlitePool, photo_id: i64, img: &DynamicImage) -
     face_ids.len()
 }
 
-pub(crate) async fn save_faces(pool: &SqlitePool, photo_id: i64, faces: &[FaceRegion]) -> Vec<i64> {
+pub(crate) async fn save_faces(
+    pool: &SqlitePool,
+    photo_id: i64,
+    render_revision: i64,
+    faces: &[FaceRegion],
+) -> Vec<i64> {
     let mut face_ids = Vec::new();
     for face in faces {
         match sqlx::query_scalar(
-            "INSERT INTO faces (photo_id, x, y, width, height, confidence) \
-             VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
+            "INSERT INTO faces \
+                 (photo_id, x, y, width, height, confidence, render_revision) \
+             SELECT ?, ?, ?, ?, ?, ?, ? \
+             WHERE EXISTS (SELECT 1 FROM photos WHERE id = ? AND render_revision = ?) \
+             RETURNING id",
         )
         .bind(photo_id)
         .bind(face.x)
@@ -111,6 +132,9 @@ pub(crate) async fn save_faces(pool: &SqlitePool, photo_id: i64, faces: &[FaceRe
         .bind(face.width)
         .bind(face.height)
         .bind(face.confidence)
+        .bind(render_revision)
+        .bind(photo_id)
+        .bind(render_revision)
         .fetch_one(pool)
         .await
         {
@@ -191,7 +215,7 @@ mod tests {
         .await
         .unwrap();
 
-        save_faces(&pool, 1, &faces).await;
+        save_faces(&pool, 1, 0, &faces).await;
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM faces WHERE photo_id = 1")
             .fetch_one(&pool)

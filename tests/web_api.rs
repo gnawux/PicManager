@@ -382,6 +382,51 @@ async fn get_thumb_generates_and_caches() {
 }
 
 #[tokio::test]
+async fn transform_revision_never_reuses_a_stale_thumbnail() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/with_exif.jpg");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'revision-thumb', 'jpeg', 'imported') RETURNING id",
+    )
+    .bind(fixture.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    std::fs::write(tmp.path().join(format!("{id}.jpg")), b"stale").unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"rotation_delta":90}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{id}/thumb"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..2], &[0xff, 0xd8]);
+    assert!(tmp.path().join(format!("{id}_r1.jpg")).exists());
+}
+
+#[tokio::test]
 async fn photo_file_uses_catalog_display_variant_and_orientation_policy() {
     let (app, pool, tmp) = test_app_with_pool().await;
     let original = tmp.path().join("original.png");
@@ -2390,12 +2435,14 @@ async fn rotate_single_photo_updates_rotation() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let (rotation,): (i32,) = sqlx::query_as("SELECT rotation FROM photos WHERE id = ?")
+    let (rotation, render_revision): (i32, i64) =
+        sqlx::query_as("SELECT rotation, render_revision FROM photos WHERE id = ?")
         .bind(id)
         .fetch_one(&pool)
         .await
         .unwrap();
     assert_eq!(rotation, 90);
+    assert_eq!(render_revision, 1);
 }
 
 #[tokio::test]
@@ -2553,12 +2600,14 @@ async fn batch_rotate_updates_all_photos() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     for id in [id1, id2] {
-        let (rotation,): (i32,) = sqlx::query_as("SELECT rotation FROM photos WHERE id = ?")
+        let (rotation, render_revision): (i32, i64) =
+            sqlx::query_as("SELECT rotation, render_revision FROM photos WHERE id = ?")
             .bind(id)
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(rotation, 270);
+        assert_eq!(render_revision, 1);
     }
 }
 

@@ -451,6 +451,9 @@ async fn main() -> anyhow::Result<()> {
             }
             AppleAction::CommitPackage { source_id, package, json } => {
                 let result = apple::commit_rendition_package(&pool, source_id, &package).await?;
+                if result.derived_invalidated {
+                    face::job::reanalyze_one_photo(&pool, result.photo_id).await;
+                }
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?);
                 } else {

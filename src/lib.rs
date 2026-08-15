@@ -6,6 +6,7 @@ pub mod catalog;
 pub mod face;
 pub mod config;
 pub mod dedup;
+pub mod derived;
 pub mod error;
 pub mod image_open;
 pub mod importer;

@@ -52,6 +52,7 @@ pub struct RenditionCommit {
     pub master_variant_id: i64,
     pub display_variant_id: i64,
     pub display_revision: i64,
+    pub derived_invalidated: bool,
 }
 
 pub async fn commit_rendition_package(
@@ -222,7 +223,8 @@ pub async fn commit_rendition_package(
             .bind(asset_id)
             .fetch_one(&mut *tx)
             .await?;
-    if previous_display != Some(display_variant_id) {
+    let display_changed = previous_display != Some(display_variant_id);
+    if display_changed {
         display_revision += 1;
         sqlx::query(
             "INSERT INTO asset_display_revisions (asset_id, revision, previous_variant_id, \
@@ -234,6 +236,7 @@ pub async fn commit_rendition_package(
         .bind(display_variant_id)
         .execute(&mut *tx)
         .await?;
+        crate::derived::invalidate_in_transaction(&mut tx, photo_id).await?;
     }
     sqlx::query(
         "UPDATE assets SET master_variant_id = ?, display_variant_id = ?, display_revision = ?, \
@@ -262,6 +265,7 @@ pub async fn commit_rendition_package(
         master_variant_id,
         display_variant_id,
         display_revision,
+        derived_invalidated: display_changed,
     })
 }
 
@@ -523,6 +527,16 @@ mod tests {
             committed.current_variant_id
         );
         assert_eq!(committed.display_revision, 1);
+        assert!(committed.derived_invalidated);
+        let derived: (i64, String, String) = sqlx::query_as(
+            "SELECT render_revision, thumbnail_status, face_status \
+             FROM derived_media_state WHERE photo_id = ?",
+        )
+        .bind(committed.photo_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(derived, (1, "pending".into(), "pending".into()));
         let source: (String, Option<i64>) =
             sqlx::query_as("SELECT sync_status, asset_id FROM asset_sources WHERE id = ?")
                 .bind(source_id)
@@ -543,12 +557,46 @@ mod tests {
         let repeated = commit_rendition_package(&pool, source_id, temp.path())
             .await
             .unwrap();
-        assert_eq!(repeated, committed);
+        assert_eq!(repeated.display_revision, committed.display_revision);
+        assert!(!repeated.derived_invalidated);
+        let render_revision: i64 =
+            sqlx::query_scalar("SELECT render_revision FROM photos WHERE id = ?")
+                .bind(committed.photo_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(render_revision, 1);
         let revisions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM asset_display_revisions")
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(revisions, 1);
+
+        let next = tempfile::tempdir().unwrap();
+        write_package(
+            next.path(),
+            "asset/L0/001",
+            b"original bytes",
+            Some(b"new edited bytes"),
+        );
+        let manifest_path = next.path().join("manifest.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        manifest["current"]["generation_key"] = serde_json::json!("v2");
+        std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+        let changed = commit_rendition_package(&pool, source_id, next.path())
+            .await
+            .unwrap();
+        assert_eq!(changed.display_revision, 2);
+        assert!(changed.derived_invalidated);
+        let state_revision: i64 = sqlx::query_scalar(
+            "SELECT render_revision FROM derived_media_state WHERE photo_id = ?",
+        )
+        .bind(changed.photo_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(state_revision, 2);
     }
 
     #[tokio::test]

@@ -191,8 +191,9 @@ pub async fn patch_photo(
         transform_changed = true;
     }
     if transform_changed {
-        let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
-        let _ = tokio::fs::remove_file(&cache_path).await;
+        crate::derived::invalidate(&state.pool, id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Re-analyze faces in the new display orientation (fire-and-forget).
         let pool2 = state.pool.clone();
         tokio::spawn(async move {
@@ -255,8 +256,9 @@ pub async fn batch_update_photos(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         if has_transform {
-            let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
-            let _ = tokio::fs::remove_file(&cache_path).await;
+            crate::derived::invalidate(&state.pool, id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         updated += 1;
     }
@@ -346,10 +348,10 @@ pub async fn get_thumb(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Response {
-    let row: Option<(String, i32, i32, i32, i32, String, Option<i64>)> = sqlx::query_as(
+    let row: Option<(String, i32, i32, i32, i32, String, Option<i64>, i64)> = sqlx::query_as(
         "SELECT COALESCE(dv.path, p.path), p.rotation, p.flip_h, p.flip_v, \
                 p.exif_orientation, COALESCE(vr.orientation_mode, 'legacy_unknown'), \
-                vr.display_orientation \
+                vr.display_orientation, p.render_revision \
          FROM photos p \
          LEFT JOIN assets a ON a.photo_id = p.id \
          LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
@@ -361,11 +363,15 @@ pub async fn get_thumb(
     .await
     .unwrap_or(None);
 
-    let Some((path, rotation, flip_h, flip_v, exif_orient, mode, display_orient)) = row else {
+    let Some((path, rotation, flip_h, flip_v, exif_orient, mode, display_orient, render_revision)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
+    let cache_path = crate::derived::thumbnail_cache_path(
+        &state.config.thumb_cache_dir,
+        id,
+        render_revision,
+    );
     let thumb_size = state.config.thumb_size;
 
     let result = tokio::task::spawn_blocking(move || {
@@ -392,7 +398,10 @@ pub async fn get_thumb(
     .await;
 
     match result {
-        Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
+        Ok(Ok(bytes)) => {
+            crate::derived::mark_thumbnail_ready(&state.pool, id, render_revision).await;
+            ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response()
+        }
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
