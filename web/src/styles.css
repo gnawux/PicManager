@@ -182,6 +182,9 @@ h1 {
   .topbar {
     grid-template-columns: 1fr auto;
     padding: 0 16px;
+    /* backdrop-filter creates a containing block that traps the fixed bottom nav. */
+    backdrop-filter: none;
+    background: rgba(255, 255, 255, 0.96);
   }
 
   .topbar nav {
@@ -193,6 +196,8 @@ h1 {
     overflow-x: auto;
     overscroll-behavior-x: contain;
     scrollbar-width: none;
+    border: 1px solid var(--line);
+    background: rgba(250, 250, 250, 0.96);
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
   }
 
