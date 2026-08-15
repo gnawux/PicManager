@@ -90,6 +90,12 @@ enum AppleAction {
         #[arg(long)]
         json: bool,
     },
+    /// Ingest a complete incremental change batch produced by photobridge
+    Changes {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -420,6 +426,19 @@ async fn main() -> anyhow::Result<()> {
                     println!("policy excluded    : {}", report.excluded_assets);
                     println!("now missing        : {}", report.missing_assets);
                     println!("mode               : {}", if dry_run { "dry-run" } else { "committed" });
+                }
+            }
+            AppleAction::Changes { file, json } => {
+                let report = apple::ingest_changes(&pool, &file).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("changed assets     : {}", report.changed_assets);
+                    println!("removed assets     : {}", report.removed_assets);
+                    println!("exact legacy links : {}", report.exact_links);
+                    println!("review candidates  : {}", report.review_candidates);
+                    println!("queued work        : {}", report.queued_assets);
+                    println!("sync job           : {}", report.job_id);
                 }
             }
         },
