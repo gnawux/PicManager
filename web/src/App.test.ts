@@ -20,7 +20,7 @@ describe('application shell', () => {
     render(App);
     expect(screen.getByRole('heading', { name: '所有照片' })).toBeVisible();
     expect(screen.getByRole('navigation', { name: '主要导航' })).toBeVisible();
-    expect(screen.getByRole('link', { name: '经典界面' })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: '经典界面' })).toHaveAttribute('href', '/legacy/');
     await waitFor(() => expect(screen.getByText('图库还是空的')).toBeVisible());
   });
 });

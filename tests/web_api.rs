@@ -343,17 +343,22 @@ async fn frontend_index_is_served() {
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    // ServeDir serves index.html; 200 means the file exists and routing works
     assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("/assets/"));
+    assert!(html.contains("<div id=\"app\"></div>"));
 }
 
 #[tokio::test]
-async fn modern_frontend_build_is_embedded_under_coexistence_path() {
+async fn classic_frontend_remains_embedded_under_legacy_path() {
     let app = test_app().await;
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/modern/")
+                .uri("/legacy/")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -364,8 +369,8 @@ async fn modern_frontend_build_is_embedded_under_coexistence_path() {
         .await
         .unwrap();
     let html = std::str::from_utf8(&body).unwrap();
-    assert!(html.contains("/modern/assets/"));
-    assert!(html.contains("<div id=\"app\"></div>"));
+    assert!(html.contains("/legacy/app.js"));
+    assert!(html.contains("id=\"photo-grid\""));
 }
 
 #[tokio::test]

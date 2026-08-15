@@ -39,7 +39,7 @@
     </nav>
     <div class="topbar-actions">
       <StatusBadge label="本地私有" tone="success" />
-      <a class="legacy-link" href="/">经典界面</a>
+      <a class="legacy-link" href="/legacy/">经典界面</a>
     </div>
   </header>
 
@@ -73,7 +73,7 @@
           <h1 id="page-title">{$router.label}</h1>
           <p class="subtitle">这个视图将在接下来的迁移里程碑中接入。</p>
         </div>
-        <a class="legacy-link" href="/">在经典界面中打开</a>
+        <a class="legacy-link" href="/legacy/">在经典界面中打开</a>
       </section>
     {/if}
   </main>

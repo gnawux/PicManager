@@ -2,11 +2,11 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: '/modern/',
+  base: '/',
   plugins: [svelte()],
   build: {
-    outDir: '../frontend/modern',
-    emptyOutDir: true,
+    outDir: '../frontend',
+    emptyOutDir: false,
     sourcemap: false,
   },
 });
