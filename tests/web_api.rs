@@ -382,6 +382,71 @@ async fn get_thumb_generates_and_caches() {
 }
 
 #[tokio::test]
+async fn photo_file_uses_catalog_display_variant_and_orientation_policy() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let original = tmp.path().join("original.png");
+    let current = tmp.path().join("current.png");
+    image::DynamicImage::new_rgb8(4, 3).save(&original).unwrap();
+    image::DynamicImage::new_rgb8(7, 5).save(&current).unwrap();
+
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'catalog-display', 'png', 'imported') RETURNING id",
+    )
+    .bind(original.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let asset_id: i64 = sqlx::query_scalar(
+        "INSERT INTO assets (photo_id) VALUES (?) RETURNING id",
+    )
+    .bind(photo_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let variant_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path) \
+         VALUES (?, 'current', ?) RETURNING id",
+    )
+    .bind(asset_id)
+    .bind(current.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE assets SET display_variant_id = ? WHERE id = ?")
+        .bind(variant_id)
+        .bind(asset_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO variant_renditions \
+         (variant_id, provenance, orientation_mode, display_orientation) \
+         VALUES (?, 'test', 'metadata', 6)",
+    )
+    .bind(variant_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{photo_id}/file"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (5, 7));
+}
+
+#[tokio::test]
 async fn get_photo_detail_returns_full_metadata() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 

@@ -110,7 +110,11 @@ pub(crate) async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64) {
         .ok();
 
     let path: Option<String> = sqlx::query_scalar(
-        "SELECT path FROM photos WHERE id = ? AND import_status = 'imported'",
+        "SELECT COALESCE(dv.path, p.path) \
+         FROM photos p \
+         LEFT JOIN assets a ON a.photo_id = p.id \
+         LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
+         WHERE p.id = ? AND p.import_status = 'imported'",
     )
     .bind(photo_id)
     .fetch_optional(pool)

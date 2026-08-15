@@ -11,6 +11,7 @@ pub mod image_open;
 pub mod importer;
 pub mod metadata;
 pub mod migration;
+pub mod orientation;
 pub mod storage;
 pub mod sync;
 pub mod web;
