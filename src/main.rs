@@ -228,7 +228,23 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Dedup { full } => {
             let context = application.request_context(CallerKind::Cli);
-            let n = application.dedup().scan(&context, full).await?;
+            let queued = jobs::handlers::enqueue_dedup_scan(&application, &context, full).await?;
+            let worker = jobs::WorkerRuntime::new(
+                pool.clone(), jobs::handlers::registry(application.clone()),
+                jobs::WorkerConfig::default(), "cli-dedup-worker",
+            ).start();
+            let completed = loop {
+                let job = jobs::get(&pool, queued.job.id).await?;
+                if matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled") {
+                    break job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            };
+            worker.shutdown().await;
+            if completed.status != "succeeded" {
+                anyhow::bail!(completed.error_message.unwrap_or_else(|| "去重扫描失败".into()));
+            }
+            let n = completed.result()?.and_then(|value| value["groups_created"].as_u64()).unwrap_or(0);
             println!("扫描完成，发现 {n} 个新重复组");
 
             let groups = application.dedup().list(&context).await?;
@@ -452,7 +468,24 @@ async fn main() -> anyhow::Result<()> {
             AppleAction::CommitPackage { source_id, package, json } => {
                 let result = apple::commit_rendition_package(&pool, source_id, &package).await?;
                 if result.derived_invalidated {
-                    face::job::reanalyze_one_photo(&pool, result.photo_id).await;
+                    let context = application.request_context(CallerKind::Cli);
+                    let correlation = context.request_id.to_string();
+                    jobs::handlers::enqueue_derived_maintenance(
+                        &application, &context, Some(vec![result.photo_id]),
+                    ).await?;
+                    let worker = jobs::WorkerRuntime::new(
+                        pool.clone(), jobs::handlers::registry(application.clone()),
+                        jobs::WorkerConfig::default(), "cli-derived-worker",
+                    ).start();
+                    loop {
+                        let active = jobs::list(&pool, None, None, None, 500).await?
+                            .into_iter()
+                            .any(|job| job.correlation_id.as_deref() == Some(&correlation)
+                                && matches!(job.status.as_str(), "queued" | "running" | "retry_wait"));
+                        if !active { break; }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    worker.shutdown().await;
                 }
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?);

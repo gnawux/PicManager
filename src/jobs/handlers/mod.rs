@@ -1,8 +1,13 @@
 mod analysis;
 mod import;
+mod maintenance;
 mod thumbnail;
 
 pub use import::{ImportJobHandler, ImportJobResult};
+pub use maintenance::{
+    DedupScanJobHandler, DerivedMaintenanceJobHandler, enqueue_dedup_scan,
+    enqueue_derived_maintenance,
+};
 pub use thumbnail::{ThumbnailJobHandler, ThumbnailJobPayload, enqueue as enqueue_thumbnail};
 
 use crate::application::Application;
@@ -17,6 +22,11 @@ pub fn registry(application: Application) -> WorkerRegistry {
             AnimalAnalysisJobHandler(application.clone()),
         )
         .register("geocode", GeocodeJobHandler(application.clone()))
+        .register("dedup_scan", DedupScanJobHandler(application.clone()))
+        .register(
+            "derived_maintenance",
+            DerivedMaintenanceJobHandler(application.clone()),
+        )
         .register("thumbnail", ThumbnailJobHandler::new(application))
 }
 pub use analysis::{

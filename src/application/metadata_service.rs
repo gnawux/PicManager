@@ -145,13 +145,15 @@ impl PhotoMetadataService {
             .map_err(ServiceError::from)?;
 
         if transform_changed && !changed_ids.is_empty() {
-            let pool = self.application.pool().clone();
-            let reanalyze_ids = changed_ids.clone();
-            tokio::spawn(async move {
-                for photo_id in reanalyze_ids {
-                    crate::face::job::reanalyze_one_photo(&pool, photo_id).await;
-                }
-            });
+            if let Err(error) = crate::jobs::handlers::enqueue_derived_maintenance(
+                &self.application,
+                context,
+                Some(changed_ids.clone()),
+            )
+            .await
+            {
+                tracing::error!("failed to enqueue derived-media maintenance: {error}");
+            }
         }
 
         Ok(MetadataUpdateResult {
