@@ -38,6 +38,24 @@ let package = Package(
                 ])
             ]
         ),
+        // Native menu-bar shell. The photo experience remains the Rust/Web UI.
+        .executableTarget(
+            name: "PicManagerMac",
+            dependencies: ["PhotoBridgeLib"],
+            path: "Sources/PicManagerMac",
+            exclude: ["Info.plist", "PicManagerMac.entitlements"],
+            linkerSettings: [
+                .linkedFramework("SwiftUI"),
+                .linkedFramework("WebKit"),
+                .linkedFramework("Photos"),
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/PicManagerMac/Info.plist",
+                ]),
+            ]
+        ),
         // Test runner executable
         .executableTarget(
             name: "PhotoBridgeTestRunner",
