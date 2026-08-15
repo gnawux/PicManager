@@ -134,6 +134,55 @@ async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
 }
 
 #[tokio::test]
+async fn task_api_exposes_and_controls_application_jobs_without_id_collisions() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO application_jobs \
+         (kind, payload_json, status, max_attempts, attempt_count, error_code, error_message, finished_at) \
+         VALUES ('test_control', '{}', 'failed', 1, 1, 'scan_failed', 'scan failed', datetime('now')) \
+         RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let public_id = -job_id;
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/tasks?source=application&status=failed")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["tasks"][0]["id"], public_id);
+    assert_eq!(json["tasks"][0]["source"], "application");
+
+    let retry = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{public_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(retry.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "queued");
+
+    let cancel = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{public_id}/cancel"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(cancel.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "cancelled");
+
+    let conflict = app.oneshot(
+        Request::builder().uri(format!("/api/tasks/{public_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
 async fn apple_source_api_filters_inventory_and_retries_failures() {
     let (app, pool, _tmp) = test_app_with_pool().await;
     let failed_id: i64 = sqlx::query_scalar(

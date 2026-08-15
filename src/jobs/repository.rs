@@ -101,17 +101,42 @@ pub async fn request_cancel(pool: &SqlitePool, job_id: i64) -> Result<Job> {
     let result = sqlx::query(
         "UPDATE application_jobs SET \
              cancel_requested_at = COALESCE(cancel_requested_at, datetime('now')), \
-             status = CASE WHEN status IN ('queued', 'retry_wait') THEN 'cancelled' ELSE status END, \
-             finished_at = CASE WHEN status IN ('queued', 'retry_wait') THEN datetime('now') ELSE finished_at END, \
+             status = CASE WHEN status IN ('queued', 'retry_wait', 'failed') THEN 'cancelled' ELSE status END, \
+             finished_at = CASE WHEN status IN ('queued', 'retry_wait', 'failed') THEN datetime('now') ELSE finished_at END, \
              updated_at = datetime('now') \
-         WHERE id = ? AND status IN ('queued', 'running', 'retry_wait')",
+         WHERE id = ? AND status IN ('queued', 'running', 'retry_wait', 'failed')",
     )
     .bind(job_id)
     .execute(pool)
     .await?;
     if result.rows_affected() == 0 {
         let job = get(pool, job_id).await?;
-        return Ok(job);
+        return Err(AppError::Metadata(format!(
+            "job {job_id} cannot be cancelled from {}",
+            job.status
+        )));
+    }
+    get(pool, job_id).await
+}
+
+pub async fn retry(pool: &SqlitePool, job_id: i64) -> Result<Job> {
+    let result = sqlx::query(
+        "UPDATE application_jobs SET status = 'queued', \
+             max_attempts = attempt_count + 1, next_run_at = NULL, \
+             cancel_requested_at = NULL, error_code = NULL, error_message = NULL, \
+             error_details_json = NULL, result_json = NULL, finished_at = NULL, \
+             updated_at = datetime('now') \
+         WHERE id = ? AND status = 'failed'",
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        let job = get(pool, job_id).await?;
+        return Err(AppError::Metadata(format!(
+            "job {job_id} cannot be retried from {}",
+            job.status
+        )));
     }
     get(pool, job_id).await
 }
@@ -552,6 +577,33 @@ mod tests {
         .unwrap();
         assert_eq!(failed.status, "failed");
         assert_eq!(failed.attempt_count, 2);
+    }
+
+    #[tokio::test]
+    async fn manual_retry_preserves_attempt_history_and_extends_budget() {
+        let pool = pool().await;
+        let mut input = NewJob::new("geocode", serde_json::json!({}));
+        input.max_attempts = 1;
+        let job = enqueue(&pool, &input).await.unwrap().job;
+        let lease = lease_next(&pool, "worker-a", 60).await.unwrap().unwrap();
+        fail(&pool, &lease, &JobFailure::terminal("offline", "offline"), 0)
+            .await
+            .unwrap();
+
+        let queued = retry(&pool, job.id).await.unwrap();
+        assert_eq!(queued.status, "queued");
+        assert_eq!(queued.attempt_count, 1);
+        assert_eq!(queued.max_attempts, 2);
+        let second = lease_next(&pool, "worker-b", 60).await.unwrap().unwrap();
+        assert_eq!(second.job.attempt_count, 2);
+        let attempts: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM application_job_attempts WHERE job_id = ?",
+        )
+        .bind(job.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 2);
     }
 
     #[tokio::test]

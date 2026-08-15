@@ -85,7 +85,7 @@ Retries preserve previous attempts and diagnostics.
 ## Job kinds and idempotency
 
 Initial registered kinds are `import`, `thumbnail`, `face_analysis`, `animal_analysis`,
-`geocode`, `dedup_scan`, `derived_media` and Apple synchronization operations. Payloads
+`geocode`, `dedup_scan`, `derived_maintenance` and Apple synchronization operations. Payloads
 include a version. Unknown kinds or versions fail visibly rather than being discarded.
 
 Idempotency is kind-specific:
