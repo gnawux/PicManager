@@ -280,17 +280,29 @@ pub async fn claim_next_item(
 }
 
 pub async fn recover_expired_leases(pool: &SqlitePool) -> Result<u64> {
-    let result = sqlx::query(
-        "UPDATE sync_items SET status = 'queued', lease_owner = NULL, \
-         lease_expires_at = NULL, updated_at = datetime('now') \
+    let mut tx = pool.begin().await?;
+    let expired: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM sync_items \
          WHERE status = 'leased' AND lease_expires_at <= datetime('now')",
-    )
-    .execute(pool)
-    .await?;
-    Ok(result.rows_affected())
+    ).fetch_all(&mut *tx).await?;
+    for item_id in &expired {
+        sqlx::query(
+            "UPDATE sync_items SET \
+             status = CASE WHEN attempt_count >= max_attempts THEN 'failed' ELSE 'queued' END, \
+             lease_owner = NULL, lease_expires_at = NULL, \
+             last_error = CASE WHEN attempt_count >= max_attempts \
+                 THEN 'worker lease expired after maximum attempts' ELSE last_error END, \
+             finished_at = CASE WHEN attempt_count >= max_attempts THEN datetime('now') ELSE NULL END, \
+             updated_at = datetime('now') WHERE id = ? AND status = 'leased'",
+        ).bind(item_id).execute(&mut *tx).await?;
+        refresh_job_for_item(&mut tx, *item_id).await?;
+    }
+    tx.commit().await?;
+    Ok(expired.len() as u64)
 }
 
 pub async fn mark_item_succeeded(pool: &SqlitePool, item_id: i64, worker: &str) -> Result<()> {
+    let mut tx = pool.begin().await?;
     let result = sqlx::query(
         "UPDATE sync_items SET status = 'succeeded', lease_owner = NULL, \
          lease_expires_at = NULL, last_error = NULL, finished_at = datetime('now'), \
@@ -299,12 +311,14 @@ pub async fn mark_item_succeeded(pool: &SqlitePool, item_id: i64, worker: &str) 
     )
     .bind(item_id)
     .bind(worker)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     if result.rows_affected() == 0 {
         return Err(sqlx::Error::RowNotFound.into());
     }
-    refresh_job_for_item(pool, item_id).await
+    refresh_job_for_item(&mut tx, item_id).await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn fail_item(
@@ -313,13 +327,14 @@ pub async fn fail_item(
     worker: &str,
     error: &str,
 ) -> Result<bool> {
+    let mut tx = pool.begin().await?;
     let item: Option<(i64, i64)> = sqlx::query_as(
         "SELECT attempt_count, max_attempts FROM sync_items \
          WHERE id = ? AND status = 'leased' AND lease_owner = ?",
     )
     .bind(item_id)
     .bind(worker)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let (attempt_count, max_attempts) = item.ok_or(sqlx::Error::RowNotFound)?;
     let will_retry = attempt_count < max_attempts;
@@ -328,35 +343,45 @@ pub async fn fail_item(
         let exponent = attempt_count.clamp(1, 10) as u32;
         let delay = 2_i64.pow(exponent).min(3600);
         let modifier = format!("+{delay} seconds");
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE sync_items SET status = 'queued', available_at = datetime('now', ?), \
              lease_owner = NULL, lease_expires_at = NULL, last_error = ?, \
-             updated_at = datetime('now') WHERE id = ?",
+             updated_at = datetime('now') \
+             WHERE id = ? AND status = 'leased' AND lease_owner = ?",
         )
         .bind(modifier)
         .bind(error)
         .bind(item_id)
-        .execute(pool)
+        .bind(worker)
+        .execute(&mut *tx)
         .await?;
+        if result.rows_affected() == 0 { return Err(sqlx::Error::RowNotFound.into()); }
     } else {
-        sqlx::query(
+        let result = sqlx::query(
             "UPDATE sync_items SET status = 'failed', lease_owner = NULL, \
              lease_expires_at = NULL, last_error = ?, finished_at = datetime('now'), \
-             updated_at = datetime('now') WHERE id = ?",
+             updated_at = datetime('now') \
+             WHERE id = ? AND status = 'leased' AND lease_owner = ?",
         )
         .bind(error)
         .bind(item_id)
-        .execute(pool)
+        .bind(worker)
+        .execute(&mut *tx)
         .await?;
+        if result.rows_affected() == 0 { return Err(sqlx::Error::RowNotFound.into()); }
     }
-    refresh_job_for_item(pool, item_id).await?;
+    refresh_job_for_item(&mut tx, item_id).await?;
+    tx.commit().await?;
     Ok(will_retry)
 }
 
-async fn refresh_job_for_item(pool: &SqlitePool, item_id: i64) -> Result<()> {
+async fn refresh_job_for_item(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    item_id: i64,
+) -> Result<()> {
     let job_id: i64 = sqlx::query_scalar("SELECT job_id FROM sync_items WHERE id = ?")
         .bind(item_id)
-        .fetch_one(pool)
+        .fetch_one(&mut **tx)
         .await?;
     let (completed, failed, pending): (i64, i64, i64) = sqlx::query_as(
         "SELECT \
@@ -366,7 +391,7 @@ async fn refresh_job_for_item(pool: &SqlitePool, item_id: i64) -> Result<()> {
          FROM sync_items WHERE job_id = ?",
     )
     .bind(job_id)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
     let status = if pending > 0 {
         "running"
@@ -385,7 +410,7 @@ async fn refresh_job_for_item(pool: &SqlitePool, item_id: i64) -> Result<()> {
     .bind(status)
     .bind(pending)
     .bind(job_id)
-    .execute(pool)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -521,6 +546,25 @@ mod tests {
         let recovered = claim_next_item(&pool, "worker-2", 60).await.unwrap().unwrap();
         assert_eq!(recovered.id, claimed.id);
         assert_eq!(recovered.attempt_count, 2);
+    }
+
+    #[tokio::test]
+    async fn expired_lease_at_attempt_limit_fails_job() {
+        let pool = test_pool().await;
+        persist_discovery(&pool, &DiscoveryBatch {
+            items: vec![item("asset-1", 1)],
+            ..batch(None, Some(b"token-1"))
+        }).await.unwrap();
+        let claimed = claim_next_item(&pool, "dead-worker", 60).await.unwrap().unwrap();
+        sqlx::query("UPDATE sync_items SET lease_expires_at = datetime('now', '-1 second') WHERE id = ?")
+            .bind(claimed.id).execute(&pool).await.unwrap();
+        assert_eq!(recover_expired_leases(&pool).await.unwrap(), 1);
+        assert!(claim_next_item(&pool, "worker-2", 60).await.unwrap().is_none());
+        let detail = get_job(&pool, claimed.job_id).await.unwrap();
+        assert_eq!(detail.job.status, "failed");
+        assert_eq!(detail.job.failed_items, 1);
+        assert_eq!(detail.items[0].status, "failed");
+        assert!(detail.items[0].last_error.as_deref().unwrap().contains("lease expired"));
     }
 
     #[tokio::test]
