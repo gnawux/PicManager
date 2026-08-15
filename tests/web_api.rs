@@ -134,6 +134,51 @@ async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
 }
 
 #[tokio::test]
+async fn apple_source_api_filters_inventory_and_retries_failures() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let failed_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_sources (provider, external_id, original_filename, sync_status, last_error) \
+         VALUES ('apple_photos', 'asset-1', 'IMG_0042.HEIC', 'failed', 'iCloud offline') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO asset_sources (provider, external_id, original_filename, sync_status) \
+         VALUES ('apple_photos', 'asset-2', 'IMG_0043.HEIC', 'ready')",
+    ).execute(&pool).await.unwrap();
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/apple/sources?status=failed&search=0042")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["sources"][0]["original_filename"], "IMG_0042.HEIC");
+    assert_eq!(json["status_counts"]["failed"], 1);
+    assert_eq!(json["status_counts"]["synced"], 1);
+
+    let retry = app.clone().oneshot(
+        Request::builder().uri(format!("/api/apple/sources/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(retry.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source"]["sync_status"], "queued");
+    assert!(json["job_id"].as_i64().unwrap() > 0);
+
+    let conflict = app.clone().oneshot(
+        Request::builder().uri(format!("/api/apple/sources/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let missing = app.oneshot(
+        Request::builder().uri("/api/apple/sources/9999/retry")
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn get_thumb_unknown_id_returns_404() {
     let app = test_app().await;
     let response = app
