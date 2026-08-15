@@ -32,4 +32,6 @@ runPicManagerRunnerTests()
 // Step 43c
 runDiskSpaceCheckTests()
 
+runInventoryRecordTests()
+
 finish()
