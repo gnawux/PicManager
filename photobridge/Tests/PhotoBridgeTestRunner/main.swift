@@ -34,4 +34,6 @@ runDiskSpaceCheckTests()
 
 runInventoryRecordTests()
 
+runRenditionExportTests()
+
 finish()

@@ -12,6 +12,7 @@ struct PhotoBridge: AsyncParsableCommand {
         subcommands: [
             InventoryCommand.self,
             ChangesCommand.self,
+            ExportAssetCommand.self,
             ExportCommand.self,
             SyncCommand.self,
             StatusCommand.self,
