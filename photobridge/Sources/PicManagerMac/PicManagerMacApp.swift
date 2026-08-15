@@ -49,8 +49,11 @@ private struct LibraryShellView: View {
         } else {
             DashboardView(model: model)
                 .task {
-                    model.prepareServiceExecutable()
+                    await model.ensureServiceRunning()
                     await model.refreshDashboard()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                    model.stopService()
                 }
         }
     }

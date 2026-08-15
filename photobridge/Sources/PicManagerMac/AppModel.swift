@@ -15,6 +15,7 @@ final class AppModel: ObservableObject {
     @Published var dashboard: ServiceDashboard?
     @Published var dashboardLoading = false
     @Published var serviceExecutable: ResolvedServiceExecutable?
+    private let serviceProcess = ServiceProcessController()
 
     init() {
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
@@ -22,6 +23,9 @@ final class AppModel: ObservableObject {
         onboardingRequired = saved == nil
         libraryConfirmed = saved != nil
         photoAccess = Self.photoAccessReadiness()
+        serviceProcess.onStateChange = { [weak self] state in
+            self?.serviceStatus = state.label
+        }
     }
 
     func saveConfiguration() {
@@ -125,6 +129,21 @@ final class AppModel: ObservableObject {
             serviceExecutable = nil
             lastError = error.localizedDescription
         }
+    }
+
+    func ensureServiceRunning() async {
+        prepareServiceExecutable()
+        guard let serviceExecutable else { return }
+        if let serviceURL = configuration.serviceURL,
+           (try? await ServiceDashboardClient(baseURL: serviceURL).load()) != nil {
+            serviceStatus = "Healthy"
+            return
+        }
+        serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration)
+    }
+
+    func stopService() {
+        serviceProcess.stop()
     }
 
     private static func photoAccessReadiness() -> PhotoAccessReadiness {

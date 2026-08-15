@@ -40,5 +40,6 @@ runMacAppConfigurationTests()
 runOnboardingReadinessTests()
 runServiceDashboardTests()
 runServiceExecutableTests()
+runServiceLifecycleTests()
 
 finish()
