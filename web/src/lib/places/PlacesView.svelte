@@ -6,12 +6,18 @@
   import PageState from '../components/PageState.svelte';
 
   interface Props { api: ApiClient }
+  interface PlaceSelection {
+    label: string;
+    country: string;
+    state?: string;
+    city?: string;
+  }
   let { api }: Props = $props();
   let hierarchy = $state<GeoHierarchy | null>(null);
   let clusterPage = $state<GeoClusterPage>({ clusters: [], total_photos: 0 });
   let status = $state<'loading' | 'ready' | 'error'>('loading');
   let error = $state<string | null>(null);
-  let selection = $state<{ country: string; state?: string; city?: string } | null>(null);
+  let selection = $state<PlaceSelection | null>(null);
   let photos = $state<AlbumPhotoPage | null>(null);
   let mapPhoto = $state<number | null>(null);
   let updating = $state(false);
@@ -30,12 +36,13 @@
     }
   }
 
-  async function choose(country: string, state?: string, city?: string) {
-    selection = { country, state, city };
+  async function choose(nextSelection: PlaceSelection) {
+    selection = nextSelection;
     photos = null;
     error = null;
     try {
-      photos = await api.geo.photos(selection);
+      const { label: _label, ...filters } = nextSelection;
+      photos = await api.geo.photos(filters);
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
     }
@@ -112,13 +119,17 @@
         <div class="place-list">
           {#each hierarchy?.countries ?? [] as country}
             <details open>
-              <summary><button type="button" onclick={() => choose(country.name)}>{country.name}<span>{country.photo_count}</span></button></summary>
+              <summary><button type="button" onclick={() => choose({ label: country.name, country: country.query_value })}>{country.name}<span>{country.photo_count}</span></button></summary>
               {#each country.states as state}
                 <div class="state-row">
-                  <button type="button" onclick={() => choose(country.name, state.name)}>{state.name}<span>{state.photo_count}</span></button>
+                  <button type="button" onclick={() => choose({ label: state.name, country: country.query_value, state: state.query_value })}>{state.name}<span>{state.photo_count}</span></button>
                   <div class="cities">
                     {#each state.cities as city}
-                      <button type="button" class:active={selection?.city === city.name} onclick={() => choose(country.name, state.name, city.name)}>{city.name} <span>{city.photo_count}</span></button>
+                      <button
+                        type="button"
+                        class:active={selection?.country === country.query_value && selection?.state === state.query_value && selection?.city === city.query_value}
+                        onclick={() => choose({ label: city.name, country: country.query_value, state: state.query_value, city: city.query_value })}
+                      >{city.name} <span>{city.photo_count}</span></button>
                     {/each}
                   </div>
                 </div>
@@ -131,7 +142,7 @@
           {:else if selection && !photos}<PageState kind="loading" title="正在打开地点" />
           {:else if photos?.photos.length === 0}<PageState kind="empty" title="这个地点没有照片" />
           {:else if photos}
-            <div class="result-heading"><strong>{selection?.city ?? selection?.state ?? selection?.country}</strong><span>{photos.total} 张</span></div>
+            <div class="result-heading"><strong>{selection?.label}</strong><span>{photos.total} 张</span></div>
             <div class="photo-grid">{#each photos.photos as photo (photo.id)}<img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />{/each}</div>
           {:else}<p class="hint">选择国家、地区或城市查看照片。</p>{/if}
         </div>

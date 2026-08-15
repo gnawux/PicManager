@@ -1218,15 +1218,48 @@ async fn geo_hierarchy_groups_by_country_state_city() {
     let countries = json["countries"].as_array().unwrap();
     assert_eq!(countries.len(), 1);
     assert_eq!(countries[0]["name"], "United States");
+    assert_eq!(countries[0]["query_value"], "United States");
     assert_eq!(countries[0]["photo_count"], 2);
 
     let states = countries[0]["states"].as_array().unwrap();
     assert_eq!(states.len(), 1);
     assert_eq!(states[0]["name"], "California");
+    assert_eq!(states[0]["query_value"], "California");
     assert_eq!(states[0]["photo_count"], 2);
 
     let cities = states[0]["cities"].as_array().unwrap();
     assert_eq!(cities.len(), 2);
+    assert_eq!(cities[0]["query_value"], cities[0]["name"]);
+}
+
+#[tokio::test]
+async fn geo_hierarchy_preserves_nulls_as_queryable_unknown_entries() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    seed_geo_photo(&pool, "/all-null.jpg", "all-null", 10.0, 20.0).await;
+    seed_geo_photo(&pool, "/null-city.jpg", "null-city", 11.0, 21.0).await;
+    seed_geocache(&pool, 10.0, 20.0, None, None, None).await;
+    seed_geocache(&pool, 11.0, 21.0, Some("USA"), Some("California"), None).await;
+
+    let response = app
+        .oneshot(Request::builder().uri("/api/geo/hierarchy").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let countries = json["countries"].as_array().unwrap();
+
+    let unknown_country = countries.iter()
+        .find(|country| country["query_value"] == "__null__")
+        .expect("NULL country should remain queryable");
+    assert_eq!(unknown_country["name"], "Unknown");
+    assert_eq!(unknown_country["states"][0]["query_value"], "__null__");
+    assert_eq!(unknown_country["states"][0]["cities"][0]["query_value"], "__null__");
+
+    let usa = countries.iter().find(|country| country["query_value"] == "USA").unwrap();
+    assert_eq!(usa["states"][0]["query_value"], "California");
+    assert_eq!(usa["states"][0]["cities"][0]["name"], "Unknown");
+    assert_eq!(usa["states"][0]["cities"][0]["query_value"], "__null__");
 }
 
 #[tokio::test]

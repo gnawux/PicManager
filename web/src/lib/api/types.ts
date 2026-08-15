@@ -206,11 +206,13 @@ export interface PersonSummary {
 export interface GeoHierarchy {
   countries: Array<{
     name: string;
+    query_value: string;
     photo_count: number;
     states: Array<{
       name: string;
+      query_value: string;
       photo_count: number;
-      cities: Array<{ name: string; photo_count: number }>;
+      cities: Array<{ name: string; query_value: string; photo_count: number }>;
     }>;
   }>;
 }

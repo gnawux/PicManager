@@ -6,12 +6,14 @@ use crate::web::AppState;
 #[derive(Debug, Serialize)]
 pub struct CityEntry {
     pub name: String,
+    pub query_value: String,
     pub photo_count: i64,
 }
 
 #[derive(Debug, Serialize)]
 pub struct StateEntry {
     pub name: String,
+    pub query_value: String,
     pub photo_count: i64,
     pub cities: Vec<CityEntry>,
 }
@@ -19,6 +21,7 @@ pub struct StateEntry {
 #[derive(Debug, Serialize)]
 pub struct CountryEntry {
     pub name: String,
+    pub query_value: String,
     pub photo_count: i64,
     pub states: Vec<StateEntry>,
 }
@@ -26,6 +29,13 @@ pub struct CountryEntry {
 #[derive(Debug, Serialize)]
 pub struct GeoHierarchy {
     pub countries: Vec<CountryEntry>,
+}
+
+fn hierarchy_value(value: Option<String>) -> (String, String) {
+    match value {
+        Some(value) => (value.clone(), value),
+        None => ("Unknown".to_owned(), "__null__".to_owned()),
+    }
 }
 
 const DEFAULT_CLUSTER_COLUMNS: i64 = 48;
@@ -123,28 +133,42 @@ pub async fn get_geo_hierarchy(
     let mut countries: Vec<CountryEntry> = Vec::new();
 
     for (country_opt, state_opt, city_opt, cnt) in rows {
-        let country_name = country_opt.unwrap_or_else(|| "Unknown".to_owned());
-        let state_name = state_opt.unwrap_or_else(|| "Unknown".to_owned());
-        let city_name = city_opt.unwrap_or_else(|| "Unknown".to_owned());
+        let (country_name, country_query_value) = hierarchy_value(country_opt);
+        let (state_name, state_query_value) = hierarchy_value(state_opt);
+        let (city_name, city_query_value) = hierarchy_value(city_opt);
 
-        let country = match countries.iter_mut().find(|c| c.name == country_name) {
+        let country = match countries.iter_mut().find(|c| c.query_value == country_query_value) {
             Some(c) => c,
             None => {
-                countries.push(CountryEntry { name: country_name.clone(), photo_count: 0, states: vec![] });
+                countries.push(CountryEntry {
+                    name: country_name.clone(),
+                    query_value: country_query_value,
+                    photo_count: 0,
+                    states: vec![],
+                });
                 countries.last_mut().unwrap()
             }
         };
         country.photo_count += cnt;
 
-        let st = match country.states.iter_mut().find(|s| s.name == state_name) {
+        let st = match country.states.iter_mut().find(|s| s.query_value == state_query_value) {
             Some(s) => s,
             None => {
-                country.states.push(StateEntry { name: state_name.clone(), photo_count: 0, cities: vec![] });
+                country.states.push(StateEntry {
+                    name: state_name.clone(),
+                    query_value: state_query_value,
+                    photo_count: 0,
+                    cities: vec![],
+                });
                 country.states.last_mut().unwrap()
             }
         };
         st.photo_count += cnt;
-        st.cities.push(CityEntry { name: city_name, photo_count: cnt });
+        st.cities.push(CityEntry {
+            name: city_name,
+            query_value: city_query_value,
+            photo_count: cnt,
+        });
     }
 
     Ok(Json(GeoHierarchy { countries }))

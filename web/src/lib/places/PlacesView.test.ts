@@ -12,8 +12,9 @@ describe('PlacesView', () => {
     const api = {
       geo: {
         hierarchy: vi.fn(async () => ({ countries: [{
-          name: '中国', photo_count: 1, states: [{
-            name: '上海市', photo_count: 1, cities: [{ name: '上海', photo_count: 1 }],
+          name: '中国', query_value: '中国', photo_count: 1, states: [{
+            name: '上海市', query_value: '上海市', photo_count: 1,
+            cities: [{ name: '上海', query_value: '上海', photo_count: 1 }],
           }],
         }] })),
         clusters: vi.fn(async () => ({
@@ -35,6 +36,34 @@ describe('PlacesView', () => {
     await fireEvent.click(screen.getByRole('button', { name: /上海 1/ }));
     expect(await screen.findByAltText('照片 12')).toBeVisible();
     expect(photos).toHaveBeenCalledWith({ country: '中国', state: '上海市', city: '上海' });
+  });
+
+  it('uses null sentinels when browsing unknown hierarchy entries', async () => {
+    const photos = vi.fn(async () => ({
+      photos: [{ id: 21, path: '/unknown.jpg', taken_at: null, camera: null }],
+      total: 1, page: 1, per_page: 200,
+    }));
+    const api = {
+      geo: {
+        hierarchy: vi.fn(async () => ({ countries: [{
+          name: 'Unknown', query_value: '__null__', photo_count: 1, states: [{
+            name: 'Unknown', query_value: '__null__', photo_count: 1,
+            cities: [{ name: 'Unknown', query_value: '__null__', photo_count: 1 }],
+          }],
+        }] })),
+        clusters: vi.fn(async () => ({ clusters: [], total_photos: 0 })),
+        photos,
+        regeocode: vi.fn(),
+      },
+    } as unknown as ApiClient;
+    const { container } = render(PlacesView, { api });
+
+    await screen.findAllByRole('button', { name: /Unknown 1/ });
+    await fireEvent.click(container.querySelector('.cities button') as HTMLButtonElement);
+    expect(await screen.findByAltText('照片 21')).toBeVisible();
+    expect(photos).toHaveBeenCalledWith({
+      country: '__null__', state: '__null__', city: '__null__',
+    });
   });
 
   it('keeps map DOM work bounded for a large photo library', async () => {
