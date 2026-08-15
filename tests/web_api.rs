@@ -96,6 +96,7 @@ async fn versioned_service_health_diagnostics_and_tasks_contracts_are_available(
     let app = test_app().await;
     for (uri, expected_field) in [
         ("/api/v1/service", "api_version"),
+        ("/api/v1/metrics", "queued"),
         ("/api/v1/health", "status"),
         ("/api/v1/diagnostics", "reconciliation"),
         ("/api/v1/tasks", "tasks"),

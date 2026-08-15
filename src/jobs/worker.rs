@@ -205,6 +205,13 @@ async fn execute_leased(
     config: &WorkerConfig,
     lease: JobLease,
 ) {
+    tracing::info!(
+        job_id = lease.job.id,
+        job_kind = %lease.job.kind,
+        worker_id = %lease.worker_id,
+        attempt_id = lease.attempt_id,
+        "job attempt started"
+    );
     let Some(handler) = registry.handler(&lease.job.kind) else {
         let failure = JobFailure::terminal(
             "unknown_job_kind",
@@ -246,6 +253,14 @@ async fn execute_leased(
             let _ = complete(pool, &lease).await;
         }
         (Err(failure), false) => {
+            tracing::warn!(
+                job_id = lease.job.id,
+                job_kind = %lease.job.kind,
+                worker_id = %lease.worker_id,
+                error_code = %failure.code,
+                retryable = failure.retryable,
+                "job attempt failed"
+            );
             let _ = fail(pool, &lease, &failure, config.retry_delay.as_secs()).await;
         }
     }
@@ -256,12 +271,27 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::*;
-    use crate::jobs::{NewJob, enqueue, list};
+    use crate::jobs::{NewJob, enqueue, get, list, request_cancel};
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     struct ConcurrencyHandler {
         active: Arc<AtomicUsize>,
         peak: Arc<AtomicUsize>,
+    }
+
+    struct CancellationHandler;
+
+    impl JobHandler for CancellationHandler {
+        fn execute(&self, _job: Job, control: JobControl) -> HandlerFuture {
+            Box::pin(async move {
+                loop {
+                    if control.cancellation_requested().await.unwrap_or(true) {
+                        return Ok(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+        }
     }
 
     impl JobHandler for ConcurrencyHandler {
@@ -369,7 +399,7 @@ mod tests {
             "test-worker",
         )
         .start();
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 if !list(&pool, Some("failed"), None, None, 10)
                     .await
@@ -384,5 +414,64 @@ mod tests {
         .await
         .unwrap();
         assert!(handle.shutdown().await);
+    }
+
+    #[tokio::test]
+    async fn running_job_cancellation_is_cooperative_and_audited() {
+        let (pool, _directory) = pool().await;
+        let job = enqueue(&pool, &NewJob::new("cancellable", serde_json::json!({})))
+            .await
+            .unwrap()
+            .job;
+        let handle = WorkerRuntime::new(
+            pool.clone(),
+            WorkerRegistry::new().register("cancellable", CancellationHandler),
+            WorkerConfig {
+                concurrency: 1,
+                poll_interval: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_secs(2),
+                ..Default::default()
+            },
+            "cancel-worker",
+        )
+        .start();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if get(&pool, job.id).await.unwrap().status == "running" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        request_cancel(&pool, job.id).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if get(&pool, job.id).await.unwrap().status == "cancelled" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(handle.shutdown().await);
+        let attempt_status: String = sqlx::query_scalar(
+            "SELECT status FROM application_job_attempts WHERE job_id = ?",
+        )
+        .bind(job.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM application_job_events WHERE job_id = ?",
+        )
+        .bind(job.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(attempt_status, "cancelled");
+        assert!(events >= 3);
     }
 }

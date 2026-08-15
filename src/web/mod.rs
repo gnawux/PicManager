@@ -25,7 +25,7 @@ use handlers::{
     import::{start_import, get_import_status},
     photos::{list_photos, get_thumb, get_photo_file, get_photo, get_gps_points, patch_photo, batch_update_photos},
     tasks::{cancel_task, get_task, list_tasks, retry_task},
-    service::get_service_contract,
+    service::{get_service_contract, get_worker_metrics},
     timeline::list_timeline,
 };
 
@@ -66,6 +66,7 @@ fn router_with_application(
     Router::new()
         .route("/api/health", get(get_health))
         .route("/api/v1/service", get(get_service_contract))
+        .route("/api/v1/metrics", get(get_worker_metrics))
         .route("/api/v1/health", get(get_health))
         .route("/api/v1/diagnostics", get(get_diagnostics))
         .route("/api/v1/tasks", get(list_tasks))

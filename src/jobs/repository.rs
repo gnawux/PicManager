@@ -2,7 +2,38 @@ use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::error::{AppError, Result};
 
-use super::{EnqueueResult, Job, JobFailure, JobLease, NewJob};
+use super::{EnqueueResult, Job, JobFailure, JobLease, JobMetrics, NewJob};
+
+pub async fn metrics(pool: &SqlitePool) -> Result<JobMetrics> {
+    Ok(JobMetrics {
+        queued: job_count(pool, "queued").await?,
+        running: job_count(pool, "running").await?,
+        retry_wait: job_count(pool, "retry_wait").await?,
+        succeeded: job_count(pool, "succeeded").await?,
+        failed: job_count(pool, "failed").await?,
+        cancelled: job_count(pool, "cancelled").await?,
+        attempts_running: attempt_count(pool, "running").await?,
+        attempts_failed: attempt_count(pool, "failed").await?,
+        attempts_interrupted: attempt_count(pool, "interrupted").await?,
+        warning_events: event_count(pool, "warning").await?,
+        error_events: event_count(pool, "error").await?,
+    })
+}
+
+async fn job_count(pool: &SqlitePool, status: &str) -> Result<i64> {
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM application_jobs WHERE status = ?")
+        .bind(status).fetch_one(pool).await?)
+}
+
+async fn attempt_count(pool: &SqlitePool, status: &str) -> Result<i64> {
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM application_job_attempts WHERE status = ?")
+        .bind(status).fetch_one(pool).await?)
+}
+
+async fn event_count(pool: &SqlitePool, level: &str) -> Result<i64> {
+    Ok(sqlx::query_scalar("SELECT COUNT(*) FROM application_job_events WHERE level = ?")
+        .bind(level).fetch_one(pool).await?)
+}
 
 const JOB_COLUMNS: &str = "id, kind, payload_version, payload_json, status, priority, \
     progress_total, progress_completed, progress_stage, cancel_requested_at, max_attempts, \
@@ -116,6 +147,13 @@ pub async fn request_cancel(pool: &SqlitePool, job_id: i64) -> Result<Job> {
             job.status
         )));
     }
+    sqlx::query(
+        "INSERT INTO application_job_events (job_id, level, code, message) \
+         VALUES (?, 'info', 'cancellation_requested', 'Job cancellation was requested')",
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await?;
     get(pool, job_id).await
 }
 
@@ -138,6 +176,13 @@ pub async fn retry(pool: &SqlitePool, job_id: i64) -> Result<Job> {
             job.status
         )));
     }
+    sqlx::query(
+        "INSERT INTO application_job_events (job_id, level, code, message) \
+         VALUES (?, 'info', 'manual_retry', 'Job was manually requeued')",
+    )
+    .bind(job_id)
+    .execute(pool)
+    .await?;
     get(pool, job_id).await
 }
 
@@ -196,6 +241,15 @@ pub async fn lease_next(
     .bind(attempt_number)
     .bind(worker_id)
     .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO application_job_events \
+         (job_id, attempt_id, level, code, message) \
+         VALUES (?, ?, 'info', 'attempt_started', 'Worker leased the job')",
+    )
+    .bind(job_id)
+    .bind(attempt_id)
+    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(Some(JobLease {
@@ -360,6 +414,27 @@ async fn finish(
     .bind(lease.attempt_id)
     .execute(&mut *tx)
     .await?;
+    let event_level = if cancelled {
+        "warning"
+    } else if failure.is_some() {
+        "error"
+    } else {
+        "info"
+    };
+    let event_code = if should_retry { "retry_scheduled" } else { job_status };
+    sqlx::query(
+        "INSERT INTO application_job_events \
+         (job_id, attempt_id, level, code, message, details_json) \
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(lease.job.id)
+    .bind(lease.attempt_id)
+    .bind(event_level)
+    .bind(event_code)
+    .bind(failure.map_or(job_status, |failure| failure.message.as_str()))
+    .bind(&details_json)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         "UPDATE application_jobs SET status = ?, lease_owner = NULL, lease_expires_at = NULL, \
              next_run_at = CASE WHEN ? THEN datetime('now', ?) ELSE NULL END, \
@@ -396,6 +471,14 @@ pub async fn recover_expired(pool: &SqlitePool) -> Result<u64> {
                  error_code = 'lease_expired', error_message = 'Worker lease expired', \
                  finished_at = datetime('now') \
              WHERE job_id = ? AND status = 'running'",
+        )
+        .bind(job_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO application_job_events \
+             (job_id, level, code, message) VALUES (?, 'warning', 'lease_expired', \
+             'An expired worker lease was recovered')",
         )
         .bind(job_id)
         .execute(&mut *tx)

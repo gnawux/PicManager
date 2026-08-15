@@ -114,6 +114,21 @@ pub struct JobFailure {
     pub retryable: bool,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct JobMetrics {
+    pub queued: i64,
+    pub running: i64,
+    pub retry_wait: i64,
+    pub succeeded: i64,
+    pub failed: i64,
+    pub cancelled: i64,
+    pub attempts_running: i64,
+    pub attempts_failed: i64,
+    pub attempts_interrupted: i64,
+    pub warning_events: i64,
+    pub error_events: i64,
+}
+
 impl JobFailure {
     pub fn retryable(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {

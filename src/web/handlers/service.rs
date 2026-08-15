@@ -1,4 +1,4 @@
-use axum::Json;
+use axum::{Json, extract::State, http::StatusCode};
 use serde::Serialize;
 
 #[derive(Debug, Serialize)]
@@ -18,10 +18,20 @@ pub async fn get_service_contract() -> Json<ServiceContract> {
         local_trusted_only: true,
         capabilities: &[
             "durable_jobs",
+            "worker_metrics",
             "health",
             "diagnostics",
             "apple_inventory",
             "filesystem_recovery",
         ],
     })
+}
+
+pub async fn get_worker_metrics(
+    State(state): State<crate::web::AppState>,
+) -> Result<Json<crate::jobs::JobMetrics>, StatusCode> {
+    crate::jobs::metrics(&state.pool)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
