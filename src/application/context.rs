@@ -105,6 +105,10 @@ impl Application {
     pub fn dedup(&self) -> super::DedupService {
         super::DedupService::new(self.clone())
     }
+
+    pub fn metadata(&self) -> super::PhotoMetadataService {
+        super::PhotoMetadataService::new(self.clone())
+    }
 }
 
 #[cfg(test)]

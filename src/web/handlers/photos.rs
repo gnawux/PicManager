@@ -5,6 +5,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use crate::application::{CallerKind, PhotoMetadataUpdate, ServiceErrorCode};
 use crate::web::AppState;
 use crate::orientation::{apply_user_transform, DisplayTransform, OrientationMode};
 
@@ -161,15 +162,6 @@ pub async fn get_photo(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PatchPhotoBody {
-    pub taken_at: Option<String>,
-    pub timezone_offset: Option<i64>,
-    pub rotation_delta: Option<i32>,
-    pub flip_h_toggle: Option<bool>,
-    pub flip_v_toggle: Option<bool>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct BatchUpdateBody {
     pub photo_ids: Vec<i64>,
     pub taken_at: Option<String>,
@@ -187,141 +179,36 @@ pub struct BatchUpdateResponse {
 pub async fn patch_photo(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-    Json(body): Json<PatchPhotoBody>,
+    Json(body): Json<PhotoMetadataUpdate>,
 ) -> Result<StatusCode, StatusCode> {
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM photos WHERE id = ?")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if exists.is_none() {
-        return Err(StatusCode::NOT_FOUND);
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    match state.application.metadata().update_one(&context, id, body).await {
+        Ok(_) => Ok(StatusCode::OK),
+        Err(error) if error.code == ServiceErrorCode::NotFound => Err(StatusCode::NOT_FOUND),
+        Err(error) if error.code == ServiceErrorCode::InvalidInput => Err(StatusCode::BAD_REQUEST),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
-
-    if let Some(ref taken_at) = body.taken_at {
-        sqlx::query("UPDATE photos SET taken_at = ? WHERE id = ?")
-            .bind(taken_at)
-            .bind(id)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    if let Some(tz) = body.timezone_offset {
-        sqlx::query("UPDATE photos SET timezone_offset = ? WHERE id = ?")
-            .bind(tz)
-            .bind(id)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    }
-    let mut transform_changed = false;
-    if let Some(delta) = body.rotation_delta {
-        sqlx::query("UPDATE photos SET rotation = ((rotation + ?) % 360 + 360) % 360 WHERE id = ?")
-            .bind(delta)
-            .bind(id)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        transform_changed = true;
-    }
-    if body.flip_h_toggle == Some(true) {
-        sqlx::query("UPDATE photos SET flip_h = 1 - flip_h WHERE id = ?")
-            .bind(id)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        transform_changed = true;
-    }
-    if body.flip_v_toggle == Some(true) {
-        sqlx::query("UPDATE photos SET flip_v = 1 - flip_v WHERE id = ?")
-            .bind(id)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        transform_changed = true;
-    }
-    if transform_changed {
-        crate::derived::invalidate(&state.pool, id)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        // Re-analyze faces in the new display orientation (fire-and-forget).
-        let pool2 = state.pool.clone();
-        tokio::spawn(async move {
-            crate::face::job::reanalyze_one_photo(&pool2, id).await;
-        });
-    }
-    Ok(StatusCode::OK)
 }
 
 pub async fn batch_update_photos(
     State(state): State<AppState>,
     Json(body): Json<BatchUpdateBody>,
 ) -> Result<Json<BatchUpdateResponse>, StatusCode> {
-    if body.photo_ids.is_empty() {
-        return Ok(Json(BatchUpdateResponse { updated: 0 }));
-    }
-    let has_transform = body.rotation_delta.is_some()
-        || body.flip_h_toggle == Some(true)
-        || body.flip_v_toggle == Some(true);
-    let mut updated: u64 = 0;
-    for &id in &body.photo_ids {
-        if let Some(ref taken_at) = body.taken_at {
-            sqlx::query("UPDATE photos SET taken_at = ? WHERE id = ?")
-                .bind(taken_at)
-                .bind(id)
-                .execute(&state.pool)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        if let Some(tz) = body.timezone_offset {
-            sqlx::query("UPDATE photos SET timezone_offset = ? WHERE id = ?")
-                .bind(tz)
-                .bind(id)
-                .execute(&state.pool)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        if let Some(delta) = body.rotation_delta {
-            sqlx::query(
-                "UPDATE photos SET rotation = ((rotation + ?) % 360 + 360) % 360 WHERE id = ?",
-            )
-            .bind(delta)
-            .bind(id)
-            .execute(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        if body.flip_h_toggle == Some(true) {
-            sqlx::query("UPDATE photos SET flip_h = 1 - flip_h WHERE id = ?")
-                .bind(id)
-                .execute(&state.pool)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        if body.flip_v_toggle == Some(true) {
-            sqlx::query("UPDATE photos SET flip_v = 1 - flip_v WHERE id = ?")
-                .bind(id)
-                .execute(&state.pool)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        if has_transform {
-            crate::derived::invalidate(&state.pool, id)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        }
-        updated += 1;
-    }
-    if has_transform {
-        let pool2 = state.pool.clone();
-        let ids = body.photo_ids.clone();
-        tokio::spawn(async move {
-            for id in ids {
-                crate::face::job::reanalyze_one_photo(&pool2, id).await;
-            }
-        });
-    }
-    Ok(Json(BatchUpdateResponse { updated }))
+    let update = PhotoMetadataUpdate {
+        taken_at: body.taken_at,
+        timezone_offset: body.timezone_offset,
+        rotation_delta: body.rotation_delta,
+        flip_h_toggle: body.flip_h_toggle,
+        flip_v_toggle: body.flip_v_toggle,
+    };
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    let result = state
+        .application
+        .metadata()
+        .update_many(&context, &body.photo_ids, update)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(BatchUpdateResponse { updated: result.updated }))
 }
 
 #[derive(Debug, Deserialize)]
