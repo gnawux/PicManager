@@ -21,5 +21,13 @@ func runLibraryOwnershipTests() {
             let replacement = try LibraryOwnershipLock(libraryURL: library)
             try expect(replacement.libraryPath, equals: library.standardizedFileURL.path)
         }
+
+
+        test("library fingerprints are stable and path specific") {
+            let first = fingerprintLibraryPath("/tmp/picmanager-a")
+            try expect(first, equals: fingerprintLibraryPath("/tmp/picmanager-a"))
+            try expect(first != fingerprintLibraryPath("/tmp/picmanager-b"))
+            try expect(first.count, equals: 64)
+        }
     }
 }

@@ -5,9 +5,14 @@ public struct ServiceContract: Decodable, Equatable, Sendable {
     public let serviceVersion: String
     private let minimumClientApi: String
     public let localTrustedOnly: Bool
+    public let libraryFingerprint: String?
     public let capabilities: [String]
 
     public var minimumClientAPI: String { minimumClientApi }
+
+    public func servesLibrary(at path: String) -> Bool {
+        libraryFingerprint == fingerprintLibraryPath(path)
+    }
 }
 
 public struct ServiceHealth: Decodable, Equatable, Sendable {
@@ -115,6 +120,7 @@ public enum ServiceDashboardError: LocalizedError, Equatable {
     case invalidBaseURL
     case incompatibleAPI(String)
     case response(Int)
+    case libraryMismatch
 
     public var errorDescription: String? {
         switch self {
@@ -124,6 +130,8 @@ public enum ServiceDashboardError: LocalizedError, Equatable {
             "The local service API \(version) is not compatible with this app."
         case let .response(status):
             "The local service returned HTTP \(status)."
+        case .libraryMismatch:
+            "The configured port belongs to a different PicManager library."
         }
     }
 }
@@ -131,9 +139,15 @@ public enum ServiceDashboardError: LocalizedError, Equatable {
 public struct ServiceDashboardClient: Sendable {
     public let baseURL: URL
     private let session: URLSession
+    private let expectedLibraryPath: String?
 
-    public init(baseURL: URL, session: URLSession = .shared) {
+    public init(
+        baseURL: URL,
+        expectedLibraryPath: String? = nil,
+        session: URLSession = .shared
+    ) {
         self.baseURL = baseURL
+        self.expectedLibraryPath = expectedLibraryPath
         self.session = session
     }
 
@@ -146,6 +160,10 @@ public struct ServiceDashboardClient: Sendable {
         let snapshot = try await (contract, health, metrics, tasks, sources)
         guard snapshot.0.apiVersion == "v1", snapshot.0.minimumClientAPI == "v1" else {
             throw ServiceDashboardError.incompatibleAPI(snapshot.0.apiVersion)
+        }
+        if let expectedLibraryPath,
+           !snapshot.0.servesLibrary(at: expectedLibraryPath) {
+            throw ServiceDashboardError.libraryMismatch
         }
         return ServiceDashboard(
             contract: snapshot.0,

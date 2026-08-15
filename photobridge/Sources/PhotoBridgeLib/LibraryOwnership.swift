@@ -1,4 +1,5 @@
 import Darwin
+import CryptoKit
 import Foundation
 
 public enum LibraryOwnershipError: LocalizedError, Equatable {
@@ -40,4 +41,9 @@ public final class LibraryOwnershipLock: @unchecked Sendable {
         flock(descriptor, LOCK_UN)
         close(descriptor)
     }
+}
+
+public func fingerprintLibraryPath(_ path: String) -> String {
+    let normalized = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    return SHA256.hash(data: Data(normalized.utf8)).map { String(format: "%02x", $0) }.joined()
 }

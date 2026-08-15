@@ -40,10 +40,24 @@ final class AppModel: ObservableObject {
 
     func saveConfiguration() {
         do {
+            let previous = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
             try launchAtLogin.apply(preferred: configuration.launchAtLogin)
             try configuration.save(to: MacAppConfiguration.applicationSupportURL)
             launchAtLoginStatus = launchAtLogin.statusLabel
             lastError = nil
+            if previous?.libraryPath != configuration.libraryPath
+                || previous?.host != configuration.host
+                || previous?.port != configuration.port {
+                stopService()
+                libraryOwnership = nil
+                dashboard = nil
+                Task {
+                    if await ensureServiceRunning() {
+                        await refreshDashboard()
+                        startHealthMonitoring()
+                    }
+                }
+            }
         } catch {
             lastError = error.localizedDescription
         }
@@ -115,7 +129,7 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            dashboard = try await ServiceDashboardClient(baseURL: serviceURL).load()
+            dashboard = try await dashboardClient(baseURL: serviceURL).load()
             serviceStatus = dashboard?.health.status.capitalized ?? "Available"
             lastError = nil
         } catch {
@@ -143,7 +157,7 @@ final class AppModel: ObservableObject {
     private func pollServiceHealth() async -> Bool {
         guard let serviceURL = configuration.serviceURL else { return false }
         do {
-            dashboard = try await ServiceDashboardClient(baseURL: serviceURL).load()
+            dashboard = try await dashboardClient(baseURL: serviceURL).load()
             serviceStatus = dashboard?.health.status.capitalized ?? "Available"
             lastError = nil
             return dashboard?.health.status == "healthy"
@@ -172,7 +186,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func ensureServiceRunning() async {
+    func ensureServiceRunning() async -> Bool {
         do {
             if libraryOwnership?.libraryPath != URL(fileURLWithPath: configuration.libraryPath).standardizedFileURL.path {
                 libraryOwnership = try LibraryOwnershipLock(
@@ -182,16 +196,25 @@ final class AppModel: ObservableObject {
         } catch {
             serviceStatus = "Library in use"
             lastError = error.localizedDescription
-            return
+            return false
         }
         prepareServiceExecutable()
-        guard let serviceExecutable else { return }
-        if let serviceURL = configuration.serviceURL,
-           (try? await ServiceDashboardClient(baseURL: serviceURL).load()) != nil {
-            serviceStatus = "Healthy"
-            return
+        guard let serviceExecutable else { return false }
+        if let serviceURL = configuration.serviceURL {
+            do {
+                _ = try await dashboardClient(baseURL: serviceURL).load()
+                serviceStatus = "Healthy"
+                return true
+            } catch ServiceDashboardError.libraryMismatch {
+                serviceStatus = "Wrong library"
+                lastError = ServiceDashboardError.libraryMismatch.localizedDescription
+                return false
+            } catch {
+                // No compatible service is listening, so start the owned service below.
+            }
         }
         serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration)
+        return true
     }
 
     func stopService() {
@@ -273,13 +296,17 @@ final class AppModel: ObservableObject {
     private func updateTask(_ task: ServiceTask, retry: Bool) async {
         guard let serviceURL = configuration.serviceURL else { return }
         do {
-            let client = ServiceDashboardClient(baseURL: serviceURL)
+            let client = dashboardClient(baseURL: serviceURL)
             if retry { _ = try await client.retry(taskID: task.id) }
             else { _ = try await client.cancel(taskID: task.id) }
             await refreshDashboard()
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    private func dashboardClient(baseURL: URL) -> ServiceDashboardClient {
+        ServiceDashboardClient(baseURL: baseURL, expectedLibraryPath: configuration.libraryPath)
     }
 
     private static func photoAccessReadiness() -> PhotoAccessReadiness {

@@ -4,12 +4,13 @@ import PhotoBridgeLib
 func runServiceDashboardTests() {
     suite("Native service dashboard") {
         test("decodes the stable service contract") {
-            let data = Data(#"{"api_version":"v1","service_version":"0.1.0","minimum_client_api":"v1","local_trusted_only":true,"capabilities":["health"]}"#.utf8)
+            let data = Data(#"{"api_version":"v1","service_version":"0.1.0","minimum_client_api":"v1","local_trusted_only":true,"library_fingerprint":"abc","capabilities":["health"]}"#.utf8)
             let decoder = JSONDecoder()
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let contract = try decoder.decode(ServiceContract.self, from: data)
             try expect(contract.apiVersion, equals: "v1")
             try expect(contract.localTrustedOnly)
+            try expect(!contract.servesLibrary(at: "/tmp/another-library"))
         }
 
         test("summarizes Apple synchronization and background health") {
@@ -17,7 +18,7 @@ func runServiceDashboardTests() {
             decoder.keyDecodingStrategy = .convertFromSnakeCase
             let contract = try decoder.decode(
                 ServiceContract.self,
-                from: Data(#"{"api_version":"v1","service_version":"0.1.0","minimum_client_api":"v1","local_trusted_only":true,"capabilities":[]}"#.utf8)
+                from: Data(#"{"api_version":"v1","service_version":"0.1.0","minimum_client_api":"v1","local_trusted_only":true,"library_fingerprint":"abc","capabilities":[]}"#.utf8)
             )
             let health = try decoder.decode(
                 ServiceHealth.self,

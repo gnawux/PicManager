@@ -68,9 +68,10 @@ private struct LibraryShellView: View {
         } else {
             LibraryPresentationView(model: model)
                 .task {
-                    await model.ensureServiceRunning()
-                    await model.refreshDashboard()
-                    model.startHealthMonitoring()
+                    if await model.ensureServiceRunning() {
+                        await model.refreshDashboard()
+                        model.startHealthMonitoring()
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     model.stopService()
@@ -293,7 +294,12 @@ private struct ConfigurationView: View {
 
     var body: some View {
         Form {
-            TextField("Library", text: $model.configuration.libraryPath)
+            LabeledContent("Library") {
+                HStack {
+                    Text(model.configuration.libraryPath).lineLimit(1).textSelection(.enabled)
+                    Button("Choose…") { model.chooseLibrary() }
+                }
+            }
             TextField("Service executable", text: Binding(
                 get: { model.configuration.serviceExecutablePath ?? "" },
                 set: { model.configuration.serviceExecutablePath = $0.isEmpty ? nil : $0 }
