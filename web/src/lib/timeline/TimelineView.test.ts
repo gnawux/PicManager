@@ -102,6 +102,10 @@ describe('TimelineView', () => {
 
     await fireEvent.click(photos[0]);
     expect(await screen.findByRole('dialog', { name: '照片 1' })).toBeVisible();
+    const close = screen.getByRole('button', { name: '关闭查看器' });
+    expect(close).toHaveFocus();
+    await fireEvent.keyDown(window, { key: 'Tab', shiftKey: true });
+    expect(screen.getByRole('button', { name: '下一张照片' })).toHaveFocus();
     expect(await screen.findByAltText('IMG_0001.HEIC')).toBeVisible();
     expect(screen.getByText('4032 × 3024')).toBeVisible();
     await fireEvent.click(screen.getByRole('button', { name: '原始文件' }));

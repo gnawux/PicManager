@@ -24,6 +24,7 @@
   <meta name="description" content="A private, high-density home for your photo library" />
 </svelte:head>
 
+<a class="skip-link" href="#main-content">跳到主要内容</a>
 <div class="app-shell">
   <header class="topbar">
     <a class="brand" href="#/photos" aria-label="PicManager 首页">
@@ -46,7 +47,7 @@
     </div>
   </header>
 
-  <main>
+  <main id="main-content" tabindex="-1">
     {#if $router.id === 'photos'}
       <section class="page-heading" aria-labelledby="page-title">
         <div>

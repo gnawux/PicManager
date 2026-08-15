@@ -13,7 +13,7 @@
 </script>
 
 <div class="selection-bar" aria-label="批量操作">
-  <strong>已选 {count} 张</strong>
+  <strong aria-live="polite">已选 {count} 张</strong>
   <div class="actions">
     <Button disabled={busy} onclick={() => onaction('rotate_left')}>左转</Button>
     <Button disabled={busy} onclick={() => onaction('rotate_right')}>右转</Button>

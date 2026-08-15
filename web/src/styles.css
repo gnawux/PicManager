@@ -15,6 +15,7 @@
   --radius-control: 10px;
   --page: #f7f7f5;
   --danger: #b42318;
+  color-scheme: light;
 }
 
 * {
@@ -34,6 +35,25 @@ button,
 a {
   font: inherit;
 }
+
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: fixed;
+  top: 8px;
+  left: 12px;
+  z-index: 200;
+  padding: 9px 13px;
+  border-radius: 9px;
+  color: white;
+  background: var(--accent);
+  transform: translateY(-160%);
+}
+
+.skip-link:focus { transform: translateY(0); }
 
 .app-shell {
   min-height: 100vh;
@@ -169,9 +189,15 @@ h1 {
     right: 12px;
     bottom: 12px;
     left: 12px;
-    justify-content: space-around;
+    justify-content: start;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
     box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
   }
+
+  .topbar nav::-webkit-scrollbar { display: none; }
+  .topbar nav button { flex: 0 0 auto; min-height: 44px; }
 
   .topbar-actions {
     grid-column: 2;
@@ -183,4 +209,13 @@ h1 {
 
   .page-heading { min-height: 120px; align-items: start; }
   .platform-preview { flex-direction: column; gap: 8px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

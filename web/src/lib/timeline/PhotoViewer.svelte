@@ -15,6 +15,7 @@
 
   let { api, item, previous, next, onclose, onnavigate }: Props = $props();
   let closeButton: HTMLButtonElement;
+  let viewerElement: HTMLElement;
   let detail = $state<PhotoDetail | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
@@ -33,9 +34,25 @@
     const previousFocus = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
+    const background = [...document.querySelectorAll<HTMLElement>(
+      '.topbar, .page-heading, .timeline-controls, .timeline, .selection-bar',
+    )].map((element) => ({
+      element,
+      inert: element.inert,
+      ariaHidden: element.getAttribute('aria-hidden'),
+    }));
+    for (const item of background) {
+      item.element.inert = true;
+      item.element.setAttribute('aria-hidden', 'true');
+    }
     closeButton.focus();
     return () => {
       document.body.style.overflow = previousOverflow;
+      for (const item of background) {
+        item.element.inert = item.inert;
+        if (item.ariaHidden === null) item.element.removeAttribute('aria-hidden');
+        else item.element.setAttribute('aria-hidden', item.ariaHidden);
+      }
       previousFocus?.focus();
     };
   });
@@ -72,7 +89,16 @@
   });
 
   function handleKey(event: KeyboardEvent) {
-    if (event.key === 'Escape') onclose();
+    if (event.key === 'Tab') {
+      const focusable = [...viewerElement.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      )];
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) last?.focus();
+      else if (!event.shiftKey && document.activeElement === last) first?.focus();
+      else return;
+    } else if (event.key === 'Escape') onclose();
     else if (event.key === 'ArrowLeft' && previous) onnavigate(-1);
     else if (event.key === 'ArrowRight' && next) onnavigate(1);
     else if (event.key.toLowerCase() === 'i') drawerOpen = !drawerOpen;
@@ -100,6 +126,7 @@
 
 <div
   class="viewer"
+  bind:this={viewerElement}
   role="dialog"
   aria-modal="true"
   aria-label={`照片 ${item.id}`}
@@ -114,8 +141,8 @@
     <div class="toolbar">
       {#if detail?.renditions.original && detail?.renditions.current}
         <div class="rendition-switch" aria-label="照片版本">
-          <button class:active={rendition === 'current'} type="button" onclick={() => { rendition = 'current'; }}>当前效果</button>
-          <button class:active={rendition === 'original'} type="button" onclick={() => { rendition = 'original'; }}>原始文件</button>
+          <button class:active={rendition === 'current'} aria-pressed={rendition === 'current'} type="button" onclick={() => { rendition = 'current'; }}>当前效果</button>
+          <button class:active={rendition === 'original'} aria-pressed={rendition === 'original'} type="button" onclick={() => { rendition = 'original'; }}>原始文件</button>
         </div>
       {/if}
       <button class="icon-button info" class:active={drawerOpen} type="button" aria-label="照片信息" aria-pressed={drawerOpen} onclick={() => { drawerOpen = !drawerOpen; }}>i</button>
