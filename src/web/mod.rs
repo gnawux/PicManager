@@ -7,7 +7,7 @@ use axum::{
     routing::{get, patch, post},
 };
 use sqlx::SqlitePool;
-use std::sync::{Arc, atomic::AtomicBool};
+use std::sync::Arc;
 use crate::config::Config;
 use crate::application::Application;
 use embed::static_handler;
@@ -32,7 +32,6 @@ pub struct AppState {
     pub application: Application,
     pub pool: SqlitePool,
     pub config: Config,
-    pub geo_running: Arc<AtomicBool>,
     _worker: Option<Arc<crate::jobs::WorkerHandle>>,
 }
 
@@ -59,7 +58,6 @@ fn router_with_application(
         application,
         pool,
         config,
-        geo_running: Arc::new(AtomicBool::new(false)),
         _worker: worker,
     };
 

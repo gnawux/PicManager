@@ -268,21 +268,23 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     Some(photo_ids)
                 };
-                let job_id = face::job::run_job(&pool, scope).await?;
+                let context = application.request_context(CallerKind::Cli);
+                let queued = jobs::handlers::enqueue_face_analysis(&application, &context, scope).await?;
+                let job_id = queued.job.id;
+                let worker = jobs::WorkerRuntime::new(
+                    pool.clone(), jobs::handlers::registry(application.clone()),
+                    jobs::WorkerConfig::default(), "cli-analysis-worker",
+                ).start();
                 println!("人脸分析任务已启动（job_id={job_id}），等待完成…");
-                // Poll until done
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let status: String =
-                        sqlx::query_scalar("SELECT status FROM face_jobs WHERE id = ?")
-                            .bind(job_id)
-                            .fetch_one(&pool)
-                            .await?;
-                    if status != "running" {
-                        println!("任务 {job_id} 完成：{status}");
+                    let job = jobs::get(&pool, job_id).await?;
+                    if matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled") {
+                        println!("任务 {job_id} 完成：{}", job.status);
                         break;
                     }
                 }
+                worker.shutdown().await;
             }
         },
         Command::Models { action } => match action {
@@ -294,7 +296,7 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Command::FillMissing { faces, geo } => {
-            fill_missing(&pool, faces, geo).await?;
+            fill_missing(&application, faces, geo).await?;
         }
         Command::Activities { action } => match action {
             ActivitiesAction::Import { path, dry_run } => {
@@ -623,10 +625,11 @@ async fn import_with_progress(
 }
 
 async fn fill_missing(
-    pool: &sqlx::SqlitePool,
+    application: &Application,
     only_faces: bool,
     only_geo: bool,
 ) -> anyhow::Result<()> {
+    let pool = application.pool();
     // No flags = fill both
     let fill_faces = only_faces || (!only_faces && !only_geo);
     let fill_geo = only_geo || (!only_faces && !only_geo);
@@ -657,27 +660,29 @@ async fn fill_missing(
     }
 
     // ── Phase 2: start tasks ──────────────────────────────────────────────────
+    let context = application.request_context(CallerKind::Cli);
     let face_job_id: Option<i64> = if fill_faces && !face_ids.is_empty() {
-        Some(face::job::run_job(pool, Some(face_ids)).await?)
+        Some(jobs::handlers::enqueue_face_analysis(application, &context, Some(face_ids)).await?.job.id)
     } else {
         if fill_faces { println!("  人脸：所有照片已分析，跳过。"); }
         None
     };
 
-    let pool2 = pool.clone();
-    let geo_handle: Option<tokio::task::JoinHandle<_>> = if fill_geo && geo_total > 0 {
-        Some(tokio::spawn(async move {
-            album::group_by_location(&pool2).await
-        }))
+    let geo_job_id: Option<i64> = if fill_geo && geo_total > 0 {
+        Some(jobs::handlers::enqueue_geocode(application, &context).await?.job.id)
     } else {
         if fill_geo { println!("  地理：所有 GPS 照片已编码，跳过。"); }
         None
     };
 
-    if face_job_id.is_none() && geo_handle.is_none() {
+    if face_job_id.is_none() && geo_job_id.is_none() {
         println!("无需补全，退出。");
         return Ok(());
     }
+    let worker = jobs::WorkerRuntime::new(
+        pool.clone(), jobs::handlers::registry(application.clone()),
+        jobs::WorkerConfig::default(), "cli-fill-worker",
+    ).start();
 
     // ── Phase 3: progress loop ────────────────────────────────────────────────
     let start = std::time::Instant::now();
@@ -692,17 +697,17 @@ async fn fill_missing(
         let face_done = match face_job_id {
             None => true,
             Some(id) => {
-                let status: String =
-                    sqlx::query_scalar("SELECT status FROM face_jobs WHERE id = ?")
-                        .bind(id)
-                        .fetch_one(pool)
-                        .await
-                        .unwrap_or_else(|_| "running".to_string());
-                status != "running"
+                let status = jobs::get(pool, id).await.map(|job| job.status).unwrap_or_else(|_| "running".into());
+                matches!(status.as_str(), "succeeded" | "failed" | "cancelled")
             }
         };
 
-        let geo_done = geo_handle.as_ref().map_or(true, |h| h.is_finished());
+        let geo_done = match geo_job_id {
+            None => true,
+            Some(id) => jobs::get(pool, id).await
+                .map(|job| matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled"))
+                .unwrap_or(false),
+        };
 
         let now = std::time::Instant::now();
         if now.duration_since(last_print) >= print_interval || (face_done && geo_done) {
@@ -713,13 +718,9 @@ async fn fill_missing(
             let mut parts: Vec<String> = Vec::new();
 
             if let Some(id) = face_job_id {
-                let (processed, total): (i64, Option<i64>) =
-                    sqlx::query_as("SELECT processed, total FROM face_jobs WHERE id = ?")
-                        .bind(id)
-                        .fetch_one(pool)
-                        .await
-                        .unwrap_or((0, None));
-                let t = total.unwrap_or(0);
+                let job = jobs::get(pool, id).await.ok();
+                let processed = job.as_ref().map_or(0, |job| job.progress_completed);
+                let t = job.and_then(|job| job.progress_total).unwrap_or(0);
                 let pct = if t > 0 { processed * 100 / t } else { 100 };
                 parts.push(format!("人脸：{processed}/{t} ({pct}%)"));
             }
@@ -749,12 +750,7 @@ async fn fill_missing(
     );
 
     if let Some(id) = face_job_id {
-        let processed: i64 =
-            sqlx::query_scalar("SELECT processed FROM face_jobs WHERE id = ?")
-                .bind(id)
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0);
+        let processed = jobs::get(pool, id).await.map_or(0, |job| job.progress_completed);
         let new_faces: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM faces f \
              JOIN photos p ON p.id = f.photo_id \
@@ -774,6 +770,8 @@ async fn fill_missing(
             "  地理：编码了 {encoded} 个新位置，{failed} 张无城市信息（已跳过），共 {geo_total} 张待处理"
         );
     }
+
+    worker.shutdown().await;
 
     Ok(())
 }

@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use crate::web::AppState;
+use crate::application::RequestContext;
 
 #[derive(Debug, Deserialize)]
 pub struct AnalyzeRequest {
@@ -37,6 +38,7 @@ pub struct FaceResponse {
 
 pub async fn start_analyze(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Json(req): Json<AnalyzeRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let scope = if req.missing_only {
@@ -53,31 +55,33 @@ pub async fn start_analyze(
     } else {
         Some(req.photo_ids)
     };
-    let job_id = crate::face::job::run_job(&state.pool, scope)
+    let job = crate::jobs::handlers::enqueue_face_analysis(&state.application, &context, scope)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok(Json(serde_json::json!({ "job_id": job_id })))
+    Ok(Json(serde_json::json!({ "job_id": job.job.id })))
 }
 
 pub async fn get_job_status(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<JobStatusResponse>, StatusCode> {
-    let row = sqlx::query(
-        "SELECT id, status, total, processed FROM face_jobs WHERE id = ?",
-    )
-    .bind(id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-    .ok_or(StatusCode::NOT_FOUND)?;
-
-    Ok(Json(JobStatusResponse {
-        id: row.get("id"),
-        status: row.get("status"),
-        total: row.get("total"),
-        processed: row.get("processed"),
-    }))
+    if let Ok(job) = crate::jobs::get(&state.pool, id).await {
+        if job.kind == "face_analysis" {
+            return Ok(Json(JobStatusResponse {
+                id: job.id,
+                status: if job.status == "succeeded" { "done".into() } else { job.status },
+                total: job.progress_total,
+                processed: job.progress_completed,
+            }));
+        }
+    }
+    let row = sqlx::query("SELECT id, status, total, processed FROM face_jobs WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Json(JobStatusResponse { id: row.get("id"), status: row.get("status"), total: row.get("total"), processed: row.get("processed") }))
 }
 
 pub async fn list_photo_faces(
