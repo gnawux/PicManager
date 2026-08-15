@@ -109,6 +109,10 @@ impl Application {
     pub fn metadata(&self) -> super::PhotoMetadataService {
         super::PhotoMetadataService::new(self.clone())
     }
+
+    pub fn collections(&self) -> super::CollectionService {
+        super::CollectionService::new(self.clone())
+    }
 }
 
 #[cfg(test)]

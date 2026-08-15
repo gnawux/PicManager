@@ -1,3 +1,4 @@
+mod collection_service;
 mod context;
 mod dedup_service;
 mod error;
@@ -5,6 +6,7 @@ mod import_service;
 mod metadata_service;
 mod repository;
 
+pub use collection_service::{CollectionIdentity, CollectionService, MembershipChange};
 pub use context::{Application, AuthorizationScope, CallerKind, LibraryIdentity, RequestContext};
 pub use dedup_service::DedupService;
 pub use error::{ServiceError, ServiceErrorCode, ServiceResult};

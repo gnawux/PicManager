@@ -4,6 +4,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
+use crate::application::{CallerKind, ServiceErrorCode};
 use crate::web::AppState;
 
 #[derive(Debug, Serialize)]
@@ -60,19 +61,12 @@ pub async fn create_collection(
     State(state): State<AppState>,
     Json(body): Json<CollectionName>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let name = body.name.trim().to_string();
-    if name.is_empty() {
-        return Err(StatusCode::BAD_REQUEST);
-    }
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO albums (name, kind) VALUES (?, 'curated') RETURNING id",
-    )
-    .bind(&name)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id, "name": name }))))
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    let collection = state.application.collections().create(&context, &body.name).await
+        .map_err(collection_status)?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({
+        "id": collection.id, "name": collection.name
+    }))))
 }
 
 pub async fn rename_collection(
@@ -80,22 +74,10 @@ pub async fn rename_collection(
     Path(id): Path<i64>,
     Json(body): Json<CollectionName>,
 ) -> StatusCode {
-    let name = body.name.trim().to_string();
-    if name.is_empty() {
-        return StatusCode::BAD_REQUEST;
-    }
-    let result = sqlx::query(
-        "UPDATE albums SET name = ? WHERE id = ? AND kind = 'curated'",
-    )
-    .bind(&name)
-    .bind(id)
-    .execute(&state.pool)
-    .await;
-
-    match result {
-        Ok(r) if r.rows_affected() > 0 => StatusCode::OK,
-        Ok(_) => StatusCode::NOT_FOUND,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    match state.application.collections().rename(&context, id, &body.name).await {
+        Ok(_) => StatusCode::OK,
+        Err(error) => collection_status(error),
     }
 }
 
@@ -103,26 +85,10 @@ pub async fn delete_collection(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> StatusCode {
-    // Verify it's a curated album before deleting
-    let exists: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM albums WHERE id = ? AND kind = 'curated'",
-    )
-    .bind(id)
-    .fetch_one(&state.pool)
-    .await
-    .unwrap_or((0,));
-
-    if exists.0 == 0 {
-        return StatusCode::NOT_FOUND;
-    }
-
-    match sqlx::query("DELETE FROM albums WHERE id = ?")
-        .bind(id)
-        .execute(&state.pool)
-        .await
-    {
-        Ok(_) => StatusCode::NO_CONTENT,
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    match state.application.collections().delete(&context, id).await {
+        Ok(()) => StatusCode::NO_CONTENT,
+        Err(error) => collection_status(error),
     }
 }
 
@@ -131,31 +97,10 @@ pub async fn add_photos(
     Path(id): Path<i64>,
     Json(body): Json<PhotoIds>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    // Verify collection exists
-    let exists: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM albums WHERE id = ? AND kind = 'curated'")
-            .bind(id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if exists.0 == 0 {
-        return Err(StatusCode::NOT_FOUND);
-    }
-
-    let mut added: u64 = 0;
-    for photo_id in &body.photo_ids {
-        let r = sqlx::query(
-            "INSERT OR IGNORE INTO photo_albums (photo_id, album_id) VALUES (?, ?)",
-        )
-        .bind(photo_id)
-        .bind(id)
-        .execute(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        added += r.rows_affected();
-    }
-
-    Ok(Json(serde_json::json!({ "added": added })))
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    let change = state.application.collections().add_photos(&context, id, &body.photo_ids)
+        .await.map_err(collection_status)?;
+    Ok(Json(serde_json::json!({ "added": change.changed })))
 }
 
 pub async fn remove_photos(
@@ -163,35 +108,18 @@ pub async fn remove_photos(
     Path(id): Path<i64>,
     Json(body): Json<PhotoIds>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let exists: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM albums WHERE id = ? AND kind = 'curated'")
-            .bind(id)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if exists.0 == 0 {
-        return Err(StatusCode::NOT_FOUND);
-    }
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    let change = state.application.collections().remove_photos(&context, id, &body.photo_ids)
+        .await.map_err(collection_status)?;
+    Ok(Json(serde_json::json!({ "removed": change.changed })))
+}
 
-    if body.photo_ids.is_empty() {
-        return Ok(Json(serde_json::json!({ "removed": 0 })));
+fn collection_status(error: crate::application::ServiceError) -> StatusCode {
+    match error.code {
+        ServiceErrorCode::NotFound => StatusCode::NOT_FOUND,
+        ServiceErrorCode::InvalidInput => StatusCode::BAD_REQUEST,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
-
-    let placeholders = body.photo_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "DELETE FROM photo_albums WHERE album_id = ? AND photo_id IN ({placeholders})"
-    );
-    let mut q = sqlx::query(&sql).bind(id);
-    for pid in &body.photo_ids {
-        q = q.bind(pid);
-    }
-    let removed = q
-        .execute(&state.pool)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
-        .rows_affected();
-
-    Ok(Json(serde_json::json!({ "removed": removed })))
 }
 
 pub async fn list_collection_photos(
