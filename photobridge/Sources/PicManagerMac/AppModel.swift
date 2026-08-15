@@ -19,6 +19,7 @@ final class AppModel: ObservableObject {
     private let notifications = NativeNotifications()
     private var healthMonitorTask: Task<Void, Never>?
     private var alertPolicy = ServiceFailureAlertPolicy()
+    private var libraryOwnership: LibraryOwnershipLock?
 
     init() {
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
@@ -164,6 +165,17 @@ final class AppModel: ObservableObject {
     }
 
     func ensureServiceRunning() async {
+        do {
+            if libraryOwnership?.libraryPath != URL(fileURLWithPath: configuration.libraryPath).standardizedFileURL.path {
+                libraryOwnership = try LibraryOwnershipLock(
+                    libraryURL: URL(fileURLWithPath: configuration.libraryPath, isDirectory: true)
+                )
+            }
+        } catch {
+            serviceStatus = "Library in use"
+            lastError = error.localizedDescription
+            return
+        }
         prepareServiceExecutable()
         guard let serviceExecutable else { return }
         if let serviceURL = configuration.serviceURL,

@@ -254,6 +254,11 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load();
 
     std::fs::create_dir_all(&config.library_path)?;
+    let _service_ownership = if matches!(&cli.command, Command::Serve) {
+        Some(storage::LibraryServiceOwnership::acquire(&config.library_path)?)
+    } else {
+        None
+    };
     let pool = storage::connect_with_settings(
         &config.db_url(),
         config.database_max_connections,
