@@ -9,6 +9,8 @@ pub struct Config {
     pub host: String,
     pub port: u16,
     pub thumb_size: u32,
+    pub database_max_connections: u32,
+    pub database_busy_timeout_ms: u64,
 }
 
 /// Subset that can be overridden via config file.
@@ -18,6 +20,8 @@ struct FileConfig {
     host: Option<String>,
     port: Option<u16>,
     thumb_size: Option<u32>,
+    database_max_connections: Option<u32>,
+    database_busy_timeout_ms: Option<u64>,
 }
 
 impl Default for Config {
@@ -32,6 +36,8 @@ impl Default for Config {
             host: "127.0.0.1".to_string(),
             port: 8080,
             thumb_size: 300,
+            database_max_connections: 8,
+            database_busy_timeout_ms: 5_000,
         }
     }
 }
@@ -49,6 +55,12 @@ impl Config {
             if let Some(h) = file_cfg.host   { cfg.host = h; }
             if let Some(p) = file_cfg.port   { cfg.port = p; }
             if let Some(s) = file_cfg.thumb_size { cfg.thumb_size = s; }
+            if let Some(value) = file_cfg.database_max_connections {
+                cfg.database_max_connections = value.clamp(1, 64);
+            }
+            if let Some(value) = file_cfg.database_busy_timeout_ms {
+                cfg.database_busy_timeout_ms = value.clamp(100, 60_000);
+            }
         }
         apply_env_overrides(cfg, |key| std::env::var(key).ok())
     }
@@ -80,6 +92,12 @@ fn apply_env_overrides(
     }
     if let Some(port) = get("PICMANAGER_PORT").and_then(|value| value.parse().ok()) {
         config.port = port;
+    }
+    if let Some(value) = get("PICMANAGER_DB_MAX_CONNECTIONS").and_then(|value| value.parse::<u32>().ok()) {
+        config.database_max_connections = value.clamp(1, 64);
+    }
+    if let Some(value) = get("PICMANAGER_DB_BUSY_TIMEOUT_MS").and_then(|value| value.parse::<u64>().ok()) {
+        config.database_busy_timeout_ms = value.clamp(100, 60_000);
     }
     config
 }
@@ -129,12 +147,16 @@ mod tests {
             "PICMANAGER_LIBRARY_PATH" => Some("/tmp/picmanager-isolated".into()),
             "PICMANAGER_HOST" => Some("0.0.0.0".into()),
             "PICMANAGER_PORT" => Some("18080".into()),
+            "PICMANAGER_DB_MAX_CONNECTIONS" => Some("12".into()),
+            "PICMANAGER_DB_BUSY_TIMEOUT_MS" => Some("9000".into()),
             _ => None,
         });
         assert_eq!(config.library_path, PathBuf::from("/tmp/picmanager-isolated"));
         assert_eq!(config.db_path, PathBuf::from("/tmp/picmanager-isolated/picmanager.db"));
         assert_eq!(config.thumb_cache_dir, PathBuf::from("/tmp/picmanager-isolated/.thumbs"));
         assert_eq!(config.bind_addr(), "0.0.0.0:18080");
+        assert_eq!(config.database_max_connections, 12);
+        assert_eq!(config.database_busy_timeout_ms, 9_000);
     }
 
     #[test]

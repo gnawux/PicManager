@@ -219,7 +219,11 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load();
 
     std::fs::create_dir_all(&config.library_path)?;
-    let pool = storage::connect(&config.db_url()).await?;
+    let pool = storage::connect_with_settings(
+        &config.db_url(),
+        config.database_max_connections,
+        std::time::Duration::from_millis(config.database_busy_timeout_ms),
+    ).await?;
     let application = Application::new(pool.clone(), config.clone());
 
     match cli.command {
@@ -260,6 +264,8 @@ async fn main() -> anyhow::Result<()> {
             println!("host         : {}", config.host);
             println!("port         : {}", config.port);
             println!("thumb_size   : {}", config.thumb_size);
+            println!("db_pool_size : {}", config.database_max_connections);
+            println!("db_busy_ms   : {}", config.database_busy_timeout_ms);
             let cfg_file = dirs::config_dir()
                 .map(|p| p.join("picmanager/config.toml").display().to_string())
                 .unwrap_or_else(|| "(unknown)".to_string());
