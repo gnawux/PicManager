@@ -262,14 +262,20 @@ mod tests {
         )
         .start();
 
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
-                let mut complete = true;
+                let mut statuses = Vec::new();
                 for id in [face.id, animal.id, geo.id] {
-                    complete &= get(&pool, id).await.unwrap().status == "succeeded";
+                    let job = get(&pool, id).await.unwrap();
+                    statuses.push((job.status, job.error_message));
                 }
-                if complete {
+                if statuses.iter().all(|(status, _)| status == "succeeded") {
                     break;
+                }
+                if statuses.iter().all(|(status, _)| {
+                    matches!(status.as_str(), "succeeded" | "failed" | "cancelled")
+                }) {
+                    panic!("analysis jobs terminated unsuccessfully: {statuses:?}");
                 }
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }

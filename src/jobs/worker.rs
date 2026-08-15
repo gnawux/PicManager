@@ -247,10 +247,10 @@ async fn execute_leased(
     let cancelled = cancellation_requested(pool, &lease).await.unwrap_or(false);
     match (outcome, cancelled) {
         (_, true) => {
-            let _ = cancel_leased(pool, &lease).await;
+            finalize_with_retry(pool, &lease, FinalizeOutcome::Cancelled).await;
         }
         (Ok(()), false) => {
-            let _ = complete(pool, &lease).await;
+            finalize_with_retry(pool, &lease, FinalizeOutcome::Succeeded).await;
         }
         (Err(failure), false) => {
             tracing::warn!(
@@ -261,7 +261,53 @@ async fn execute_leased(
                 retryable = failure.retryable,
                 "job attempt failed"
             );
-            let _ = fail(pool, &lease, &failure, config.retry_delay.as_secs()).await;
+            finalize_with_retry(
+                pool,
+                &lease,
+                FinalizeOutcome::Failed(&failure, config.retry_delay.as_secs()),
+            )
+            .await;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FinalizeOutcome<'a> {
+    Cancelled,
+    Succeeded,
+    Failed(&'a JobFailure, u64),
+}
+
+async fn finalize_with_retry(
+    pool: &SqlitePool,
+    lease: &JobLease,
+    outcome: FinalizeOutcome<'_>,
+) {
+    for attempt in 1..=5 {
+        let result = match outcome {
+            FinalizeOutcome::Cancelled => cancel_leased(pool, lease).await,
+            FinalizeOutcome::Succeeded => complete(pool, lease).await,
+            FinalizeOutcome::Failed(failure, delay) => fail(pool, lease, failure, delay).await,
+        };
+        match result {
+            Ok(_) => return,
+            Err(error) if attempt < 5 => {
+                tracing::warn!(
+                    job_id = lease.job.id,
+                    worker_id = %lease.worker_id,
+                    finalize_attempt = attempt,
+                    "job finalization failed and will be retried: {error}"
+                );
+                tokio::time::sleep(Duration::from_millis(20 * attempt)).await;
+            }
+            Err(error) => {
+                tracing::error!(
+                    job_id = lease.job.id,
+                    worker_id = %lease.worker_id,
+                    "job finalization failed permanently: {error}"
+                );
+                return;
+            }
         }
     }
 }
@@ -358,7 +404,7 @@ mod tests {
         )
         .start();
 
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if list(&pool, Some("succeeded"), None, None, 20)
                     .await

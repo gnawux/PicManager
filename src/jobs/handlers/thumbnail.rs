@@ -263,7 +263,7 @@ mod tests {
             "thumbnail-test",
         )
         .start();
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if get(&pool, first.job.id).await.unwrap().status == "succeeded" {
                     break;

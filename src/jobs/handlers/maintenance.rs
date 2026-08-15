@@ -260,7 +260,7 @@ mod tests {
             "maintenance-test",
         )
         .start();
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 if get(&pool, dedup.id).await.unwrap().status == "succeeded"
                     && get(&pool, maintenance.id).await.unwrap().status == "succeeded"

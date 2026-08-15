@@ -154,7 +154,7 @@ mod tests {
         )
         .start();
 
-        let completed = tokio::time::timeout(Duration::from_secs(3), async {
+        let completed = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let current = get(&pool, queued.job.id).await.unwrap();
                 if current.status == "succeeded" {
