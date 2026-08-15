@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn all_tables_exist() {
         let pool = test_pool().await;
-        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs", "sync_jobs", "sync_items", "provider_checkpoints"] {
+        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs", "sync_jobs", "sync_items", "provider_checkpoints", "variant_renditions", "asset_display_revisions"] {
             let row: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
             )
@@ -127,6 +127,45 @@ mod tests {
         )
         .bind(asset_id).execute(&pool).await;
         assert!(second_primary.is_err(), "an asset may only have one primary variant");
+    }
+
+    #[tokio::test]
+    async fn rendition_schema_separates_master_display_and_orientation_policy() {
+        let pool = test_pool().await;
+        let asset_id: i64 = sqlx::query_scalar("INSERT INTO assets DEFAULT VALUES RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let original: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_variants (asset_id, role, path, is_primary) \
+             VALUES (?, 'original', '/original.heic', 1) RETURNING id",
+        ).bind(asset_id).fetch_one(&pool).await.unwrap();
+        let current: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_variants (asset_id, role, path) \
+             VALUES (?, 'current', '/current.jpg') RETURNING id",
+        ).bind(asset_id).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE assets SET master_variant_id = ?, display_variant_id = ? WHERE id = ?",
+        ).bind(original).bind(current).bind(asset_id).execute(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO variant_renditions (variant_id, provenance, byte_preserved, \
+             orientation_mode, source_orientation, display_orientation) \
+             VALUES (?, 'photokit_resource', 1, 'metadata', 6, 6)",
+        ).bind(original).execute(&pool).await.unwrap();
+        let invalid = sqlx::query(
+            "INSERT INTO variant_renditions (variant_id, provenance, orientation_mode, display_orientation) \
+             VALUES (?, 'photokit_current', 'baked_pixels', 9)",
+        ).bind(current).execute(&pool).await;
+        assert!(invalid.is_err());
+
+        let selected: (i64, i64) = sqlx::query_as(
+            "SELECT master_variant_id, display_variant_id FROM assets WHERE id = ?",
+        ).bind(asset_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(selected, (original, current));
+        sqlx::query("DELETE FROM asset_variants WHERE id = ?")
+            .bind(current).execute(&pool).await.unwrap();
+        let display: Option<i64> = sqlx::query_scalar(
+            "SELECT display_variant_id FROM assets WHERE id = ?",
+        ).bind(asset_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(display, None);
     }
 
     #[tokio::test]
