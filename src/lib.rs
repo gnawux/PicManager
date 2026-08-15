@@ -8,6 +8,7 @@ pub mod error;
 pub mod image_open;
 pub mod importer;
 pub mod metadata;
+pub mod migration;
 pub mod storage;
 pub mod web;
 

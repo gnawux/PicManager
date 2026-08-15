@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, config::Config, face, metadata, storage, importer, dedup};
+use picmanager::{activities, album, config::Config, face, metadata, migration, storage, importer, dedup};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -67,6 +67,24 @@ enum Command {
     Photos {
         #[command(subcommand)]
         action: PhotosAction,
+    },
+    /// 检查和迁移现有照片目录
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum MigrateAction {
+    /// 只读检查数据库、照片计数和文件完整性
+    Inspect {
+        /// 输出 JSON，便于保存迁移前后的基线
+        #[arg(long)]
+        json: bool,
+        /// 跳过逐个照片文件存在性检查
+        #[arg(long)]
+        skip_files: bool,
     },
 }
 
@@ -244,6 +262,41 @@ async fn main() -> anyhow::Result<()> {
         Command::Photos { action } => match action {
             PhotosAction::BackfillTimezones { dry_run } => {
                 backfill_timezones(&pool, dry_run).await?;
+            }
+        },
+        Command::Migrate { action } => match action {
+            MigrateAction::Inspect { json, skip_files } => {
+                let report = migration::inspect(&pool, !skip_files).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("schema version       : {}", report.schema_version);
+                    println!("photos               : {}", report.total_photos);
+                    for (status, count) in &report.status_counts {
+                        println!("  {status:<18} : {count}");
+                    }
+                    println!(
+                        "active counter        : {} (actual {}, {})",
+                        report.recorded_active_photos,
+                        report.active_photos,
+                        if report.active_count_matches { "ok" } else { "MISMATCH" },
+                    );
+                    println!("duplicate SHA groups : {}", report.duplicate_sha_groups);
+                    println!("foreign key errors   : {}", report.foreign_key_violations);
+                    println!("SQLite integrity     : {}", report.sqlite_integrity);
+                    if report.checked_files {
+                        println!("missing files        : {}", report.missing_files);
+                        for path in &report.missing_file_samples {
+                            println!("  missing: {path}");
+                        }
+                    } else {
+                        println!("missing files        : not checked");
+                    }
+                    println!("result               : {}", if report.is_healthy() { "healthy" } else { "issues found" });
+                }
+                if !report.is_healthy() {
+                    std::process::exit(2);
+                }
             }
         },
     }
