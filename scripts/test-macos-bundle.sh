@@ -12,6 +12,8 @@ plutil -lint "$PLIST" >/dev/null
 test -x "$APP_EXECUTABLE"
 test -x "$SERVICE_EXECUTABLE"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = "io.picmanager.mac"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")" = "PicManagerMac"
+test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$PLIST")" = "APPL"
 "$SERVICE_EXECUTABLE" --version | grep -Eq '^picmanager [0-9]+\.[0-9]+\.[0-9]+'
 
 if find "$CONTENTS" -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' | grep -q .; then

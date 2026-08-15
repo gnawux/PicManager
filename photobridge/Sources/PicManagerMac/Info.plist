@@ -4,8 +4,11 @@
     <key>CFBundleIdentifier</key><string>io.picmanager.mac</string>
     <key>CFBundleName</key><string>PicManager</string>
     <key>CFBundleDisplayName</key><string>PicManager</string>
+    <key>CFBundleExecutable</key><string>PicManagerMac</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>CFBundleShortVersionString</key><string>1.0.1</string>
     <key>LSMinimumSystemVersion</key><string>26.0</string>
+    <key>LSUIElement</key><true/>
     <key>NSPhotoLibraryUsageDescription</key><string>PicManager compares and imports photos you choose from your system photo library.</string>
 </dict></plist>
