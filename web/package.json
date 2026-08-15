@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build && node scripts/normalize-build.mjs",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "perf": "vitest run src/lib/timeline/performance.test.ts && node scripts/check-performance.mjs"
   },
   "dependencies": {
     "@sveltejs/vite-plugin-svelte": "latest",
