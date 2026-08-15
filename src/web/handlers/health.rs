@@ -23,3 +23,12 @@ pub async fn get_health(
         .map(Json)
         .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
 }
+
+pub async fn get_diagnostics(
+    State(state): State<AppState>,
+) -> Result<Json<HealthReport>, StatusCode> {
+    crate::storage::health_report(&state.pool, &state.config, true)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
+}

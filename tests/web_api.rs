@@ -92,6 +92,29 @@ async fn health_api_returns_structured_service_and_job_state() {
 }
 
 #[tokio::test]
+async fn versioned_service_health_diagnostics_and_tasks_contracts_are_available() {
+    let app = test_app().await;
+    for (uri, expected_field) in [
+        ("/api/v1/service", "api_version"),
+        ("/api/v1/health", "status"),
+        ("/api/v1/diagnostics", "reconciliation"),
+        ("/api/v1/tasks", "tasks"),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder().uri(uri).body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(!json[expected_field].is_null(), "{uri} missing {expected_field}");
+        if uri == "/api/v1/service" {
+            assert_eq!(json["api_version"], "v1");
+            assert_eq!(json["local_trusted_only"], true);
+        }
+    }
+}
+
+#[tokio::test]
 async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
     let (app, pool, _tmp) = test_app_with_pool().await;
     let failed_id: i64 = sqlx::query_scalar(

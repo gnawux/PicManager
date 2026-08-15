@@ -9,6 +9,7 @@ pub mod geo;
 pub mod health;
 pub mod import;
 pub mod people;
+pub mod service;
 pub mod photos;
 pub mod tasks;
 pub mod timeline;

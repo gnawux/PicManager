@@ -113,3 +113,11 @@ The task API and macOS status client receive the same service DTOs. Every job ex
 status, progress, attempts, timestamps and a safe error. Structured logs carry job ID,
 request ID, kind and library identity. Diagnostic export redacts paths and external IDs
 by default and never includes media bytes.
+
+## Versioned local-service API
+
+The macOS shell and future local clients use `/api/v1`. `GET /api/v1/service` advertises
+the service build, minimum compatible API and capability names. Health, deep diagnostics,
+task listing, task detail, retry and cancellation are available under `/api/v1`; the
+unversioned routes remain compatibility aliases for the current Web UI. Version 1 is
+local-trusted only and does not imply remote authentication.

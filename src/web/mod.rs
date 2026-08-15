@@ -20,11 +20,12 @@ use handlers::{
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
     geo::{get_geo_hierarchy, get_geo_photos, start_regeocode, get_regeocode_status},
-    health::get_health,
+    health::{get_diagnostics, get_health},
     people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person, get_merge_suggestions, get_outlier_faces, eject_face, get_centroid_faces, get_embedding_map},
     import::{start_import, get_import_status},
     photos::{list_photos, get_thumb, get_photo_file, get_photo, get_gps_points, patch_photo, batch_update_photos},
     tasks::{cancel_task, get_task, list_tasks, retry_task},
+    service::get_service_contract,
     timeline::list_timeline,
 };
 
@@ -64,6 +65,13 @@ fn router_with_application(
 
     Router::new()
         .route("/api/health", get(get_health))
+        .route("/api/v1/service", get(get_service_contract))
+        .route("/api/v1/health", get(get_health))
+        .route("/api/v1/diagnostics", get(get_diagnostics))
+        .route("/api/v1/tasks", get(list_tasks))
+        .route("/api/v1/tasks/{id}", get(get_task))
+        .route("/api/v1/tasks/{id}/retry", post(retry_task))
+        .route("/api/v1/tasks/{id}/cancel", post(cancel_task))
         .route("/api/photos", get(list_photos))
         .route("/api/timeline", get(list_timeline))
         .route("/api/photos/gps-points", get(get_gps_points))
