@@ -11,6 +11,7 @@ pub mod importer;
 pub mod metadata;
 pub mod migration;
 pub mod storage;
+pub mod sync;
 pub mod web;
 
 use rust_embed::RustEmbed;

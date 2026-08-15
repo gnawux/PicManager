@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn all_tables_exist() {
         let pool = test_pool().await;
-        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs"] {
+        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs", "sync_jobs", "sync_items", "provider_checkpoints"] {
             let row: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
             )
@@ -154,6 +154,29 @@ mod tests {
         .bind(source_id).fetch_one(&pool).await.unwrap();
         assert_eq!(variants, 0);
         assert_eq!(source_asset, None, "provider inventory survives unlinking");
+    }
+
+    #[tokio::test]
+    async fn sync_schema_requires_valid_leases_and_progress() {
+        let pool = test_pool().await;
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, total_items) \
+             VALUES ('apple_incremental', 'apple_photos', 1) RETURNING id",
+        )
+        .fetch_one(&pool).await.unwrap();
+
+        let invalid_lease = sqlx::query(
+            "INSERT INTO sync_items (job_id, external_id, operation, status) \
+             VALUES (?, 'asset-1', 'download', 'leased')",
+        )
+        .bind(job_id).execute(&pool).await;
+        assert!(invalid_lease.is_err(), "leased work requires owner and expiry");
+
+        let invalid_progress = sqlx::query(
+            "UPDATE sync_jobs SET completed_items = 2 WHERE id = ?",
+        )
+        .bind(job_id).execute(&pool).await;
+        assert!(invalid_progress.is_err(), "job progress cannot exceed total work");
     }
 
     #[tokio::test]

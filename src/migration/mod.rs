@@ -149,7 +149,7 @@ mod tests {
         let report = inspect(&pool, true).await.unwrap();
 
         assert!(report.is_healthy());
-        assert!(report.schema_version >= 19);
+        assert!(report.schema_version >= 20);
         assert_eq!(report.total_photos, 0);
         assert!(report.status_counts.is_empty());
         assert_eq!(report.missing_files, 0);
