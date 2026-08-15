@@ -11,6 +11,9 @@ final class AppModel: ObservableObject {
     @Published var onboardingRequired: Bool
     @Published var libraryConfirmed = false
     @Published var photoAccess: PhotoAccessReadiness
+    @Published var appleInventory: ApplePhotoInventory?
+    @Published var dashboard: ServiceDashboard?
+    @Published var dashboardLoading = false
 
     init() {
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
@@ -76,7 +79,31 @@ final class AppModel: ObservableObject {
             try configuration.save(to: MacAppConfiguration.applicationSupportURL)
             onboardingRequired = false
             lastError = nil
+            Task { await refreshDashboard() }
         } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    func refreshDashboard() async {
+        guard !onboardingRequired else { return }
+        dashboardLoading = true
+        defer { dashboardLoading = false }
+        if photoAccess == .authorized {
+            appleInventory = loadApplePhotoInventory()
+        }
+        guard let serviceURL = configuration.serviceURL else {
+            serviceStatus = "Invalid configuration"
+            lastError = ServiceDashboardError.invalidBaseURL.localizedDescription
+            return
+        }
+        do {
+            dashboard = try await ServiceDashboardClient(baseURL: serviceURL).load()
+            serviceStatus = dashboard?.health.status.capitalized ?? "Available"
+            lastError = nil
+        } catch {
+            dashboard = nil
+            serviceStatus = "Unavailable"
             lastError = error.localizedDescription
         }
     }
