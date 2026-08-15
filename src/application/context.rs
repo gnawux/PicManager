@@ -101,6 +101,10 @@ impl Application {
     pub fn imports(&self) -> super::ImportService {
         super::ImportService::new(self.clone())
     }
+
+    pub fn dedup(&self) -> super::DedupService {
+        super::DedupService::new(self.clone())
+    }
 }
 
 #[cfg(test)]

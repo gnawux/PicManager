@@ -1,15 +1,23 @@
+use crate::{
+    application::{CallerKind, ServiceErrorCode},
+    dedup,
+    web::AppState,
+};
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::Deserialize;
-use crate::{dedup, web::AppState};
 
 pub async fn list_dedup_groups(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<dedup::DedupGroup>>, StatusCode> {
-    dedup::list_groups(&state.pool)
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    state
+        .application
+        .dedup()
+        .list(&context)
         .await
         .map(Json)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
@@ -25,9 +33,16 @@ pub async fn resolve_group(
     Path(group_id): Path<i64>,
     Json(req): Json<ResolveRequest>,
 ) -> StatusCode {
-    match dedup::resolve(&state.pool, group_id, &req.keep).await {
+    let context = state.application.request_context(CallerKind::LocalWeb);
+    match state
+        .application
+        .dedup()
+        .resolve(&context, group_id, &req.keep)
+        .await
+    {
         Ok(()) => StatusCode::OK,
-        Err(crate::error::AppError::NotFound(_)) => StatusCode::NOT_FOUND,
+        Err(error) if error.code == ServiceErrorCode::NotFound => StatusCode::NOT_FOUND,
+        Err(error) if error.code == ServiceErrorCode::InvalidInput => StatusCode::BAD_REQUEST,
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

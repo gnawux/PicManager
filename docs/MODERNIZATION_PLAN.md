@@ -382,7 +382,9 @@ architectural work and macOS integration are complete.
 
 - M10.1: introduce application context, repository traits and typed service errors.
 - M10.2: route import and catalog mutations through services shared by CLI and Web.
-- M10.3: route deduplication, metadata and collection mutations through services.
+- M10.3a: route deduplication scans, review and resolution through services.
+- M10.3b: route photo metadata and display-transform mutations through services.
+- M10.3c: route curated collection mutations through services and transactions.
 - M10.4: add authorization-ready request context without enabling remote access yet.
 
 ### M11 - Unified durable background work

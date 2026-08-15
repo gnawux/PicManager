@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, application::{Application, CallerKind, ImportCommand}, apple, config::Config, face, metadata, migration, storage, importer, dedup};
+use picmanager::{activities, album, application::{Application, CallerKind, ImportCommand}, apple, config::Config, face, metadata, migration, storage, importer};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -227,14 +227,11 @@ async fn main() -> anyhow::Result<()> {
             import_with_progress(&application, &dir, copy, batch_size, log.as_deref(), dry_run).await?;
         }
         Command::Dedup { full } => {
-            let n = if full {
-                dedup::scan_full(&pool).await?
-            } else {
-                dedup::scan(&pool).await?
-            };
+            let context = application.request_context(CallerKind::Cli);
+            let n = application.dedup().scan(&context, full).await?;
             println!("扫描完成，发现 {n} 个新重复组");
 
-            let groups = dedup::list_groups(&pool).await?;
+            let groups = application.dedup().list(&context).await?;
             if groups.is_empty() {
                 println!("没有待确认的重复组，无需操作");
             } else {
