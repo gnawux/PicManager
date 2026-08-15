@@ -367,7 +367,83 @@ Status: complete.
 - M8.3: migration rehearsal against a copied real-world database.
 - M8.4: documentation, upgrade guide and full release verification.
 
-## 8. Testing and commit protocol
+## 8. Phase 4-5 implementation milestones
+
+Phase 4/5 work begins from the Phase 0–3 release candidate merged into `main`. Minor
+visual and interaction defects are recorded but intentionally deferred until the
+architectural work and macOS integration are complete.
+
+### M9 - Phase 4/5 planning and integration baseline
+
+- M9.1: merge Phase 0–3 into `main`, record repository agent rules and expand this plan.
+- M9.2: capture service-boundary and job-system contracts with compatibility tests.
+
+### M10 - Shared application services
+
+- M10.1: introduce application context, repository traits and typed service errors.
+- M10.2: route import and catalog mutations through services shared by CLI and Web.
+- M10.3: route deduplication, metadata and collection mutations through services.
+- M10.4: add authorization-ready request context without enabling remote access yet.
+
+### M11 - Unified durable background work
+
+- M11.1: add additive generic job, attempt, lease and diagnostic persistence.
+- M11.2: implement a worker registry, bounded concurrency and graceful shutdown.
+- M11.3: move import and thumbnail generation onto durable jobs.
+- M11.4: move face/animal analysis and geocoding onto durable jobs.
+- M11.5: move deduplication and derived-media maintenance onto durable jobs.
+- M11.6: expose consistent queue, progress, cancellation, retry and failure APIs.
+
+### M12 - Database and filesystem reliability
+
+- M12.1: enable SQLite WAL, busy timeout, explicit pool sizing and connection tests.
+- M12.2: review transaction scopes and add contention/restart integration tests.
+- M12.3: implement atomic SQLite backups with retention and restore verification.
+- M12.4: reconcile catalog variants, media files, staging intents and derived caches.
+- M12.5: add startup recovery and structured health/diagnostic reports.
+
+### M13 - Phase 4 API and operational hardening
+
+- M13.1: apply consistent active/deleted/source lifecycle filtering across APIs.
+- M13.2: version service-facing health, jobs and diagnostics contracts for macOS use.
+- M13.3: add worker metrics, structured logs and end-to-end interruption tests.
+- M13.4: run the Phase 4 compatibility, performance and migration release gate.
+
+### M14 - macOS application foundation
+
+- M14.1: add a SwiftUI menu-bar application target and shared configuration model.
+- M14.2: implement first-run library selection and PhotoKit authorization assistant.
+- M14.3: display source inventory, synchronization and background-task health.
+
+### M15 - Rust service lifecycle integration
+
+- M15.1: locate or install the bundled Rust service and validate compatible versions.
+- M15.2: start, monitor and gracefully stop the local service with crash recovery.
+- M15.3: add health polling, native failure notifications and safe log capture.
+- M15.4: prevent two app instances or workers from owning the same library.
+
+### M16 - Native shell and daily operation
+
+- M16.1: add embedded WKWebView and system-browser launch modes.
+- M16.2: add menu-bar task progress, retry shortcuts and synchronization controls.
+- M16.3: add launch-at-login management using current macOS service APIs.
+- M16.4: add diagnostic export with configuration redaction and no media inclusion.
+
+### M17 - Distribution preparation
+
+- M17.1: define app bundle resources, entitlements and release build assembly.
+- M17.2: add signing/notarization scripts that require explicit external credentials.
+- M17.3: define update metadata and rollback compatibility without auto-publishing.
+- M17.4: test clean installation, first run, upgrade and uninstall preservation.
+
+### M18 - Phase 4/5 stabilization and documentation
+
+- M18.1: address deferred functional/UI defects after the refactor is complete.
+- M18.2: reorganize architecture, operations, macOS, migration and user documentation.
+- M18.3: run Rust, Swift, frontend, migration, performance and browser release gates.
+- M18.4: merge the completed Phase 4/5 branch into `main` with a signed-off merge.
+
+## 9. Testing and commit protocol
 
 For every milestone:
 
