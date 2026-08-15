@@ -32,7 +32,13 @@ private struct MenuBarContent: View {
             Text("Tasks: \(dashboard.metrics.running) running, \(dashboard.metrics.queued) queued")
             Text("Apple Photos: \(dashboard.synchronizedSourceCount) synchronized")
         }
-        Button("Open Library") { openWindow(id: "library") }
+        Button("Open Library") {
+            switch libraryPresentationTarget(for: model.configuration) {
+            case .embedded: openWindow(id: "library")
+            case .systemBrowser: model.openLibraryInSystemBrowser()
+            case .unavailable: break
+            }
+        }
         Button("Refresh Status") { Task { await model.refreshDashboard() } }
         SettingsLink { Text("Settings…") }
         Divider()
@@ -47,7 +53,7 @@ private struct LibraryShellView: View {
         if model.onboardingRequired {
             OnboardingAssistant(model: model)
         } else {
-            DashboardView(model: model)
+            LibraryPresentationView(model: model)
                 .task {
                     await model.ensureServiceRunning()
                     await model.refreshDashboard()
@@ -60,8 +66,46 @@ private struct LibraryShellView: View {
     }
 }
 
+private struct LibraryPresentationView: View {
+    @ObservedObject var model: AppModel
+    @State private var showingStatus = false
+
+    var body: some View {
+        Group {
+            switch libraryPresentationTarget(for: model.configuration) {
+            case let .embedded(url):
+                ZStack {
+                    WebLibraryView(serviceURL: url, serviceAvailable: model.dashboard != nil)
+                    if model.dashboard == nil {
+                        ContentUnavailableView(
+                            "Starting PicManager",
+                            systemImage: "photo.stack",
+                            description: Text(model.lastError ?? "Waiting for the local photo service…")
+                        )
+                    }
+                }
+            case .systemBrowser:
+                DashboardView(model: model, showsBrowserButton: true)
+            case .unavailable:
+                ContentUnavailableView("Invalid service URL", systemImage: "link.badge.plus")
+            }
+        }
+        .toolbar {
+            ToolbarItemGroup {
+                Button("Status", systemImage: "waveform.path.ecg") { showingStatus = true }
+                Button("Open in Browser", systemImage: "safari") { model.openLibraryInSystemBrowser() }
+            }
+        }
+        .sheet(isPresented: $showingStatus) {
+            DashboardView(model: model)
+                .frame(minWidth: 760, minHeight: 520)
+        }
+    }
+}
+
 private struct DashboardView: View {
     @ObservedObject var model: AppModel
+    var showsBrowserButton = false
 
     var body: some View {
         ScrollView {
@@ -74,6 +118,10 @@ private struct DashboardView: View {
                     }
                     Spacer()
                     if model.dashboardLoading { ProgressView() }
+                    if showsBrowserButton {
+                        Button("Open Library in Browser") { model.openLibraryInSystemBrowser() }
+                            .buttonStyle(.borderedProminent)
+                    }
                     Button("Refresh") { Task { await model.refreshDashboard() } }
                 }
                 HStack(alignment: .top, spacing: 16) {

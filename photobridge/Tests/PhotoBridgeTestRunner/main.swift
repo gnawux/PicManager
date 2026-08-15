@@ -43,5 +43,6 @@ runServiceExecutableTests()
 runServiceLifecycleTests()
 runServiceMonitoringTests()
 runLibraryOwnershipTests()
+runLibraryPresentationTests()
 
 finish()

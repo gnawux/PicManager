@@ -192,6 +192,14 @@ final class AppModel: ObservableObject {
         serviceProcess.stop()
     }
 
+    func openLibraryInSystemBrowser() {
+        guard let url = configuration.serviceURL else {
+            lastError = ServiceDashboardError.invalidBaseURL.localizedDescription
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     private static func photoAccessReadiness() -> PhotoAccessReadiness {
         switch PHPhotoLibrary.authorizationStatus(for: .readWrite) {
         case .authorized: .authorized
