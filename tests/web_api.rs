@@ -348,6 +348,27 @@ async fn frontend_index_is_served() {
 }
 
 #[tokio::test]
+async fn modern_frontend_build_is_embedded_under_coexistence_path() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/modern/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("/modern/assets/"));
+    assert!(html.contains("<div id=\"app\"></div>"));
+}
+
+#[tokio::test]
 async fn get_thumb_generates_and_caches() {
     let (app, pool, tmp) = test_app_with_pool().await;
 
