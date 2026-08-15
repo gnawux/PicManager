@@ -16,6 +16,9 @@ final class AppModel: ObservableObject {
     @Published var dashboardLoading = false
     @Published var serviceExecutable: ResolvedServiceExecutable?
     private let serviceProcess = ServiceProcessController()
+    private let notifications = NativeNotifications()
+    private var healthMonitorTask: Task<Void, Never>?
+    private var alertPolicy = ServiceFailureAlertPolicy()
 
     init() {
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
@@ -113,6 +116,35 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func startHealthMonitoring() {
+        guard healthMonitorTask == nil else { return }
+        healthMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            await notifications.requestAuthorization()
+            while !Task.isCancelled {
+                let succeeded = await pollServiceHealth()
+                if alertPolicy.record(success: succeeded) {
+                    await notifications.serviceFailure("The local photo service is unavailable after repeated health checks.")
+                }
+                try? await Task.sleep(for: .seconds(5))
+            }
+        }
+    }
+
+    private func pollServiceHealth() async -> Bool {
+        guard let serviceURL = configuration.serviceURL else { return false }
+        do {
+            dashboard = try await ServiceDashboardClient(baseURL: serviceURL).load()
+            serviceStatus = dashboard?.health.status.capitalized ?? "Available"
+            lastError = nil
+            return dashboard?.health.status == "healthy"
+        } catch {
+            serviceStatus = "Unavailable"
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
     func prepareServiceExecutable() {
         do {
             let locator = ServiceExecutableLocator()
@@ -143,6 +175,8 @@ final class AppModel: ObservableObject {
     }
 
     func stopService() {
+        healthMonitorTask?.cancel()
+        healthMonitorTask = nil
         serviceProcess.stop()
     }
 

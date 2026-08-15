@@ -41,5 +41,6 @@ runOnboardingReadinessTests()
 runServiceDashboardTests()
 runServiceExecutableTests()
 runServiceLifecycleTests()
+runServiceMonitoringTests()
 
 finish()

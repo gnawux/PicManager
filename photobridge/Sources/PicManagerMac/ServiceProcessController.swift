@@ -14,9 +14,17 @@ final class ServiceProcessController {
     private var restartTask: Task<Void, Never>?
     private var requestedStop = false
     private let restartPolicy: ServiceRestartPolicy
+    private let logCapture: ServiceLogCapture
+    private var outputPipe: Pipe?
+    private var errorPipe: Pipe?
 
-    init(restartPolicy: ServiceRestartPolicy = ServiceRestartPolicy()) {
+    init(
+        restartPolicy: ServiceRestartPolicy = ServiceRestartPolicy(),
+        logURL: URL = MacAppConfiguration.applicationSupportURL
+            .deletingLastPathComponent().appendingPathComponent("Logs/service.log")
+    ) {
         self.restartPolicy = restartPolicy
+        logCapture = ServiceLogCapture(logURL: logURL)
     }
 
     func start(executableURL: URL, configuration: MacAppConfiguration) {
@@ -27,6 +35,7 @@ final class ServiceProcessController {
             host: configuration.host,
             port: configuration.port
         )
+        logCapture.configure(libraryPath: configuration.libraryPath)
         requestedStop = false
         restartAttempt = 0
         launch()
@@ -55,8 +64,16 @@ final class ServiceProcessController {
         environment["PICMANAGER_HOST"] = launchConfiguration.host
         environment["PICMANAGER_PORT"] = String(launchConfiguration.port)
         process.environment = environment
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        outputPipe.fileHandleForReading.readabilityHandler = { [logCapture] handle in
+            logCapture.append(handle.availableData)
+        }
+        errorPipe.fileHandleForReading.readabilityHandler = { [logCapture] handle in
+            logCapture.append(handle.availableData)
+        }
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
         process.terminationHandler = { [weak self] process in
             let status = process.terminationStatus
             Task { @MainActor [weak self] in self?.handleTermination(status) }
@@ -64,6 +81,8 @@ final class ServiceProcessController {
         do {
             try process.run()
             self.process = process
+            self.outputPipe = outputPipe
+            self.errorPipe = errorPipe
             state = .running(processID: process.processIdentifier)
         } catch {
             self.process = nil
@@ -72,6 +91,10 @@ final class ServiceProcessController {
     }
 
     private func handleTermination(_ exitCode: Int32) {
+        outputPipe?.fileHandleForReading.readabilityHandler = nil
+        errorPipe?.fileHandleForReading.readabilityHandler = nil
+        outputPipe = nil
+        errorPipe = nil
         process = nil
         if requestedStop {
             state = .stopped

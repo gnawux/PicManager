@@ -51,6 +51,7 @@ private struct LibraryShellView: View {
                 .task {
                     await model.ensureServiceRunning()
                     await model.refreshDashboard()
+                    model.startHealthMonitoring()
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     model.stopService()

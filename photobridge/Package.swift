@@ -48,6 +48,7 @@ let package = Package(
                 .linkedFramework("SwiftUI"),
                 .linkedFramework("WebKit"),
                 .linkedFramework("Photos"),
+                .linkedFramework("UserNotifications"),
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",
