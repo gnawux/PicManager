@@ -2,7 +2,7 @@ use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::error::{AppError, Result};
 
-use super::{EnqueueResult, Job, NewJob};
+use super::{EnqueueResult, Job, JobFailure, JobLease, NewJob};
 
 const JOB_COLUMNS: &str = "id, kind, payload_version, payload_json, status, priority, \
     progress_total, progress_completed, progress_stage, cancel_requested_at, max_attempts, \
@@ -116,6 +116,268 @@ pub async fn request_cancel(pool: &SqlitePool, job_id: i64) -> Result<Job> {
     get(pool, job_id).await
 }
 
+pub async fn lease_next(
+    pool: &SqlitePool,
+    worker_id: &str,
+    lease_seconds: u64,
+) -> Result<Option<JobLease>> {
+    if worker_id.is_empty() || lease_seconds == 0 {
+        return Err(AppError::Metadata(
+            "worker ID and positive lease duration are required".into(),
+        ));
+    }
+    let mut tx = pool.begin().await?;
+    let candidate: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM application_jobs \
+         WHERE status IN ('queued', 'retry_wait') \
+           AND cancel_requested_at IS NULL \
+           AND (next_run_at IS NULL OR next_run_at <= datetime('now')) \
+         ORDER BY priority DESC, id ASC LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(job_id) = candidate else {
+        tx.commit().await?;
+        return Ok(None);
+    };
+    let lease_modifier = format!("+{lease_seconds} seconds");
+    let result = sqlx::query(
+        "UPDATE application_jobs SET status = 'running', lease_owner = ?, \
+             lease_expires_at = datetime('now', ?), attempt_count = attempt_count + 1, \
+             started_at = COALESCE(started_at, datetime('now')), next_run_at = NULL, \
+             error_code = NULL, error_message = NULL, error_details_json = NULL, \
+             updated_at = datetime('now') \
+         WHERE id = ? AND status IN ('queued', 'retry_wait') AND cancel_requested_at IS NULL",
+    )
+    .bind(worker_id)
+    .bind(&lease_modifier)
+    .bind(job_id)
+    .execute(&mut *tx)
+    .await?;
+    if result.rows_affected() == 0 {
+        tx.rollback().await?;
+        return Ok(None);
+    }
+    let attempt_number: i64 =
+        sqlx::query_scalar("SELECT attempt_count FROM application_jobs WHERE id = ?")
+            .bind(job_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let attempt_id: i64 = sqlx::query_scalar(
+        "INSERT INTO application_job_attempts (job_id, attempt_number, worker_id) \
+         VALUES (?, ?, ?) RETURNING id",
+    )
+    .bind(job_id)
+    .bind(attempt_number)
+    .bind(worker_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Some(JobLease {
+        job: get(pool, job_id).await?,
+        attempt_id,
+        worker_id: worker_id.to_owned(),
+    }))
+}
+
+pub async fn renew_lease(pool: &SqlitePool, lease: &JobLease, lease_seconds: u64) -> Result<()> {
+    let modifier = format!("+{lease_seconds} seconds");
+    let result = sqlx::query(
+        "UPDATE application_jobs SET lease_expires_at = datetime('now', ?), \
+             updated_at = datetime('now') \
+         WHERE id = ? AND status = 'running' AND lease_owner = ?",
+    )
+    .bind(modifier)
+    .bind(lease.job.id)
+    .bind(&lease.worker_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::Metadata(format!(
+            "job {} lease is no longer owned by {}",
+            lease.job.id, lease.worker_id
+        )));
+    }
+    Ok(())
+}
+
+pub async fn update_progress(
+    pool: &SqlitePool,
+    lease: &JobLease,
+    completed: i64,
+    total: Option<i64>,
+    stage: Option<&str>,
+) -> Result<()> {
+    if completed < 0 || total.is_some_and(|total| total < completed) {
+        return Err(AppError::Metadata("invalid job progress".into()));
+    }
+    let result = sqlx::query(
+        "UPDATE application_jobs SET progress_completed = ?, progress_total = ?, \
+             progress_stage = ?, updated_at = datetime('now') \
+         WHERE id = ? AND status = 'running' AND lease_owner = ?",
+    )
+    .bind(completed)
+    .bind(total)
+    .bind(stage)
+    .bind(lease.job.id)
+    .bind(&lease.worker_id)
+    .execute(pool)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(AppError::Metadata("job lease was lost".into()));
+    }
+    Ok(())
+}
+
+pub async fn cancellation_requested(pool: &SqlitePool, lease: &JobLease) -> Result<bool> {
+    let requested: bool = sqlx::query_scalar(
+        "SELECT cancel_requested_at IS NOT NULL FROM application_jobs \
+         WHERE id = ? AND status = 'running' AND lease_owner = ?",
+    )
+    .bind(lease.job.id)
+    .bind(&lease.worker_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| AppError::Metadata("job lease was lost".into()))?;
+    Ok(requested)
+}
+
+pub async fn complete(pool: &SqlitePool, lease: &JobLease) -> Result<Job> {
+    finish(pool, lease, "succeeded", None, 0).await
+}
+
+pub async fn cancel_leased(pool: &SqlitePool, lease: &JobLease) -> Result<Job> {
+    finish(pool, lease, "cancelled", None, 0).await
+}
+
+pub async fn fail(
+    pool: &SqlitePool,
+    lease: &JobLease,
+    failure: &JobFailure,
+    retry_delay_seconds: u64,
+) -> Result<Job> {
+    finish(pool, lease, "failed", Some(failure), retry_delay_seconds).await
+}
+
+async fn finish(
+    pool: &SqlitePool,
+    lease: &JobLease,
+    terminal_status: &str,
+    failure: Option<&JobFailure>,
+    retry_delay_seconds: u64,
+) -> Result<Job> {
+    let mut tx = pool.begin().await?;
+    let current: (i64, i64, Option<String>) = sqlx::query_as(
+        "SELECT attempt_count, max_attempts, cancel_requested_at FROM application_jobs \
+         WHERE id = ? AND status = 'running' AND lease_owner = ?",
+    )
+    .bind(lease.job.id)
+    .bind(&lease.worker_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| AppError::Metadata("job lease was lost".into()))?;
+
+    let cancelled = terminal_status == "cancelled" || current.2.is_some();
+    let should_retry =
+        failure.is_some_and(|failure| failure.retryable) && current.0 < current.1 && !cancelled;
+    let job_status = if cancelled {
+        "cancelled"
+    } else if should_retry {
+        "retry_wait"
+    } else {
+        terminal_status
+    };
+    let attempt_status = if cancelled {
+        "cancelled"
+    } else if failure.is_some() {
+        "failed"
+    } else {
+        "succeeded"
+    };
+    let details_json = failure
+        .and_then(|failure| failure.details.as_ref())
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|error| AppError::Metadata(error.to_string()))?;
+    let retry_modifier = format!("+{retry_delay_seconds} seconds");
+
+    sqlx::query(
+        "UPDATE application_job_attempts SET status = ?, error_code = ?, \
+             error_message = ?, error_details_json = ?, finished_at = datetime('now') \
+         WHERE id = ? AND status = 'running'",
+    )
+    .bind(attempt_status)
+    .bind(failure.map(|failure| failure.code.as_str()))
+    .bind(failure.map(|failure| failure.message.as_str()))
+    .bind(&details_json)
+    .bind(lease.attempt_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE application_jobs SET status = ?, lease_owner = NULL, lease_expires_at = NULL, \
+             next_run_at = CASE WHEN ? THEN datetime('now', ?) ELSE NULL END, \
+             error_code = ?, error_message = ?, error_details_json = ?, \
+             finished_at = CASE WHEN ? THEN NULL ELSE datetime('now') END, \
+             updated_at = datetime('now') WHERE id = ?",
+    )
+    .bind(job_status)
+    .bind(should_retry)
+    .bind(retry_modifier)
+    .bind(failure.map(|failure| failure.code.as_str()))
+    .bind(failure.map(|failure| failure.message.as_str()))
+    .bind(details_json)
+    .bind(should_retry)
+    .bind(lease.job.id)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    get(pool, lease.job.id).await
+}
+
+pub async fn recover_expired(pool: &SqlitePool) -> Result<u64> {
+    let mut tx = pool.begin().await?;
+    let expired: Vec<(i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, attempt_count, max_attempts, cancel_requested_at \
+         FROM application_jobs WHERE status = 'running' \
+           AND lease_expires_at <= datetime('now')",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (job_id, attempt_count, max_attempts, cancel_requested_at) in &expired {
+        sqlx::query(
+            "UPDATE application_job_attempts SET status = 'interrupted', \
+                 error_code = 'lease_expired', error_message = 'Worker lease expired', \
+                 finished_at = datetime('now') \
+             WHERE job_id = ? AND status = 'running'",
+        )
+        .bind(job_id)
+        .execute(&mut *tx)
+        .await?;
+        let status = if cancel_requested_at.is_some() {
+            "cancelled"
+        } else if attempt_count < max_attempts {
+            "queued"
+        } else {
+            "failed"
+        };
+        sqlx::query(
+            "UPDATE application_jobs SET status = ?, lease_owner = NULL, \
+                 lease_expires_at = NULL, error_code = 'lease_expired', \
+                 error_message = 'Worker lease expired', \
+                 finished_at = CASE WHEN ? IN ('failed', 'cancelled') \
+                                    THEN datetime('now') ELSE NULL END, \
+                 updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(status)
+        .bind(status)
+        .bind(job_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(expired.len() as u64)
+}
+
 fn validate(job: &NewJob) -> Result<()> {
     if job.kind.trim().is_empty() {
         return Err(AppError::Metadata("job kind cannot be empty".into()));
@@ -213,5 +475,88 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, AppError::Metadata(_)));
+    }
+
+    #[tokio::test]
+    async fn lease_progress_and_completion_record_one_attempt() {
+        let pool = pool().await;
+        enqueue(&pool, &NewJob::new("thumbnail", serde_json::json!({})))
+            .await
+            .unwrap();
+        let lease = lease_next(&pool, "worker-a", 60).await.unwrap().unwrap();
+        assert_eq!(lease.job.status, "running");
+        assert_eq!(lease.job.attempt_count, 1);
+        update_progress(&pool, &lease, 2, Some(5), Some("decoding"))
+            .await
+            .unwrap();
+        let completed = complete(&pool, &lease).await.unwrap();
+        assert_eq!(completed.status, "succeeded");
+        assert_eq!(completed.progress_completed, 2);
+        let attempt: (String, Option<String>) =
+            sqlx::query_as("SELECT status, finished_at FROM application_job_attempts WHERE id = ?")
+                .bind(lease.attempt_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempt.0, "succeeded");
+        assert!(attempt.1.is_some());
+    }
+
+    #[tokio::test]
+    async fn retryable_failure_requeues_until_attempt_budget_is_exhausted() {
+        let pool = pool().await;
+        let mut input = NewJob::new("geocode", serde_json::json!({}));
+        input.max_attempts = 2;
+        enqueue(&pool, &input).await.unwrap();
+        let first = lease_next(&pool, "worker-a", 60).await.unwrap().unwrap();
+        let waiting = fail(
+            &pool,
+            &first,
+            &JobFailure::retryable("offline", "network unavailable"),
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(waiting.status, "retry_wait");
+
+        let second = lease_next(&pool, "worker-b", 60).await.unwrap().unwrap();
+        let failed = fail(
+            &pool,
+            &second,
+            &JobFailure::retryable("offline", "network unavailable"),
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(failed.status, "failed");
+        assert_eq!(failed.attempt_count, 2);
+    }
+
+    #[tokio::test]
+    async fn expired_lease_is_interrupted_and_recoverable() {
+        let pool = pool().await;
+        let job = enqueue(&pool, &NewJob::new("face_analysis", serde_json::json!({})))
+            .await
+            .unwrap()
+            .job;
+        let lease = lease_next(&pool, "dead-worker", 60).await.unwrap().unwrap();
+        sqlx::query(
+            "UPDATE application_jobs SET lease_expires_at = datetime('now', '-1 second') \
+             WHERE id = ?",
+        )
+        .bind(job.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(recover_expired(&pool).await.unwrap(), 1);
+        let recovered = get(&pool, job.id).await.unwrap();
+        assert_eq!(recovered.status, "queued");
+        let attempt_status: String =
+            sqlx::query_scalar("SELECT status FROM application_job_attempts WHERE id = ?")
+                .bind(lease.attempt_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempt_status, "interrupted");
     }
 }

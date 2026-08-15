@@ -90,3 +90,38 @@ pub struct EnqueueResult {
     pub job: Job,
     pub created: bool,
 }
+
+#[derive(Debug, Clone)]
+pub struct JobLease {
+    pub job: Job,
+    pub attempt_id: i64,
+    pub worker_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct JobFailure {
+    pub code: String,
+    pub message: String,
+    pub details: Option<Value>,
+    pub retryable: bool,
+}
+
+impl JobFailure {
+    pub fn retryable(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            details: None,
+            retryable: true,
+        }
+    }
+
+    pub fn terminal(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            message: message.into(),
+            details: None,
+            retryable: false,
+        }
+    }
+}
