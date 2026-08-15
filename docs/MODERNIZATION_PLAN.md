@@ -407,6 +407,8 @@ architectural work and macOS integration are complete.
 
 ### M13 - Phase 4 API and operational hardening
 
+Status: complete. Release-gate evidence is recorded in `PHASE4_RELEASE_GATE.md`.
+
 - M13.1: apply consistent active/deleted/source lifecycle filtering across APIs.
 - M13.2: version service-facing health, jobs and diagnostics contracts for macOS use.
 - M13.3: add worker metrics, structured logs and end-to-end interruption tests.
