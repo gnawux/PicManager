@@ -76,6 +76,40 @@ public struct InventoryBoundaryRecord: Encodable, Sendable, Equatable {
     }
 }
 
+public struct InventoryChangeBoundaryRecord: Encodable, Sendable, Equatable {
+    public let recordType: String
+    public let schemaVersion = 1
+    public let mode = "incremental"
+    public let checkpointBefore: Data?
+    public let checkpointAfter: Data?
+    public let assetCount: Int?
+    public let removedCount: Int?
+
+    public init(
+        recordType: String,
+        checkpointBefore: Data?,
+        checkpointAfter: Data?,
+        assetCount: Int? = nil,
+        removedCount: Int? = nil
+    ) {
+        self.recordType = recordType
+        self.checkpointBefore = checkpointBefore
+        self.checkpointAfter = checkpointAfter
+        self.assetCount = assetCount
+        self.removedCount = removedCount
+    }
+}
+
+public struct InventoryRemovalRecord: Encodable, Sendable, Equatable {
+    public let recordType = "removed_asset"
+    public let schemaVersion = 1
+    public let localIdentifier: String
+
+    public init(localIdentifier: String) {
+        self.localIdentifier = localIdentifier
+    }
+}
+
 public func inventoryEncoder() -> JSONEncoder {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601

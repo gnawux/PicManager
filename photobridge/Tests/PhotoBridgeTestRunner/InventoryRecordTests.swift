@@ -44,5 +44,30 @@ func runInventoryRecordTests() {
             try expect(json["checkpoint"] as? String, equals: "AQID")
             try expect(json["asset_count"] as? Int, equals: 42)
         }
+
+        test("incremental records preserve before and after checkpoint roles") {
+            let boundary = InventoryChangeBoundaryRecord(
+                recordType: "changes_end",
+                checkpointBefore: Data([1]),
+                checkpointAfter: Data([2]),
+                assetCount: 3,
+                removedCount: 1
+            )
+            let data = try inventoryEncoder().encode(boundary)
+            let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            try expect(json["mode"] as? String, equals: "incremental")
+            try expect(json["checkpoint_before"] as? String, equals: "AQ==")
+            try expect(json["checkpoint_after"] as? String, equals: "Ag==")
+            try expect(json["removed_count"] as? Int, equals: 1)
+        }
+
+        test("removed asset record retains provider identity") {
+            let data = try inventoryEncoder().encode(
+                InventoryRemovalRecord(localIdentifier: "UUID/L0/001")
+            )
+            let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+            try expect(json["record_type"] as? String, equals: "removed_asset")
+            try expect(json["local_identifier"] as? String, equals: "UUID/L0/001")
+        }
     }
 }
