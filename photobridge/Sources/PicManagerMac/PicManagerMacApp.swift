@@ -52,6 +52,7 @@ private struct MenuBarContent: View {
             }
         }
         Button("Refresh Status") { Task { await model.refreshDashboard() } }
+        Button("Export Diagnostics…") { Task { await model.exportDiagnostics() } }
         SettingsLink { Text("Settings…") }
         Divider()
         Button("Quit PicManager") { NSApplication.shared.terminate(nil) }
@@ -308,6 +309,7 @@ private struct ConfigurationView: View {
             if let error = model.lastError {
                 Text(error).foregroundStyle(.red)
             }
+            Button("Export Diagnostics…") { Task { await model.exportDiagnostics() } }
             Button("Save") { model.saveConfiguration() }
         }
     }

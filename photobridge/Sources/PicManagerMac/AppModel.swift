@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Photos
+import UniformTypeIdentifiers
 import PhotoBridgeLib
 
 @MainActor
@@ -205,6 +206,28 @@ final class AppModel: ObservableObject {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    func exportDiagnostics() async {
+        let panel = NSSavePanel()
+        panel.title = "Export PicManager Diagnostics"
+        panel.nameFieldStringValue = "PicManager-Diagnostics.zip"
+        panel.allowedContentTypes = [.zip]
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            let logURL = MacAppConfiguration.applicationSupportURL
+                .deletingLastPathComponent().appendingPathComponent("Logs/service.log")
+            let log = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+            let files = try makeDiagnosticExport(
+                configuration: configuration,
+                dashboard: dashboard,
+                serviceLog: log
+            )
+            try await Task.detached { try writeDiagnosticArchive(files: files, to: destination) }.value
+            lastError = nil
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     func synchronizeAppleInventory() async {
