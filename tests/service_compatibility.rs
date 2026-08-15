@@ -99,3 +99,34 @@ async fn request(app: axum::Router, uri: &str) -> Value {
         .unwrap();
     serde_json::from_slice(&body).unwrap()
 }
+
+#[tokio::test]
+async fn api_responses_return_a_valid_request_correlation_id() {
+    let app = app().await;
+    let generated = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/import/status")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(generated.headers().get("x-request-id").is_some());
+
+    let supplied = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/import/status")
+                .header("x-request-id", "mac-app:health_42")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        supplied.headers().get("x-request-id").unwrap(),
+        "mac-app:health_42"
+    );
+}

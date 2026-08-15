@@ -1,11 +1,11 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
 use serde::{Deserialize, Serialize};
-use crate::application::{CallerKind, PhotoMetadataUpdate, ServiceErrorCode};
+use crate::application::{PhotoMetadataUpdate, RequestContext, ServiceErrorCode};
 use crate::web::AppState;
 use crate::orientation::{apply_user_transform, DisplayTransform, OrientationMode};
 
@@ -178,10 +178,10 @@ pub struct BatchUpdateResponse {
 
 pub async fn patch_photo(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Path(id): Path<i64>,
     Json(body): Json<PhotoMetadataUpdate>,
 ) -> Result<StatusCode, StatusCode> {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     match state.application.metadata().update_one(&context, id, body).await {
         Ok(_) => Ok(StatusCode::OK),
         Err(error) if error.code == ServiceErrorCode::NotFound => Err(StatusCode::NOT_FOUND),
@@ -192,6 +192,7 @@ pub async fn patch_photo(
 
 pub async fn batch_update_photos(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Json(body): Json<BatchUpdateBody>,
 ) -> Result<Json<BatchUpdateResponse>, StatusCode> {
     let update = PhotoMetadataUpdate {
@@ -201,7 +202,6 @@ pub async fn batch_update_photos(
         flip_h_toggle: body.flip_h_toggle,
         flip_v_toggle: body.flip_v_toggle,
     };
-    let context = state.application.request_context(CallerKind::LocalWeb);
     let result = state
         .application
         .metadata()

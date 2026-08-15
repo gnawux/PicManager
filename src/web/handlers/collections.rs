@@ -1,10 +1,10 @@
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
     http::StatusCode,
     Json,
 };
 use serde::{Deserialize, Serialize};
-use crate::application::{CallerKind, ServiceErrorCode};
+use crate::application::{RequestContext, ServiceErrorCode};
 use crate::web::AppState;
 
 #[derive(Debug, Serialize)]
@@ -59,9 +59,9 @@ pub async fn list_collections(
 
 pub async fn create_collection(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Json(body): Json<CollectionName>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     let collection = state.application.collections().create(&context, &body.name).await
         .map_err(collection_status)?;
     Ok((StatusCode::CREATED, Json(serde_json::json!({
@@ -71,10 +71,10 @@ pub async fn create_collection(
 
 pub async fn rename_collection(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Path(id): Path<i64>,
     Json(body): Json<CollectionName>,
 ) -> StatusCode {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     match state.application.collections().rename(&context, id, &body.name).await {
         Ok(_) => StatusCode::OK,
         Err(error) => collection_status(error),
@@ -83,9 +83,9 @@ pub async fn rename_collection(
 
 pub async fn delete_collection(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Path(id): Path<i64>,
 ) -> StatusCode {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     match state.application.collections().delete(&context, id).await {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(error) => collection_status(error),
@@ -94,10 +94,10 @@ pub async fn delete_collection(
 
 pub async fn add_photos(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Path(id): Path<i64>,
     Json(body): Json<PhotoIds>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     let change = state.application.collections().add_photos(&context, id, &body.photo_ids)
         .await.map_err(collection_status)?;
     Ok(Json(serde_json::json!({ "added": change.changed })))
@@ -105,10 +105,10 @@ pub async fn add_photos(
 
 pub async fn remove_photos(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Path(id): Path<i64>,
     Json(body): Json<PhotoIds>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     let change = state.application.collections().remove_photos(&context, id, &body.photo_ids)
         .await.map_err(collection_status)?;
     Ok(Json(serde_json::json!({ "removed": change.changed })))

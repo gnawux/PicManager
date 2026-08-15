@@ -1,8 +1,9 @@
 pub mod embed;
 pub mod handlers;
+pub mod request_context;
 
 use axum::{
-    Router,
+    Router, middleware,
     routing::{get, patch, post},
 };
 use sqlx::SqlitePool;
@@ -104,6 +105,10 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/activities/{id}/photos", get(get_activity_photos))
         .route("/api/activities/{id}/trim", post(trim_activity))
         .route("/api/activities/merge", post(merge_activities))
+        .layer(middleware::from_fn_with_state(
+            state.application.clone(),
+            request_context::attach,
+        ))
         .with_state(state)
         .fallback(static_handler)
 }

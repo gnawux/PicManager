@@ -1,9 +1,9 @@
-use crate::application::{CallerKind, ImportCommand};
+use crate::application::{ImportCommand, RequestContext};
 use crate::importer::SharedImportProgress;
 use crate::web::AppState;
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Extension, Query, State},
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
@@ -30,6 +30,7 @@ pub struct ImportRequest {
 
 pub async fn start_import(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Json(req): Json<ImportRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let mut status = state.import_status.lock().unwrap();
@@ -44,7 +45,6 @@ pub async fn start_import(
     drop(status);
 
     let application = state.application.clone();
-    let context = application.request_context(CallerKind::LocalWeb);
     let import_status = state.import_status.clone();
     let command = ImportCommand::directory(&req.dir, req.copy);
 

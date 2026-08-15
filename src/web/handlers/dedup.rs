@@ -1,19 +1,19 @@
 use crate::{
-    application::{CallerKind, ServiceErrorCode},
+    application::{RequestContext, ServiceErrorCode},
     dedup,
     web::AppState,
 };
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Extension, Path, State},
     http::StatusCode,
 };
 use serde::Deserialize;
 
 pub async fn list_dedup_groups(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
 ) -> Result<Json<Vec<dedup::DedupGroup>>, StatusCode> {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     state
         .application
         .dedup()
@@ -30,10 +30,10 @@ pub struct ResolveRequest {
 
 pub async fn resolve_group(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Path(group_id): Path<i64>,
     Json(req): Json<ResolveRequest>,
 ) -> StatusCode {
-    let context = state.application.request_context(CallerKind::LocalWeb);
     match state
         .application
         .dedup()

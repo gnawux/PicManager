@@ -48,6 +48,11 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
+    pub fn with_request_id(mut self, request_id: impl Into<Arc<str>>) -> Self {
+        self.request_id = request_id.into();
+        self
+    }
+
     pub fn with_idempotency_key(mut self, key: impl Into<Arc<str>>) -> Self {
         self.idempotency_key = Some(key.into());
         self
