@@ -59,14 +59,20 @@ pub async fn reconcile(
     if repair {
         let master = sqlx::query(
             "UPDATE assets SET master_variant_id = NULL \
-             WHERE master_variant_id IN (SELECT v.id FROM asset_variants v WHERE v.asset_id != assets.id)",
+             WHERE master_variant_id IS NOT NULL AND NOT EXISTS (\
+                 SELECT 1 FROM asset_variants v \
+                 WHERE v.id = assets.master_variant_id AND v.asset_id = assets.id\
+             )",
         )
         .execute(pool)
         .await?
         .rows_affected();
         let display = sqlx::query(
             "UPDATE assets SET display_variant_id = NULL \
-             WHERE display_variant_id IN (SELECT v.id FROM asset_variants v WHERE v.asset_id != assets.id)",
+             WHERE display_variant_id IS NOT NULL AND NOT EXISTS (\
+                 SELECT 1 FROM asset_variants v \
+                 WHERE v.id = assets.display_variant_id AND v.asset_id = assets.id\
+             )",
         )
         .execute(pool)
         .await?
@@ -228,6 +234,7 @@ fn cache_identity(name: &str) -> Option<(i64, i64)> {
 mod tests {
     use super::*;
     use sqlx::sqlite::SqlitePoolOptions;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn repair_recovers_intents_and_resets_missing_derived_cache() {
@@ -285,5 +292,63 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(status, "pending");
+    }
+
+    #[tokio::test]
+    async fn repair_invalid_variant_pointers_scales_with_large_catalogs() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "WITH RECURSIVE sequence(id) AS (\
+                 SELECT 1 UNION ALL SELECT id + 1 FROM sequence WHERE id < 50000\
+             ) INSERT INTO assets (id) SELECT id FROM sequence",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "WITH RECURSIVE sequence(id) AS (\
+                 SELECT 1 UNION ALL SELECT id + 1 FROM sequence WHERE id < 50000\
+             ) INSERT INTO asset_variants (id, asset_id, role, is_primary) \
+             SELECT id, id, 'imported', 1 FROM sequence",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE assets SET master_variant_id = id, display_variant_id = id")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE assets SET master_variant_id = 2, display_variant_id = 2 WHERE id = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut config = Config::default();
+        config.thumb_cache_dir = directory.path().join("cache");
+        let report = tokio::time::timeout(Duration::from_secs(2), reconcile(&pool, &config, true))
+            .await
+            .expect("indexed pointer repair should finish within the startup budget")
+            .unwrap();
+
+        assert_eq!(report.repaired_records, 2);
+        let invalid: (Option<i64>, Option<i64>) =
+            sqlx::query_as("SELECT master_variant_id, display_variant_id FROM assets WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(invalid, (None, None));
+        let valid: (Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT master_variant_id, display_variant_id FROM assets WHERE id = 50000",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(valid, (Some(50000), Some(50000)));
     }
 }
