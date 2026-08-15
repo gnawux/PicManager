@@ -16,6 +16,9 @@ presentation mode.
   library is rejected.
 - Embedded mode uses WKWebView. External links open in the system browser. Browser mode
   opens the same loopback URL directly.
+- After launching the bundled service, the app waits up to 30 seconds for the complete
+  service contract and selected-library fingerprint. Transient connection failures are
+  shown as **Preparing library**; incompatible services and timeouts remain actionable.
 - Health is polled every five seconds. Repeated failures trigger one native notification
   until recovery.
 

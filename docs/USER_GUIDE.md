@@ -11,6 +11,9 @@ inside the Mac app.
 3. Grant Full Photos access. PicManager reads the System Photo Library selected by
    Photos.app and never switches or moves it.
 4. Open the library in the embedded window or choose system-browser mode in Settings.
+   The Mac app starts its bundled service automatically; do not run `picmanager serve`
+   separately. While the service prepares the catalog, the window shows a bounded
+   **Preparing library** state instead of loading the Web interface prematurely.
 5. Choose **Refresh Apple Photos Inventory** to compare metadata. This operation does
    not download or replace originals.
 6. Use the Apple source view to inspect synchronized, pending, excluded, missing, and
@@ -18,6 +21,10 @@ inside the Mac app.
 
 The first inventory preserves PhotoKit local identifiers separately from original phone
 filenames. UUID-like provider identities are never used as user-facing filenames.
+
+Large libraries perform only safety-critical recovery before the local service becomes
+available. Media-presence and derived-cache checks continue as a low-priority
+**Library reconciliation** task visible in the task center.
 
 ## Existing files and catalogs
 

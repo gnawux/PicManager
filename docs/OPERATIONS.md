@@ -9,15 +9,18 @@ capabilities, service version, and the one-way library fingerprint.
 
 ## Durable work
 
-Imports, thumbnails, analysis, geocoding, deduplication, derived-media maintenance, and
-Apple synchronization use persisted jobs. Application jobs use negative public task IDs;
-historical sync jobs use positive IDs. Leases recover after interruption, retries retain
-attempt history, and cancellation is explicit.
+Imports, thumbnails, analysis, geocoding, deduplication, derived-media maintenance,
+library reconciliation, and Apple synchronization use persisted jobs. Application jobs
+use negative public task IDs; historical sync jobs use positive IDs. Leases recover after
+interruption, retries retain attempt history, and cancellation is explicit. Library
+reconciliation uses the lowest priority so interactive work runs first.
 
 ## Health and recovery
 
-SQLite uses WAL, a busy timeout, and a bounded pool. Startup recovers expired leases and
-filesystem intents, then reconciles derived state. Check:
+SQLite uses WAL, a busy timeout, and a bounded pool. Blocking startup recovery is limited
+to expired leases, incomplete filesystem intents, and catalog-pointer safety. Full media
+presence and derived-cache reconciliation runs as durable background work after the
+listener is available. Check:
 
 ```bash
 curl http://127.0.0.1:8080/api/v1/health
