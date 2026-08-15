@@ -1,5 +1,10 @@
 # PicManager Modernization Plan
 
+Implementation status: Phase 0–3 and the M8 release-candidate hardening are complete.
+The additive catalog and migration safety work, reliable Apple Photos inventory and
+synchronization foundations, rendition fidelity model, and modern web application have
+passed the documented release gates. Phases 4–6 remain the forward roadmap.
+
 ## 1. Product direction
 
 PicManager will evolve from a feature-rich local engineering tool into a reliable,
@@ -354,6 +359,8 @@ one signed-off commit with an English subject and detailed English body.
 - M7.5: deduplication and unified task center.
 
 ### M8 - Phase 0-3 hardening and release candidate
+
+Status: complete.
 
 - M8.1: accessibility, responsive and failure-state pass.
 - M8.2: 100,000-item performance fixture and budgets.

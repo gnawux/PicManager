@@ -23,8 +23,11 @@ A family photo management tool. Import, de-duplicate, organise by time / locatio
 - **Auto albums** — by month, by camera model, by GPS city (reverse-geocoded via OSM Nominatim)
 - **Face detection & clustering** — ultraface-slim-320 + ArcFace 512-D embeddings + DBSCAN people grouping; all local, no API key
 - **Animal detection** — YOLOv8-nano, 10 COCO species, runs on import
-- **Web UI** — photo grid, album sidebar, people manager, map view, dedup review, curated collections
-- **PhotoBridge** — incremental iCloud sync via `PHPersistentChangeToken`; auto-sets file timestamps from `PHAsset.creationDate`; auto-corrects HEIC EXIF orientation to match Photos.app display (requires `exiftool`)
+- **Modern Web UI** — high-density justified timeline, cursor loading, immersive viewer, albums, people, map, activities, Apple inventory and unified task/dedup review
+- **Reliable Apple Photos inventory** — preserves PhotoKit identity and original filenames, exposes unsynced/failed/excluded/missing items, and uses durable retryable work
+- **Rendition fidelity** — immutable originals and separate current-edited appearances, with centralized HEIC orientation handling and revision-aware derived media
+- **Safe catalog upgrades** — additive asset/source/variant records, dry-run and integrity reports, idempotent legacy backfill and migration audit history
+- **PhotoBridge** — metadata-only inventory and incremental PhotoKit changes, plus explicit original/current rendition packages
 
 ---
 
@@ -57,19 +60,19 @@ codesign --force --sign - \
 # 1. Import a folder of photos (moves files into the library)
 picmanager import ~/Downloads/photos/
 
-# 2. Start the Web UI
+# 2. Start the modern Web UI
 picmanager serve               # → http://127.0.0.1:8080
 
 # 3. Download AI models (face + animal detection)
 picmanager models fetch
 
-# 4. Import from iCloud (PhotoBridge)
-photobridge setup              # first-time guide
-photobridge export             # full export + auto-import if picmanager is in PATH
-photobridge sync               # incremental sync on subsequent runs
-# Fix orientation for already-exported HEIC files
-photobridge fix-orientations --dir ~/staging/ --dry-run  # report mismatches
-photobridge fix-orientations --dir ~/staging/            # apply fixes
+# 4. Inventory Apple Photos without downloading the full library
+photobridge inventory --output /tmp/apple-inventory.ndjson
+picmanager apple inventory /tmp/apple-inventory.ndjson --dry-run --json
+picmanager apple inventory /tmp/apple-inventory.ndjson
 ```
 
-See **[docs/MANUAL.md](docs/MANUAL.md)** for full CLI reference, REST API, configuration, and PhotoBridge options.
+The modern interface is served at `/`; the previous interface remains available at
+`/legacy/` during the transition. Before upgrading an existing library, follow the
+**[upgrade guide](docs/UPGRADE_GUIDE.md)**. See **[docs/MANUAL.md](docs/MANUAL.md)**
+for the full CLI reference, REST API, configuration, and PhotoBridge options.
