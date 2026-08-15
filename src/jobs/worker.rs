@@ -7,7 +7,7 @@ use crate::error::Result;
 
 use super::{
     Job, JobFailure, JobLease, cancel_leased, cancellation_requested, complete, fail, lease_next,
-    recover_expired, renew_lease, update_progress,
+    recover_expired, renew_lease, set_result, update_progress,
 };
 
 pub type HandlerFuture = Pin<Box<dyn Future<Output = std::result::Result<(), JobFailure>> + Send>>;
@@ -75,6 +75,10 @@ impl JobControl {
 
     pub async fn cancellation_requested(&self) -> Result<bool> {
         cancellation_requested(&self.pool, &self.lease).await
+    }
+
+    pub async fn set_result(&self, result: &serde_json::Value) -> Result<()> {
+        set_result(&self.pool, &self.lease, result).await
     }
 
     pub fn job_id(&self) -> i64 {

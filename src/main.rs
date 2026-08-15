@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, application::{Application, CallerKind, ImportCommand}, apple, config::Config, face, metadata, migration, storage, importer};
+use picmanager::{activities, album, application::{Application, CallerKind, ImportCommand}, apple, config::Config, face, metadata, migration, storage, importer, jobs};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -480,37 +480,51 @@ async fn import_with_progress(
 ) -> anyhow::Result<()> {
     println!("从 {} 导入照片，扫描中…", dir.display());
 
-    if dry_run {
-        let progress = importer::SharedImportProgress::default();
-        let context = application.request_context(CallerKind::Cli);
-        let result = application.imports().execute(
-            &context,
-            ImportCommand {
-                source_dir: dir.to_path_buf(), copy_only: copy, batch_size,
-                log_path: log_path.map(|path| path.to_path_buf()), dry_run: true,
-            },
-            progress,
-        ).await?;
-        println!(
-            "[dry-run] 目录 {} 个文件，将处理 {} 个（本批），剩余 {} 个待处理",
-            result.total_files,
-            result.summary.total,
-            result.remaining,
-        );
-        return Ok(());
-    }
-
     let progress = importer::SharedImportProgress::default();
-    let application2 = application.clone();
     let context = application.request_context(CallerKind::Cli);
     let progress2 = progress.clone();
     let command = ImportCommand {
         source_dir: dir.to_path_buf(), copy_only: copy, batch_size,
-        log_path: log_path.map(|path| path.to_path_buf()), dry_run: false,
+        log_path: log_path.map(|path| path.to_path_buf()), dry_run,
     };
-
+    let queued = application.imports().enqueue(&context, command).await?;
+    let pool = application.pool().clone();
+    let worker = jobs::WorkerRuntime::new(
+        pool.clone(),
+        jobs::handlers::registry(application.clone()),
+        jobs::WorkerConfig::default(),
+        "cli-worker",
+    ).start();
+    let job_id = queued.job.id;
     let handle = tokio::spawn(async move {
-        application2.imports().execute(&context, command, progress2).await
+        let result = loop {
+            let job = jobs::get(&pool, job_id).await?;
+            progress2.total.store(job.progress_total.unwrap_or(0).max(0) as usize, Relaxed);
+            progress2.processed.store(job.progress_completed.max(0) as usize, Relaxed);
+            match job.status.as_str() {
+                "succeeded" => {
+                    let value = job.result()?.ok_or_else(|| anyhow::anyhow!("导入任务缺少结果摘要"))?;
+                    let summary: jobs::handlers::ImportJobResult = serde_json::from_value(value)?;
+                    break Ok(importer::BatchResult {
+                        summary: importer::ImportSummary {
+                            total: summary.total,
+                            imported: summary.imported,
+                            skipped: summary.skipped,
+                            errors: summary.errors,
+                        },
+                        total_files: summary.total_files,
+                        remaining: summary.remaining,
+                    });
+                }
+                "failed" => break Err(anyhow::anyhow!(job.error_message.unwrap_or_else(|| "导入任务失败".into()))),
+                "cancelled" => break Err(anyhow::anyhow!("导入任务已取消")),
+                _ => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
+            }
+        };
+        if !worker.shutdown().await {
+            tracing::warn!("CLI import worker did not stop within the shutdown timeout");
+        }
+        result
     });
 
     let start = std::time::Instant::now();
@@ -580,6 +594,15 @@ async fn import_with_progress(
     }
 
     let batch_result = handle.await??;
+    if dry_run {
+        println!(
+            "[dry-run] 目录 {} 个文件，将处理 {} 个（本批），剩余 {} 个待处理",
+            batch_result.total_files,
+            batch_result.summary.total,
+            batch_result.remaining,
+        );
+        return Ok(());
+    }
     let elapsed = start.elapsed();
     let remaining_note = if batch_result.remaining > 0 {
         format!("（剩余 {} 张未处理）", batch_result.remaining)

@@ -7,7 +7,7 @@ use super::{EnqueueResult, Job, JobFailure, JobLease, NewJob};
 const JOB_COLUMNS: &str = "id, kind, payload_version, payload_json, status, priority, \
     progress_total, progress_completed, progress_stage, cancel_requested_at, max_attempts, \
     attempt_count, next_run_at, lease_owner, lease_expires_at, error_code, error_message, \
-    error_details_json, correlation_id, idempotency_key, created_at, started_at, finished_at, \
+    error_details_json, result_json, correlation_id, idempotency_key, created_at, started_at, finished_at, \
     updated_at";
 
 pub async fn enqueue(pool: &SqlitePool, new_job: &NewJob) -> Result<EnqueueResult> {
@@ -240,6 +240,28 @@ pub async fn cancellation_requested(pool: &SqlitePool, lease: &JobLease) -> Resu
     .await?
     .ok_or_else(|| AppError::Metadata("job lease was lost".into()))?;
     Ok(requested)
+}
+
+pub async fn set_result(
+    pool: &SqlitePool,
+    lease: &JobLease,
+    result: &serde_json::Value,
+) -> Result<()> {
+    let result_json = serde_json::to_string(result)
+        .map_err(|error| AppError::Metadata(error.to_string()))?;
+    let updated = sqlx::query(
+        "UPDATE application_jobs SET result_json = ?, updated_at = datetime('now') \
+         WHERE id = ? AND status = 'running' AND lease_owner = ?",
+    )
+    .bind(result_json)
+    .bind(lease.job.id)
+    .bind(&lease.worker_id)
+    .execute(pool)
+    .await?;
+    if updated.rows_affected() == 0 {
+        return Err(AppError::Metadata("job lease was lost".into()));
+    }
+    Ok(())
 }
 
 pub async fn complete(pool: &SqlitePool, lease: &JobLease) -> Result<Job> {

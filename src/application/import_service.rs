@@ -1,12 +1,15 @@
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::importer::{BatchResult, SharedImportProgress};
+use crate::jobs::{EnqueueResult, NewJob, enqueue};
 
 use super::{
     Application, AuthorizationScope, RequestContext, ServiceError, ServiceErrorCode, ServiceResult,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportCommand {
     pub source_dir: PathBuf,
     pub copy_only: bool,
@@ -69,6 +72,23 @@ impl ImportService {
         )
         .await
         .map_err(ServiceError::from)
+    }
+
+    pub async fn enqueue(
+        &self,
+        context: &RequestContext,
+        command: ImportCommand,
+    ) -> ServiceResult<EnqueueResult> {
+        self.authorize(context)?;
+        let payload = serde_json::to_value(command).map_err(|error| {
+            ServiceError::new(ServiceErrorCode::InvalidInput, error.to_string())
+        })?;
+        let mut job = NewJob::new("import", payload);
+        job.correlation_id = Some(context.request_id.to_string());
+        job.idempotency_key = context.idempotency_key.as_deref().map(str::to_owned);
+        enqueue(self.application.pool(), &job)
+            .await
+            .map_err(ServiceError::from)
     }
 
     fn authorize(&self, context: &RequestContext) -> ServiceResult<()> {

@@ -71,6 +71,7 @@ pub struct Job {
     pub error_code: Option<String>,
     pub error_message: Option<String>,
     pub error_details_json: Option<String>,
+    pub result_json: Option<String>,
     pub correlation_id: Option<String>,
     pub idempotency_key: Option<String>,
     pub created_at: String,
@@ -82,6 +83,13 @@ pub struct Job {
 impl Job {
     pub fn payload(&self) -> serde_json::Result<Value> {
         serde_json::from_str(&self.payload_json)
+    }
+
+    pub fn result(&self) -> serde_json::Result<Option<Value>> {
+        self.result_json
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
     }
 }
 

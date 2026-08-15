@@ -7,7 +7,7 @@ use axum::{
     routing::{get, patch, post},
 };
 use sqlx::SqlitePool;
-use std::sync::{Arc, Mutex, atomic::AtomicBool};
+use std::sync::{Arc, atomic::AtomicBool};
 use crate::config::Config;
 use crate::application::Application;
 use embed::static_handler;
@@ -21,7 +21,7 @@ use handlers::{
     faces::{start_analyze, get_job_status, list_photo_faces},
     geo::{get_geo_hierarchy, get_geo_photos, start_regeocode, get_regeocode_status},
     people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person, get_merge_suggestions, get_outlier_faces, eject_face, get_centroid_faces, get_embedding_map},
-    import::{start_import, get_import_status, ImportStatus},
+    import::{start_import, get_import_status},
     photos::{list_photos, get_thumb, get_photo_file, get_photo, get_gps_points, patch_photo, batch_update_photos},
     tasks::{cancel_task, get_task, list_tasks, retry_task},
     timeline::list_timeline,
@@ -32,18 +32,22 @@ pub struct AppState {
     pub application: Application,
     pub pool: SqlitePool,
     pub config: Config,
-    pub import_status: Arc<Mutex<ImportStatus>>,
     pub geo_running: Arc<AtomicBool>,
 }
 
 pub fn router(pool: SqlitePool, config: Config) -> Router {
-    std::fs::create_dir_all(&config.thumb_cache_dir).ok();
     let application = Application::new(pool.clone(), config.clone());
+    router_with_application(application)
+}
+
+fn router_with_application(application: Application) -> Router {
+    let pool = application.pool().clone();
+    let config = application.config().clone();
+    std::fs::create_dir_all(&config.thumb_cache_dir).ok();
     let state = AppState {
         application,
         pool,
         config,
-        import_status: Arc::new(Mutex::new(ImportStatus::default())),
         geo_running: Arc::new(AtomicBool::new(false)),
     };
 
@@ -115,9 +119,26 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
 
 pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
     let addr = config.bind_addr();
-    let app = router(pool, config);
+    let application = Application::new(pool.clone(), config);
+    let worker = crate::jobs::WorkerRuntime::new(
+        pool,
+        crate::jobs::handlers::registry(application.clone()),
+        crate::jobs::WorkerConfig::default(),
+        "web-worker",
+    )
+    .start();
+    let app = router_with_application(application);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("Web 服务启动：http://{addr}");
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            if let Err(error) = tokio::signal::ctrl_c().await {
+                tracing::error!("failed to listen for shutdown signal: {error}");
+            }
+        })
+        .await?;
+    if !worker.shutdown().await {
+        tracing::warn!("application workers did not stop within the shutdown timeout");
+    }
     Ok(())
 }

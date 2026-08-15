@@ -391,7 +391,8 @@ architectural work and macOS integration are complete.
 
 - M11.1: add additive generic job, attempt, lease and diagnostic persistence.
 - M11.2: implement a worker registry, bounded concurrency and graceful shutdown.
-- M11.3: move import and thumbnail generation onto durable jobs.
+- M11.3a: move CLI and Web imports onto durable jobs with persisted summaries.
+- M11.3b: move thumbnail generation onto revision-keyed durable jobs.
 - M11.4: move face/animal analysis and geocoding onto durable jobs.
 - M11.5: move deduplication and derived-media maintenance onto durable jobs.
 - M11.6: expose consistent queue, progress, cancellation, retry and failure APIs.
