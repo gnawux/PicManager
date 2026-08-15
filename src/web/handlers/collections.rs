@@ -139,7 +139,10 @@ pub async fn list_collection_photos(
 
     let offset = (pag.page.saturating_sub(1)) as i64 * pag.per_page as i64;
     let total: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM photo_albums WHERE album_id = ?")
+        sqlx::query_as(
+            "SELECT COUNT(*) FROM photo_albums pa JOIN photos p ON p.id = pa.photo_id \
+             WHERE pa.album_id = ? AND p.import_status = 'imported'",
+        )
             .bind(id)
             .fetch_one(&state.pool)
             .await
@@ -149,7 +152,7 @@ pub async fn list_collection_photos(
     let sql = format!(
         "SELECT p.id, p.path, p.taken_at, p.camera
          FROM photos p JOIN photo_albums pa ON pa.photo_id = p.id
-         WHERE pa.album_id = ?
+         WHERE pa.album_id = ? AND p.import_status = 'imported'
          ORDER BY p.taken_at {dir} NULLS LAST, p.id {dir}
          LIMIT ? OFFSET ?"
     );

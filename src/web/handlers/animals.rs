@@ -71,8 +71,10 @@ pub async fn list_species(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<SpeciesEntry>>, StatusCode> {
     let rows: Vec<(String, i64)> = sqlx::query_as(
-        "SELECT species, COUNT(DISTINCT photo_id) AS photo_count
-         FROM animals GROUP BY species ORDER BY photo_count DESC",
+        "SELECT a.species, COUNT(DISTINCT a.photo_id) AS photo_count \
+         FROM animals a JOIN photos p ON p.id = a.photo_id \
+         WHERE p.import_status = 'imported' \
+         GROUP BY a.species ORDER BY photo_count DESC",
     )
     .fetch_all(&state.pool)
     .await
@@ -98,7 +100,8 @@ pub async fn list_species_photos(
 
     let total: (i64,) = sqlx::query_as(
         "SELECT COUNT(DISTINCT p.id) FROM photos p
-         JOIN animals a ON a.photo_id = p.id WHERE a.species = ?",
+         JOIN animals a ON a.photo_id = p.id \
+         WHERE a.species = ? AND p.import_status = 'imported'",
     )
     .bind(&species)
     .fetch_one(&state.pool)
@@ -108,7 +111,7 @@ pub async fn list_species_photos(
     let photos: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
         "SELECT DISTINCT p.id, p.path, p.format, p.taken_at
          FROM photos p JOIN animals a ON a.photo_id = p.id
-         WHERE a.species = ?
+         WHERE a.species = ? AND p.import_status = 'imported'
          ORDER BY p.taken_at DESC NULLS LAST, p.id DESC
          LIMIT ? OFFSET ?",
     )
@@ -135,8 +138,9 @@ pub async fn list_photo_animals(
     Path(photo_id): Path<i64>,
 ) -> Result<Json<Vec<AnimalRow>>, StatusCode> {
     let rows: Vec<(i64, String, f64, i64, i64, i64, i64)> = sqlx::query_as(
-        "SELECT id, species, confidence, x, y, width, height
-         FROM animals WHERE photo_id = ? ORDER BY confidence DESC",
+        "SELECT a.id, a.species, a.confidence, a.x, a.y, a.width, a.height \
+         FROM animals a JOIN photos p ON p.id = a.photo_id \
+         WHERE a.photo_id = ? AND p.import_status = 'imported' ORDER BY a.confidence DESC",
     )
     .bind(photo_id)
     .fetch_all(&state.pool)

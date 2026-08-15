@@ -94,7 +94,9 @@ pub async fn list_photo_faces(
          FROM faces f
          LEFT JOIN person_faces pf ON pf.face_id = f.id
          LEFT JOIN people p ON p.id = pf.person_id
-         WHERE f.photo_id = ? ORDER BY f.id",
+         WHERE f.photo_id = ? \
+           AND EXISTS (SELECT 1 FROM photos p WHERE p.id = f.photo_id AND p.import_status = 'imported') \
+         ORDER BY f.id",
     )
     .bind(photo_id)
     .fetch_all(&state.pool)

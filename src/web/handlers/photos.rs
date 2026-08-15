@@ -127,7 +127,7 @@ pub async fn get_photo(
              FROM photos p \
              LEFT JOIN assets a ON a.photo_id = p.id \
              LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
-             WHERE p.id = ?",
+             WHERE p.id = ? AND p.import_status = 'imported'",
         )
         .bind(id)
         .fetch_optional(&state.pool)
@@ -260,7 +260,8 @@ pub async fn list_photos(
     let dir = if pag.order == "asc" { "ASC" } else { "DESC" };
     let sql = format!(
         "SELECT id, path, format, taken_at, camera, import_status
-         FROM photos ORDER BY taken_at {dir} NULLS LAST, id {dir}
+         FROM photos WHERE import_status = 'imported' \
+         ORDER BY taken_at {dir} NULLS LAST, id {dir}
          LIMIT ? OFFSET ?"
     );
     let photos: Vec<PhotoRow> = sqlx::query_as(&sql)
@@ -295,7 +296,7 @@ pub async fn get_thumb(
     Query(query): Query<ThumbQuery>,
 ) -> Response {
     let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT render_revision FROM photos WHERE id = ?",
+        "SELECT render_revision FROM photos WHERE id = ? AND import_status = 'imported'",
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -393,7 +394,7 @@ pub async fn get_photo_file(
          LEFT JOIN assets a ON a.photo_id = p.id \
          {variant_join} \
          LEFT JOIN variant_renditions vr ON vr.variant_id = sv.id \
-         WHERE p.id = ?"
+         WHERE p.id = ? AND p.import_status = 'imported'"
     );
     let row: Option<(Option<String>, Option<String>, String, i32, i32, i32, i32, String, Option<i64>)> = sqlx::query_as(&sql)
     .bind(id)

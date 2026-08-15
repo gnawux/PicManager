@@ -409,6 +409,72 @@ async fn get_photo_faces_empty_returns_empty_array() {
 }
 
 #[tokio::test]
+async fn deleted_photos_are_hidden_from_browse_and_derived_media_apis() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    sqlx::query(
+        "INSERT INTO photos (id, path, sha256, format, import_status) \
+         VALUES (41, '/tmp/deleted.jpg', 'deleted-lifecycle', 'jpeg', 'deleted')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let album_id: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('Hidden', 'manual') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (41, ?)")
+        .bind(album_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO animals (photo_id, species, confidence, x, y, width, height) \
+         VALUES (41, 'cat', 0.9, 0, 0, 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO faces (photo_id, x, y, width, height) VALUES (41, 0, 0, 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for uri in [
+        "/api/photos/41",
+        "/api/photos/41/thumb",
+        "/api/photos/41/file",
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder().uri(uri).body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+    for uri in [
+        format!("/api/albums/{album_id}/photos"),
+        "/api/animals/species".into(),
+        "/api/photos/41/animals".into(),
+        "/api/photos/41/faces".into(),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder().uri(uri).body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        if json.is_array() {
+            assert!(json.as_array().unwrap().is_empty());
+        } else {
+            assert_eq!(json["total"], 0);
+            assert!(json["photos"].as_array().unwrap().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
 async fn frontend_index_is_served() {
     let app = test_app().await;
     let response = app
