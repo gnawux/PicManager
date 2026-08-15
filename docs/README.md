@@ -11,6 +11,8 @@ Use these documents as the current entry points:
 | Developers | [ARCHITECTURE.md](ARCHITECTURE.md) | Rust/Web/Swift boundaries and data flow |
 | Releasers | [RELEASE.md](RELEASE.md) | Build, sign, notarize, metadata, and release gates |
 
+Latest evidence: [PHASE45_RELEASE_GATE.md](PHASE45_RELEASE_GATE.md).
+
 `MODERNIZATION_PLAN.md` records the six-phase product roadmap and completed Phase 4/5
 milestones. `PLAN.md` and `DESIGN.md` are retained as historical implementation records;
 when they conflict with the documents above, the current entry points take precedence.

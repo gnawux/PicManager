@@ -453,7 +453,7 @@ Status: complete. External signing credentials and publication remain release-op
 
 - M18.1: complete — bind native clients to the selected library and restart safely after configuration changes.
 - M18.2: complete — reorganize architecture, operations, macOS, migration and user documentation.
-- M18.3: run Rust, Swift, frontend, migration, performance and browser release gates.
+- M18.3: complete — Rust, Swift, frontend, migration, performance, bundle, installation and browser gates passed locally; external signing and manual PhotoKit checks remain operator actions.
 - M18.4: merge the completed Phase 4/5 branch into `main` with a signed-off merge.
 
 ## 9. Testing and commit protocol
