@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use crate::web::AppState;
-use crate::face::{apply_transform, apply_exif_orientation};
+use crate::orientation::{apply_user_transform, DisplayTransform, OrientationMode};
 
 #[derive(Debug, Serialize)]
 pub struct PhotoDetail {
@@ -19,6 +19,24 @@ pub struct PhotoDetail {
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
     pub import_status: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub sources: Vec<PhotoSourceDetail>,
+    pub renditions: PhotoRenditions,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhotoSourceDetail {
+    pub provider: String,
+    pub original_filename: Option<String>,
+    pub sync_status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhotoRenditions {
+    pub display: String,
+    pub original: Option<String>,
+    pub current: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,20 +112,52 @@ pub async fn get_photo(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<PhotoDetail>, StatusCode> {
-    let row: Option<(i64, String, String, Option<String>, Option<i64>, Option<String>, Option<f64>, Option<f64>, String)> =
+    let row: Option<(i64, String, String, Option<String>, Option<i64>, Option<String>, Option<f64>, Option<f64>, String, Option<i64>, Option<i64>, i64, i64)> =
         sqlx::query_as(
-            "SELECT id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status
-             FROM photos WHERE id = ?",
+            "SELECT p.id, p.path, p.format, p.taken_at, p.timezone_offset, p.camera, \
+                    p.gps_lat, p.gps_lon, p.import_status, COALESCE(dv.width, p.width), \
+                    COALESCE(dv.height, p.height), \
+                    EXISTS(SELECT 1 FROM asset_variants ov \
+                           WHERE ov.asset_id = a.id AND ov.role = 'original' AND ov.path IS NOT NULL), \
+                    EXISTS(SELECT 1 FROM asset_variants cv \
+                           WHERE cv.asset_id = a.id AND cv.role = 'current' AND cv.path IS NOT NULL) \
+             FROM photos p \
+             LEFT JOIN assets a ON a.photo_id = p.id \
+             LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
+             WHERE p.id = ?",
         )
         .bind(id)
         .fetch_optional(&state.pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status) =
+    let (id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status,
+        width, height, has_original, has_current) =
         row.ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(PhotoDetail { id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status }))
+    let sources = sqlx::query_as::<_, (String, Option<String>, String)>(
+        "SELECT provider, original_filename, sync_status FROM asset_sources \
+         WHERE asset_id = (SELECT id FROM assets WHERE photo_id = ?) ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .into_iter()
+    .map(|(provider, original_filename, sync_status)| PhotoSourceDetail {
+        provider, original_filename, sync_status,
+    })
+    .collect();
+    let base = format!("/api/photos/{id}/file");
+    Ok(Json(PhotoDetail {
+        id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status,
+        width, height, sources,
+        renditions: PhotoRenditions {
+            display: base.clone(),
+            original: (has_original != 0).then(|| format!("{base}?variant=original")),
+            current: (has_current != 0).then(|| format!("{base}?variant=current")),
+        },
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -191,8 +241,9 @@ pub async fn patch_photo(
         transform_changed = true;
     }
     if transform_changed {
-        let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
-        let _ = tokio::fs::remove_file(&cache_path).await;
+        crate::derived::invalidate(&state.pool, id)
+            .await
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         // Re-analyze faces in the new display orientation (fire-and-forget).
         let pool2 = state.pool.clone();
         tokio::spawn(async move {
@@ -255,8 +306,9 @@ pub async fn batch_update_photos(
                 .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         if has_transform {
-            let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
-            let _ = tokio::fs::remove_file(&cache_path).await;
+            crate::derived::invalidate(&state.pool, id)
+                .await
+                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
         }
         updated += 1;
     }
@@ -342,30 +394,62 @@ pub async fn list_photos(
     }))
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct ThumbQuery {
+    pub size: Option<u32>,
+}
+
 pub async fn get_thumb(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(query): Query<ThumbQuery>,
 ) -> Response {
-    let row: Option<(String, i32, i32, i32, i32)> = sqlx::query_as(
-        "SELECT path, rotation, flip_h, flip_v, exif_orientation FROM photos WHERE id = ?",
+    let row: Option<(String, i32, i32, i32, i32, String, Option<i64>, i64)> = sqlx::query_as(
+        "SELECT COALESCE(dv.path, p.path), p.rotation, p.flip_h, p.flip_v, \
+                p.exif_orientation, COALESCE(vr.orientation_mode, 'legacy_unknown'), \
+                vr.display_orientation, p.render_revision \
+         FROM photos p \
+         LEFT JOIN assets a ON a.photo_id = p.id \
+         LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
+         LEFT JOIN variant_renditions vr ON vr.variant_id = dv.id \
+         WHERE p.id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)
     .await
     .unwrap_or(None);
 
-    let Some((path, rotation, flip_h, flip_v, exif_orient)) = row else {
+    let Some((path, rotation, flip_h, flip_v, exif_orient, mode, display_orient, render_revision)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    let cache_path = state.config.thumb_cache_dir.join(format!("{id}.jpg"));
-    let thumb_size = state.config.thumb_size;
+    let requested_size = query.size.map(|size| size.clamp(128, 2048));
+    let cache_path = if let Some(size) = requested_size {
+        crate::derived::sized_thumbnail_cache_path(
+            &state.config.thumb_cache_dir,
+            id,
+            render_revision,
+            size,
+        )
+    } else {
+        crate::derived::thumbnail_cache_path(&state.config.thumb_cache_dir, id, render_revision)
+    };
+    let thumb_size = requested_size.unwrap_or(state.config.thumb_size);
 
     let result = tokio::task::spawn_blocking(move || {
         if cache_path.exists() {
             std::fs::read(&cache_path).map_err(|e| anyhow::anyhow!(e))
         } else {
-            let bytes = generate_thumb(&path, thumb_size, exif_orient as u8, rotation, flip_h != 0, flip_v != 0)?;
+            let bytes = generate_thumb(
+                &path,
+                thumb_size,
+                OrientationMode::from_catalog(Some(&mode)),
+                display_orient.map(|value| value as u8),
+                exif_orient as u8,
+                rotation,
+                flip_h != 0,
+                flip_v != 0,
+            )?;
             if let Some(parent) = cache_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -376,40 +460,83 @@ pub async fn get_thumb(
     .await;
 
     match result {
-        Ok(Ok(bytes)) => ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
+        Ok(Ok(bytes)) => {
+            crate::derived::mark_thumbnail_ready(&state.pool, id, render_revision).await;
+            ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response()
+        }
         _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct PhotoFileQuery {
+    pub variant: Option<String>,
 }
 
 pub async fn get_photo_file(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(query): Query<PhotoFileQuery>,
 ) -> Response {
-    let row: Option<(String, String, i32, i32, i32, i32)> = sqlx::query_as(
-        "SELECT path, format, rotation, flip_h, flip_v, exif_orientation FROM photos WHERE id = ?",
-    )
+    let variant_join = match query.variant.as_deref().unwrap_or("display") {
+        "display" => "LEFT JOIN asset_variants sv ON sv.id = a.display_variant_id",
+        "original" => "LEFT JOIN asset_variants sv ON sv.id = (\
+            SELECT id FROM asset_variants WHERE asset_id = a.id AND role = 'original' \
+            AND path IS NOT NULL ORDER BY is_primary DESC, id LIMIT 1)",
+        "current" => "LEFT JOIN asset_variants sv ON sv.id = (\
+            SELECT id FROM asset_variants WHERE asset_id = a.id AND role = 'current' \
+            AND path IS NOT NULL ORDER BY id DESC LIMIT 1)",
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let path_expression = if query.variant.as_deref().unwrap_or("display") == "display" {
+        "COALESCE(sv.path, p.path)"
+    } else {
+        "sv.path"
+    };
+    let sql = format!(
+        "SELECT {path_expression}, sv.mime_type, p.format, p.rotation, p.flip_h, p.flip_v, \
+                p.exif_orientation, COALESCE(vr.orientation_mode, 'legacy_unknown'), \
+                vr.display_orientation \
+         FROM photos p \
+         LEFT JOIN assets a ON a.photo_id = p.id \
+         {variant_join} \
+         LEFT JOIN variant_renditions vr ON vr.variant_id = sv.id \
+         WHERE p.id = ?"
+    );
+    let row: Option<(Option<String>, Option<String>, String, i32, i32, i32, i32, String, Option<i64>)> = sqlx::query_as(&sql)
     .bind(id)
     .fetch_optional(&state.pool)
     .await
     .unwrap_or(None);
 
-    let Some((path, format, rotation, flip_h_i, flip_v_i, exif_orient)) = row else {
+    let Some((Some(path), variant_mime, format, rotation, flip_h_i, flip_v_i, exif_orient, mode, display_orient)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
     let flip_h = flip_h_i != 0;
     let flip_v = flip_v_i != 0;
-    let is_heic = matches!(format.to_lowercase().as_str(), "heic" | "heif");
+    let is_heic = crate::image_open::is_heic(std::path::Path::new(&path));
+    let orientation_mode = OrientationMode::from_catalog(Some(&mode));
+    let needs_catalog_bake = orientation_mode == OrientationMode::Metadata
+        && display_orient.is_some_and(|value| value != 1);
 
     // For HEIC: always bake EXIF orientation (read from the original HEIC file, not the
     // sips-output JPEG) into pixels and return a plain JPEG with no EXIF Orientation tag.
     // This prevents the browser from mis-applying an EXIF value that sips may have
     // synthesised from a HEIF IROT box (IROT-derived EXIF=6 on landscape pixels → portrait).
     // For non-HEIC with user-applied transforms: same pixel-baking is required.
-    if is_heic || rotation != 0 || flip_h || flip_v {
+    if is_heic || needs_catalog_bake || rotation != 0 || flip_h || flip_v {
         let exif_orient_u8 = exif_orient as u8;
         match tokio::task::spawn_blocking(move || {
-            apply_transforms_full(&path, exif_orient_u8, rotation, flip_h, flip_v)
+            apply_transforms_full(
+                &path,
+                orientation_mode,
+                display_orient.map(|value| value as u8),
+                exif_orient_u8,
+                rotation,
+                flip_h,
+                flip_v,
+            )
         })
         .await
         {
@@ -418,14 +545,9 @@ pub async fn get_photo_file(
         }
     }
 
-    let mime = match format.to_lowercase().as_str() {
-        "jpeg" | "jpg"  => "image/jpeg",
-        "png"           => "image/png",
-        "gif"           => "image/gif",
-        "webp"          => "image/webp",
-        "tiff" | "tif"  => "image/tiff",
-        _               => "application/octet-stream",
-    };
+    let mime = variant_mime
+        .filter(|mime| mime.starts_with("image/"))
+        .unwrap_or_else(|| mime_for_path_or_format(&path, &format).to_owned());
 
     match tokio::fs::read(&path).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
@@ -433,46 +555,66 @@ pub async fn get_photo_file(
     }
 }
 
-fn apply_transforms_full(path: &str, exif_orient: u8, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
+fn mime_for_path_or_format(path: &str, format: &str) -> &'static str {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or(format)
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "jpeg" | "jpg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "tiff" | "tif" => "image/tiff",
+        _ => "application/octet-stream",
+    }
+}
+
+fn apply_transforms_full(
+    path: &str,
+    mode: OrientationMode,
+    display_orientation: Option<u8>,
+    exif_orient: u8,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
+) -> anyhow::Result<Vec<u8>> {
     use image::ImageFormat;
     use std::io::Cursor;
 
     let p = std::path::Path::new(path);
     let img = crate::image_open::open_image(p)?;
-    // For HEIC, read EXIF orientation from the original file, not the sips-output JPEG.
-    // sips may translate a HEIF IROT box into EXIF (e.g. IROT=90CW → EXIF=6), but the
-    // pixels are NOT rotated by sips, so using the sips-derived EXIF would double-rotate.
-    let effective_orient = if crate::image_open::is_heic(p) {
-        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
-    } else {
-        exif_orient
-    };
-    let img = apply_exif_orientation(img, effective_orient);
-    let img = apply_transform(img, rotation, flip_h, flip_v);
+    let img = DisplayTransform::new(
+        mode, display_orientation, exif_orient, p, rotation, flip_h, flip_v,
+    ).apply(img);
     let mut buf = Vec::new();
     img.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;
     Ok(buf)
 }
 
-fn generate_thumb(path: &str, size: u32, exif_orient: u8, rotation: i32, flip_h: bool, flip_v: bool) -> anyhow::Result<Vec<u8>> {
+fn generate_thumb(
+    path: &str,
+    size: u32,
+    mode: OrientationMode,
+    display_orientation: Option<u8>,
+    exif_orient: u8,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
+) -> anyhow::Result<Vec<u8>> {
     use image::ImageFormat;
     use std::io::Cursor;
 
     let p = std::path::Path::new(path);
     let img = crate::image_open::open_image(p)?;
-    // For HEIC, read EXIF orientation directly from the original file, not the sips-output
-    // JPEG. sips translates HEIF IROT boxes into EXIF on the output, but the pixels are not
-    // rotated, so using the sips-derived EXIF would double-rotate the thumbnail.
-    // Fall back to DB exif_orient when the file has no Orientation tag.
-    let effective_orient = if crate::image_open::is_heic(p) {
-        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
-    } else {
-        exif_orient
-    };
     // Apply EXIF orientation BEFORE resize so resize_to_fill crops in display orientation.
-    let img = apply_exif_orientation(img, effective_orient);
+    let transform = DisplayTransform::new(
+        mode, display_orientation, exif_orient, p, rotation, flip_h, flip_v,
+    );
+    let img = crate::orientation::apply_exif_orientation(img, transform.source_orientation);
     let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
-    let thumb = apply_transform(thumb, rotation, flip_h, flip_v);
+    let thumb = apply_user_transform(thumb, transform.rotation, transform.flip_h, transform.flip_v);
 
     let mut buf = Vec::new();
     thumb.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;
@@ -507,23 +649,56 @@ mod tests {
     #[test]
     fn generate_thumb_returns_jpeg_bytes() {
         let f = fixture("with_exif.jpg");
-        let bytes = generate_thumb(f.to_str().unwrap(), 300, 1, 0, false, false).unwrap();
+        let bytes = generate_thumb(f.to_str().unwrap(), 300, OrientationMode::LegacyUnknown, None, 1, 0, false, false).unwrap();
         assert!(!bytes.is_empty());
         assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
     }
 
     #[test]
     fn generate_thumb_missing_file_returns_error() {
-        let result = generate_thumb("/no/such/file.jpg", 300, 1, 0, false, false);
+        let result = generate_thumb("/no/such/file.jpg", 300, OrientationMode::LegacyUnknown, None, 1, 0, false, false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn full_transform_obeys_catalog_orientation_mode() {
+        let temp = tempfile::Builder::new().suffix(".png").tempfile().unwrap();
+        image::DynamicImage::new_rgb8(3, 2).save(temp.path()).unwrap();
+        let path = temp.path().to_str().unwrap();
+
+        let metadata = apply_transforms_full(
+            path,
+            OrientationMode::Metadata,
+            Some(6),
+            1,
+            0,
+            false,
+            false,
+        )
+        .unwrap();
+        let baked = apply_transforms_full(
+            path,
+            OrientationMode::BakedPixels,
+            Some(6),
+            8,
+            0,
+            false,
+            false,
+        )
+        .unwrap();
+
+        let metadata = image::load_from_memory(&metadata).unwrap();
+        let baked = image::load_from_memory(&baked).unwrap();
+        assert_eq!((metadata.width(), metadata.height()), (2, 3));
+        assert_eq!((baked.width(), baked.height()), (3, 2));
     }
 
     #[test]
     fn apply_transform_rotation_180_is_involutory() {
         let f = fixture("with_exif.jpg");
         let img = image::open(&f).unwrap();
-        let rotated = apply_transform(img.clone(), 180, false, false);
-        let back = apply_transform(rotated, 180, false, false);
+        let rotated = apply_user_transform(img.clone(), 180, false, false);
+        let back = apply_user_transform(rotated, 180, false, false);
         assert_eq!(img.width(), back.width());
         assert_eq!(img.height(), back.height());
     }
@@ -533,10 +708,10 @@ mod tests {
         let f = fixture("with_exif.jpg");
         let img = image::open(&f).unwrap();
         let (w, h) = (img.width(), img.height());
-        let r = apply_transform(img, 90, false, false);
-        let r = apply_transform(r, 90, false, false);
-        let r = apply_transform(r, 90, false, false);
-        let r = apply_transform(r, 90, false, false);
+        let r = apply_user_transform(img, 90, false, false);
+        let r = apply_user_transform(r, 90, false, false);
+        let r = apply_user_transform(r, 90, false, false);
+        let r = apply_user_transform(r, 90, false, false);
         assert_eq!(r.width(), w);
         assert_eq!(r.height(), h);
     }
@@ -551,7 +726,7 @@ mod tests {
     #[test]
     fn generate_thumb_heic_returns_valid_jpeg() {
         let f = sample("IMG_9886.HEIC");
-        let bytes = generate_thumb(f.to_str().unwrap(), 300, 1, 0, false, false).unwrap();
+        let bytes = generate_thumb(f.to_str().unwrap(), 300, OrientationMode::LegacyUnknown, None, 1, 0, false, false).unwrap();
         assert!(!bytes.is_empty());
         assert_eq!(&bytes[..2], &[0xFF, 0xD8]);
     }
@@ -564,8 +739,8 @@ mod tests {
         // would give EXIF=6 while the file has EXIF=1, producing different aspect ratios.
         let f = sample("IMG_9886.HEIC");
         let path = f.to_str().unwrap();
-        let thumb_bytes = generate_thumb(path, 300, 1, 0, false, false).unwrap();
-        let full_bytes = apply_transforms_full(path, 1, 0, false, false).unwrap();
+        let thumb_bytes = generate_thumb(path, 300, OrientationMode::LegacyUnknown, None, 1, 0, false, false).unwrap();
+        let full_bytes = apply_transforms_full(path, OrientationMode::LegacyUnknown, None, 1, 0, false, false).unwrap();
 
         let thumb = image::load_from_memory(&thumb_bytes).unwrap();
         let full = image::load_from_memory(&full_bytes).unwrap();

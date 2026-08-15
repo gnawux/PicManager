@@ -10,12 +10,18 @@ use rust_embed::RustEmbed;
 struct Asset;
 
 pub async fn static_handler(uri: Uri) -> impl IntoResponse {
-    let path = uri.path().trim_start_matches('/');
-    let path = if path.is_empty() { "index.html" } else { path };
+    let requested = uri.path().trim_start_matches('/');
+    let path = if requested.is_empty() {
+        "index.html".to_owned()
+    } else if requested.ends_with('/') {
+        format!("{requested}index.html")
+    } else {
+        requested.to_owned()
+    };
 
-    match Asset::get(path) {
+    match Asset::get(&path) {
         Some(file) => Response::builder()
-            .header(header::CONTENT_TYPE, mime_for(path))
+            .header(header::CONTENT_TYPE, mime_for(&path))
             .body(Body::from(file.data.into_owned()))
             .unwrap(),
         None => Response::builder()

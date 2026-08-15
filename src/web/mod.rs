@@ -11,6 +11,7 @@ use crate::config::Config;
 use embed::static_handler;
 use handlers::{
     activities::{list_activities, get_activity, get_activity_track, get_activity_photos, trim_activity, merge_activities},
+    apple::{list_apple_candidates, list_apple_sources, retry_apple_source, review_apple_candidate},
     albums::{list_albums, list_album_photos, merge_albums},
     collections::{list_collections, create_collection, rename_collection, delete_collection, add_photos, remove_photos, list_collection_photos},
     animals::{list_species, list_species_photos, list_photo_animals},
@@ -20,6 +21,8 @@ use handlers::{
     people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person, get_merge_suggestions, get_outlier_faces, eject_face, get_centroid_faces, get_embedding_map},
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb, get_photo_file, get_photo, get_gps_points, patch_photo, batch_update_photos},
+    tasks::{cancel_task, get_task, list_tasks, retry_task},
+    timeline::list_timeline,
 };
 
 #[derive(Clone)]
@@ -41,6 +44,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
 
     Router::new()
         .route("/api/photos", get(list_photos))
+        .route("/api/timeline", get(list_timeline))
         .route("/api/photos/gps-points", get(get_gps_points))
         .route("/api/photos/batch-update", post(batch_update_photos))
         .route("/api/photos/{id}", get(get_photo).patch(patch_photo))
@@ -48,6 +52,14 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/photos/{id}/file", get(get_photo_file))
         .route("/api/import", post(start_import))
         .route("/api/import/status", get(get_import_status))
+        .route("/api/tasks", get(list_tasks))
+        .route("/api/tasks/{id}", get(get_task))
+        .route("/api/tasks/{id}/retry", post(retry_task))
+        .route("/api/tasks/{id}/cancel", post(cancel_task))
+        .route("/api/apple/sources", get(list_apple_sources))
+        .route("/api/apple/sources/{id}/retry", post(retry_apple_source))
+        .route("/api/apple/link-candidates", get(list_apple_candidates))
+        .route("/api/apple/link-candidates/{id}/review", post(review_apple_candidate))
         .route("/api/dedup", get(list_dedup_groups))
         .route("/api/dedup/{group_id}/resolve", post(resolve_group))
         .route("/api/albums", get(list_albums))

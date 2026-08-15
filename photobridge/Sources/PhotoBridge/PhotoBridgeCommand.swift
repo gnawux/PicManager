@@ -10,6 +10,9 @@ struct PhotoBridge: AsyncParsableCommand {
         abstract: "iCloud Photos → PicManager import bridge",
         version: "0.1.0",
         subcommands: [
+            InventoryCommand.self,
+            ChangesCommand.self,
+            ExportAssetCommand.self,
             ExportCommand.self,
             SyncCommand.self,
             StatusCommand.self,

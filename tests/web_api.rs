@@ -69,6 +69,156 @@ async fn get_import_status_returns_200() {
 }
 
 #[tokio::test]
+async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let failed_id: i64 = sqlx::query_scalar(
+        "INSERT INTO sync_jobs (kind, provider, status, total_items, failed_items) \
+         VALUES ('apple_full', 'apple_photos', 'failed', 1, 1) RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO sync_items (job_id, external_id, operation, status, attempt_count, \
+         max_attempts, last_error) VALUES (?, 'asset-1', 'download', 'failed', 3, 3, 'offline')",
+    )
+    .bind(failed_id).execute(&pool).await.unwrap();
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/tasks?provider=apple_photos&status=failed")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["tasks"][0]["id"], failed_id);
+
+    let detail = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["items"][0]["last_error"], "offline");
+
+    let retry = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(retry.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "queued");
+    assert_eq!(json["items"][0]["status"], "queued");
+
+    let cancel = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}/cancel"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let conflict = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(conflict.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "invalid_task_transition");
+
+    let missing = app.oneshot(
+        Request::builder().uri("/api/tasks/9999").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(missing.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "task_not_found");
+}
+
+#[tokio::test]
+async fn apple_source_api_filters_inventory_and_retries_failures() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let failed_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_sources (provider, external_id, original_filename, sync_status, last_error) \
+         VALUES ('apple_photos', 'asset-1', 'IMG_0042.HEIC', 'failed', 'iCloud offline') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO asset_sources (provider, external_id, original_filename, sync_status) \
+         VALUES ('apple_photos', 'asset-2', 'IMG_0043.HEIC', 'ready')",
+    ).execute(&pool).await.unwrap();
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/apple/sources?status=failed&search=0042")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["sources"][0]["original_filename"], "IMG_0042.HEIC");
+    assert_eq!(json["status_counts"]["failed"], 1);
+    assert_eq!(json["status_counts"]["synced"], 1);
+
+    let retry = app.clone().oneshot(
+        Request::builder().uri(format!("/api/apple/sources/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(retry.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["source"]["sync_status"], "queued");
+    assert!(json["job_id"].as_i64().unwrap() > 0);
+
+    let conflict = app.clone().oneshot(
+        Request::builder().uri(format!("/api/apple/sources/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let missing = app.oneshot(
+        Request::builder().uri("/api/apple/sources/9999/retry")
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn apple_candidate_api_exposes_evidence_and_accepts_review() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    sqlx::query(
+        "INSERT INTO photos (id, path, sha256, format, import_status, width, height) \
+         VALUES (1, '/library/IMG_0100.JPG', 'sha', 'jpeg', 'imported', 100, 80)",
+    ).execute(&pool).await.unwrap();
+    let source_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_sources (provider, external_id, original_filename, sync_status) \
+         VALUES ('apple_photos', 'candidate-1', 'IMG_0100.JPG', 'discovered') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    let link_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_links (source_id, photo_id, method, confidence, status, evidence_json) \
+         VALUES (?, 1, 'structured_metadata', 0.9, 'candidate', '{\"filename_match\":true}') RETURNING id",
+    ).bind(source_id).fetch_one(&pool).await.unwrap();
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/apple/link-candidates")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json[0]["id"], link_id);
+    assert_eq!(json[0]["original_filename"], "IMG_0100.JPG");
+    assert_eq!(json[0]["photo_path"], "/library/IMG_0100.JPG");
+
+    let review = app.oneshot(
+        Request::builder().uri(format!("/api/apple/link-candidates/{link_id}/review"))
+            .method("POST").header("content-type", "application/json")
+            .body(Body::from(r#"{"accept":true}"#)).unwrap(),
+    ).await.unwrap();
+    assert_eq!(review.status(), StatusCode::OK);
+    let linked: (String, Option<i64>) = sqlx::query_as(
+        "SELECT sync_status, asset_id FROM asset_sources WHERE id = ?",
+    ).bind(source_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(linked.0, "ready");
+    assert!(linked.1.is_some());
+}
+
+#[tokio::test]
 async fn get_thumb_unknown_id_returns_404() {
     let app = test_app().await;
     let response = app
@@ -193,8 +343,34 @@ async fn frontend_index_is_served() {
         .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
         .await
         .unwrap();
-    // ServeDir serves index.html; 200 means the file exists and routing works
     assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("/assets/"));
+    assert!(html.contains("<div id=\"app\"></div>"));
+}
+
+#[tokio::test]
+async fn classic_frontend_remains_embedded_under_legacy_path() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/legacy/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let html = std::str::from_utf8(&body).unwrap();
+    assert!(html.contains("/legacy/app.js"));
+    assert!(html.contains("id=\"photo-grid\""));
 }
 
 #[tokio::test]
@@ -232,6 +408,273 @@ async fn get_thumb_generates_and_caches() {
 }
 
 #[tokio::test]
+async fn sized_thumbnail_contract_generates_revision_and_size_specific_cache() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/with_exif.jpg");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'sized-thumb', 'jpeg', 'imported') RETURNING id",
+    )
+    .bind(fixture.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{id}/thumb?size=128"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (128, 128));
+    assert!(tmp.path().join(format!("{id}_r0_s128.jpg")).exists());
+}
+
+#[tokio::test]
+async fn timeline_cursor_pages_are_stable_across_ties_and_null_dates() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    for (id, taken_at) in [
+        (1_i64, Some("2024-01-01T10:00:00")),
+        (2, Some("2024-01-01T10:00:00")),
+        (3, Some("2024-02-01T10:00:00")),
+        (4, None),
+        (5, None),
+    ] {
+        sqlx::query(
+            "INSERT INTO photos \
+                 (id, path, sha256, format, import_status, taken_at, width, height) \
+             VALUES (?, ?, ?, 'jpeg', 'imported', ?, 4000, 3000)",
+        )
+        .bind(id)
+        .bind(format!("/tmp/timeline-{id}.jpg"))
+        .bind(format!("timeline-{id}"))
+        .bind(taken_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO photos (id, path, sha256, format, import_status, taken_at) \
+         VALUES (6, '/tmp/deleted.jpg', 'timeline-deleted', 'jpeg', 'deleted', '2025-01-01')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut cursor: Option<String> = None;
+    let mut ids = Vec::new();
+    loop {
+        let uri = cursor.as_ref().map_or_else(
+            || "/api/timeline?limit=2".to_owned(),
+            |cursor| format!("/api/timeline?limit=2&cursor={cursor}"),
+        );
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        ids.extend(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["id"].as_i64().unwrap()),
+        );
+        if ids.len() == 2 {
+            assert_eq!(page["items"][0]["preview"]["aspect_ratio"], 4.0 / 3.0);
+            assert!(page["items"][0]["preview"]["srcset"]
+                .as_str()
+                .unwrap()
+                .contains("1024w"));
+        }
+        cursor = page["next_cursor"].as_str().map(ToOwned::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(ids, vec![3, 2, 1, 5, 4]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/timeline?cursor=not-a-cursor")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn transform_revision_never_reuses_a_stale_thumbnail() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/with_exif.jpg");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'revision-thumb', 'jpeg', 'imported') RETURNING id",
+    )
+    .bind(fixture.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    std::fs::write(tmp.path().join(format!("{id}.jpg")), b"stale").unwrap();
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{id}"))
+                .method("PATCH")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"rotation_delta":90}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{id}/thumb"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..2], &[0xff, 0xd8]);
+    assert!(tmp.path().join(format!("{id}_r1.jpg")).exists());
+}
+
+#[tokio::test]
+async fn photo_file_uses_catalog_display_variant_and_orientation_policy() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let original = tmp.path().join("original.png");
+    let current = tmp.path().join("current.png");
+    image::DynamicImage::new_rgb8(4, 3).save(&original).unwrap();
+    image::DynamicImage::new_rgb8(7, 5).save(&current).unwrap();
+
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'catalog-display', 'png', 'imported') RETURNING id",
+    )
+    .bind(original.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let asset_id: i64 = sqlx::query_scalar(
+        "INSERT INTO assets (photo_id) VALUES (?) RETURNING id",
+    )
+    .bind(photo_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let variant_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path) \
+         VALUES (?, 'current', ?) RETURNING id",
+    )
+    .bind(asset_id)
+    .bind(current.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE assets SET display_variant_id = ? WHERE id = ?")
+        .bind(variant_id)
+        .bind(asset_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO variant_renditions \
+         (variant_id, provenance, orientation_mode, display_orientation) \
+         VALUES (?, 'test', 'metadata', 6)",
+    )
+    .bind(variant_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{photo_id}/file"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (5, 7));
+}
+
+#[tokio::test]
+async fn photo_file_selects_original_and_rejects_unknown_variant() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let original = tmp.path().join("variant-original.png");
+    let current = tmp.path().join("variant-current.png");
+    image::DynamicImage::new_rgb8(4, 3).save(&original).unwrap();
+    image::DynamicImage::new_rgb8(7, 5).save(&current).unwrap();
+
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'variant-select', 'png', 'imported') RETURNING id",
+    )
+    .bind(original.to_str().unwrap()).fetch_one(&pool).await.unwrap();
+    let asset_id: i64 = sqlx::query_scalar("INSERT INTO assets (photo_id) VALUES (?) RETURNING id")
+        .bind(photo_id).fetch_one(&pool).await.unwrap();
+    let original_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path, mime_type) \
+         VALUES (?, 'original', ?, 'image/png') RETURNING id",
+    )
+    .bind(asset_id).bind(original.to_str().unwrap()).fetch_one(&pool).await.unwrap();
+    let current_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path, mime_type) \
+         VALUES (?, 'current', ?, 'image/png') RETURNING id",
+    )
+    .bind(asset_id).bind(current.to_str().unwrap()).fetch_one(&pool).await.unwrap();
+    sqlx::query("UPDATE assets SET master_variant_id = ?, display_variant_id = ? WHERE id = ?")
+        .bind(original_id).bind(current_id).bind(asset_id).execute(&pool).await.unwrap();
+
+    let response = app.clone().oneshot(
+        Request::builder().uri(format!("/api/photos/{photo_id}/file?variant=original"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (4, 3));
+
+    let response = app.oneshot(
+        Request::builder().uri(format!("/api/photos/{photo_id}/file?variant=unknown"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn get_photo_detail_returns_full_metadata() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 
@@ -243,6 +686,22 @@ async fn get_photo_detail_returns_full_metadata() {
     .fetch_one(&pool)
     .await
     .unwrap();
+
+    let asset_id: i64 = sqlx::query_scalar("INSERT INTO assets (photo_id) VALUES (?) RETURNING id")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    let original_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path, width, height) \
+         VALUES (?, 'original', '/tmp/detail.jpg', 4032, 3024) RETURNING id",
+    )
+    .bind(asset_id).fetch_one(&pool).await.unwrap();
+    sqlx::query("UPDATE assets SET display_variant_id = ?, master_variant_id = ? WHERE id = ?")
+        .bind(original_id).bind(original_id).bind(asset_id).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO asset_sources \
+         (asset_id, provider, external_id, original_filename, sync_status) \
+         VALUES (?, 'apple_photos', 'asset-detail', 'IMG_0042.HEIC', 'ready')",
+    )
+    .bind(asset_id).execute(&pool).await.unwrap();
 
     let response = app
         .oneshot(
@@ -261,6 +720,13 @@ async fn get_photo_detail_returns_full_metadata() {
     assert_eq!(json["camera"], "iPhone 15");
     assert_eq!(json["timezone_offset"], 480);
     assert!((json["gps_lat"].as_f64().unwrap() - 37.77).abs() < 0.01);
+    assert_eq!(json["width"], 4032);
+    assert_eq!(json["height"], 3024);
+    assert_eq!(json["sources"][0]["provider"], "apple_photos");
+    assert_eq!(json["sources"][0]["original_filename"], "IMG_0042.HEIC");
+    assert_eq!(json["renditions"]["display"], format!("/api/photos/{id}/file"));
+    assert_eq!(json["renditions"]["original"], format!("/api/photos/{id}/file?variant=original"));
+    assert!(json["renditions"]["current"].is_null());
 }
 
 #[tokio::test]
@@ -2175,12 +2641,14 @@ async fn rotate_single_photo_updates_rotation() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let (rotation,): (i32,) = sqlx::query_as("SELECT rotation FROM photos WHERE id = ?")
+    let (rotation, render_revision): (i32, i64) =
+        sqlx::query_as("SELECT rotation, render_revision FROM photos WHERE id = ?")
         .bind(id)
         .fetch_one(&pool)
         .await
         .unwrap();
     assert_eq!(rotation, 90);
+    assert_eq!(render_revision, 1);
 }
 
 #[tokio::test]
@@ -2338,12 +2806,14 @@ async fn batch_rotate_updates_all_photos() {
     assert_eq!(resp.status(), StatusCode::OK);
 
     for id in [id1, id2] {
-        let (rotation,): (i32,) = sqlx::query_as("SELECT rotation FROM photos WHERE id = ?")
+        let (rotation, render_revision): (i32, i64) =
+            sqlx::query_as("SELECT rotation, render_revision FROM photos WHERE id = ?")
             .bind(id)
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(rotation, 270);
+        assert_eq!(render_revision, 1);
     }
 }
 

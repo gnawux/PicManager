@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, config::Config, face, metadata, storage, importer, dedup};
+use picmanager::{activities, album, apple, config::Config, face, metadata, migration, storage, importer, dedup};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -67,6 +67,82 @@ enum Command {
     Photos {
         #[command(subcommand)]
         action: PhotosAction,
+    },
+    /// 检查和迁移现有照片目录
+    Migrate {
+        #[command(subcommand)]
+        action: MigrateAction,
+    },
+    /// Apple Photos inventory and synchronization
+    Apple {
+        #[command(subcommand)]
+        action: AppleAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AppleAction {
+    /// Ingest a complete metadata-only inventory produced by photobridge
+    Inventory {
+        file: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Ingest a complete incremental change batch produced by photobridge
+    Changes {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify and commit a completed PhotoBridge rendition package
+    CommitPackage {
+        #[arg(long)]
+        source_id: i64,
+        package: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum MigrateAction {
+    /// 只读检查数据库、照片计数和文件完整性
+    Inspect {
+        /// 输出 JSON，便于保存迁移前后的基线
+        #[arg(long)]
+        json: bool,
+        /// 跳过逐个照片文件存在性检查
+        #[arg(long)]
+        skip_files: bool,
+    },
+    /// 为现有 photos 记录建立兼容的本地来源和文件版本目录
+    BackfillLocal {
+        /// 只报告将要创建的目录记录，不写数据库
+        #[arg(long)]
+        dry_run: bool,
+        /// 输出 JSON 报告
+        #[arg(long)]
+        json: bool,
+    },
+    /// 验证现有照片与新资产目录是否完整一致
+    Verify {
+        /// 输出 JSON 报告
+        #[arg(long)]
+        json: bool,
+        /// 跳过逐个照片文件存在性检查
+        #[arg(long)]
+        skip_files: bool,
+    },
+    /// 显示最近的迁移执行记录
+    Report {
+        /// 最多显示的记录数
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// 输出 JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -244,6 +320,152 @@ async fn main() -> anyhow::Result<()> {
         Command::Photos { action } => match action {
             PhotosAction::BackfillTimezones { dry_run } => {
                 backfill_timezones(&pool, dry_run).await?;
+            }
+        },
+        Command::Migrate { action } => match action {
+            MigrateAction::Inspect { json, skip_files } => {
+                let report = migration::inspect(&pool, !skip_files).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("schema version       : {}", report.schema_version);
+                    println!("photos               : {}", report.total_photos);
+                    for (status, count) in &report.status_counts {
+                        println!("  {status:<18} : {count}");
+                    }
+                    println!(
+                        "active counter        : {} (actual {}, {})",
+                        report.recorded_active_photos,
+                        report.active_photos,
+                        if report.active_count_matches { "ok" } else { "MISMATCH" },
+                    );
+                    println!("duplicate SHA groups : {}", report.duplicate_sha_groups);
+                    println!("foreign key errors   : {}", report.foreign_key_violations);
+                    println!("SQLite integrity     : {}", report.sqlite_integrity);
+                    if report.checked_files {
+                        println!("missing files        : {}", report.missing_files);
+                        for path in &report.missing_file_samples {
+                            println!("  missing: {path}");
+                        }
+                    } else {
+                        println!("missing files        : not checked");
+                    }
+                    println!("result               : {}", if report.is_healthy() { "healthy" } else { "issues found" });
+                }
+                if !report.is_healthy() {
+                    std::process::exit(2);
+                }
+            }
+            MigrateAction::BackfillLocal { dry_run, json } => {
+                let report = migration::backfill_legacy_local(&pool, dry_run).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("legacy photos       : {}", report.total_photos);
+                    println!("existing assets     : {}", report.existing_assets);
+                    println!("existing sources    : {}", report.existing_sources);
+                    println!("existing variants   : {}", report.existing_variants);
+                    if dry_run {
+                        println!("mode                : dry-run (no changes written)");
+                        println!("assets to create    : {}", report.total_photos - report.existing_assets);
+                    } else {
+                        println!("created assets      : {}", report.created_assets);
+                        println!("created sources     : {}", report.created_sources);
+                        println!("created variants    : {}", report.created_variants);
+                        println!("created links       : {}", report.created_links);
+                        println!("migration run       : {}", report.migration_run_id.unwrap_or_default());
+                    }
+                }
+            }
+            MigrateAction::Verify { json, skip_files } => {
+                let report = migration::verify_catalog(&pool, !skip_files).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("catalog assets          : {}", report.total_assets);
+                    println!("linked assets           : {}", report.linked_assets);
+                    println!("photos without assets   : {}", report.photos_without_assets);
+                    println!("assets without photos   : {}", report.assets_without_photos);
+                    println!("legacy sources          : {}", report.legacy_sources);
+                    println!("photos without sources  : {}", report.photos_without_legacy_sources);
+                    println!("orphan legacy sources   : {}", report.legacy_sources_without_assets);
+                    println!("variants                : {}", report.total_variants);
+                    println!("assets without primary  : {}", report.assets_without_primary_variants);
+                    println!("conflicting links       : {}", report.conflicting_links);
+                    println!("catalog result          : {}", if report.is_healthy() { "healthy" } else { "issues found" });
+                }
+                if !report.is_healthy() {
+                    std::process::exit(2);
+                }
+            }
+            MigrateAction::Report { limit, json } => {
+                let runs = migration::list_migration_runs(&pool, limit).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&runs)?);
+                } else if runs.is_empty() {
+                    println!("no migration runs recorded");
+                } else {
+                    for run in runs {
+                        println!(
+                            "#{:<5} {:<28} {:<10} {}",
+                            run.id,
+                            run.kind,
+                            run.status,
+                            run.finished_at.as_deref().or(run.started_at.as_deref()).unwrap_or(&run.created_at),
+                        );
+                        if let Some(error) = run.error {
+                            println!("        error: {error}");
+                        }
+                    }
+                }
+            }
+        },
+        Command::Apple { action } => match action {
+            AppleAction::Inventory { file, dry_run, json } => {
+                let report = apple::ingest_inventory(&pool, &file, dry_run).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("Photos assets      : {}", report.total_assets);
+                    println!("exact legacy links : {}", report.exact_links);
+                    println!("ambiguous links    : {}", report.ambiguous_links);
+                    println!("review candidates  : {}", report.review_candidates);
+                    println!("queued for export  : {}", report.queued_assets);
+                    println!("policy excluded    : {}", report.excluded_assets);
+                    println!("now missing        : {}", report.missing_assets);
+                    println!("mode               : {}", if dry_run { "dry-run" } else { "committed" });
+                }
+            }
+            AppleAction::Changes { file, json } => {
+                let report = apple::ingest_changes(&pool, &file).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("changed assets     : {}", report.changed_assets);
+                    println!("removed assets     : {}", report.removed_assets);
+                    println!("exact legacy links : {}", report.exact_links);
+                    println!("review candidates  : {}", report.review_candidates);
+                    println!("queued work        : {}", report.queued_assets);
+                    println!("sync job           : {}", report.job_id);
+                }
+            }
+            AppleAction::CommitPackage { source_id, package, json } => {
+                let result = apple::commit_rendition_package(&pool, source_id, &package).await?;
+                if result.derived_invalidated {
+                    face::job::reanalyze_one_photo(&pool, result.photo_id).await;
+                }
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&result)?);
+                } else {
+                    println!("source             : {}", result.source_id);
+                    println!("photo              : {}", result.photo_id);
+                    println!("asset              : {}", result.asset_id);
+                    println!("original variant   : {}", result.original_variant_id);
+                    println!("current variant    : {}", result.current_variant_id.map(|id| id.to_string()).unwrap_or_else(|| "none".into()));
+                    println!("master variant     : {}", result.master_variant_id);
+                    println!("display variant    : {}", result.display_variant_id);
+                    println!("display revision   : {}", result.display_revision);
+                }
             }
         },
     }

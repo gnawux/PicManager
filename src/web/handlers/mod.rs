@@ -1,4 +1,5 @@
 pub mod activities;
+pub mod apple;
 pub mod albums;
 pub mod animals;
 pub mod collections;
@@ -8,3 +9,5 @@ pub mod geo;
 pub mod import;
 pub mod people;
 pub mod photos;
+pub mod tasks;
+pub mod timeline;

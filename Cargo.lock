@@ -1622,6 +1622,7 @@ version = "1.0.1"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
  "chrono",
  "clap",
  "dirs",

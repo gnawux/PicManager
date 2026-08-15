@@ -91,7 +91,18 @@ pub(crate) async fn execute_job(
 /// Clears `people.cover_face_id` references first to satisfy FK constraints.
 /// Called both by `execute_job` and by the photo PATCH handler after a
 /// user-applied rotation/flip changes the display-space orientation.
-pub(crate) async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64) {
+pub async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64) {
+    let revision: Option<i64> = sqlx::query_scalar(
+        "SELECT render_revision FROM photos WHERE id = ? AND import_status = 'imported'",
+    )
+    .bind(photo_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten();
+    let Some(revision) = revision else { return };
+    crate::derived::mark_face_status(pool, photo_id, revision, "processing", None).await;
+
     // people.cover_face_id has no ON DELETE action → clear it before deleting
     // faces to avoid a FK violation that would silently leave stale data.
     sqlx::query(
@@ -110,7 +121,11 @@ pub(crate) async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64) {
         .ok();
 
     let path: Option<String> = sqlx::query_scalar(
-        "SELECT path FROM photos WHERE id = ? AND import_status = 'imported'",
+        "SELECT COALESCE(dv.path, p.path) \
+         FROM photos p \
+         LEFT JOIN assets a ON a.photo_id = p.id \
+         LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
+         WHERE p.id = ? AND p.import_status = 'imported'",
     )
     .bind(photo_id)
     .fetch_optional(pool)
@@ -118,11 +133,20 @@ pub(crate) async fn reanalyze_one_photo(pool: &SqlitePool, photo_id: i64) {
     .ok()
     .flatten();
 
-    let Some(path) = path else { return };
+    let Some(path) = path else {
+        crate::derived::mark_face_status(pool, photo_id, revision, "failed", Some("display path unavailable")).await;
+        return;
+    };
 
     match crate::image_open::open_image(std::path::Path::new(&path)) {
-        Ok(img) => { crate::face::analyze_one(pool, photo_id, &img).await; }
-        Err(_) => tracing::warn!("could not open {path} for face re-analysis after transform"),
+        Ok(img) => {
+            crate::face::analyze_one(pool, photo_id, &img).await;
+            crate::derived::mark_face_status(pool, photo_id, revision, "ready", None).await;
+        }
+        Err(error) => {
+            tracing::warn!("could not open {path} for face re-analysis after transform");
+            crate::derived::mark_face_status(pool, photo_id, revision, "failed", Some(&error.to_string())).await;
+        }
     }
 }
 

@@ -1,0 +1,31 @@
+{
+  "name": "picmanager-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/normalize-build.mjs",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "perf": "vitest run src/lib/timeline/performance.test.ts && node scripts/check-performance.mjs"
+  },
+  "dependencies": {
+    "@sveltejs/vite-plugin-svelte": "latest",
+    "svelte": "latest",
+    "vite": "latest"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "latest",
+    "@testing-library/svelte": "latest",
+    "@types/node": "latest",
+    "jsdom": "latest",
+    "svelte-check": "latest",
+    "terser": "^5.50.0",
+    "typescript": "latest",
+    "vitest": "latest"
+  },
+  "allowScripts": {
+    "fsevents@2.3.3": true
+  }
+}

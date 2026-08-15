@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use crate::web::AppState;
 use crate::web::handlers::photos::{PhotoRow, Pagination};
-use crate::face::{apply_transform, apply_exif_orientation};
+use crate::orientation::{DisplayTransform, OrientationMode};
 
 #[derive(Debug, Serialize)]
 pub struct PersonRow {
@@ -450,10 +450,14 @@ pub async fn get_face_thumb(
     State(state): State<AppState>,
     Path(face_id): Path<i64>,
 ) -> Response {
-    let row: Option<(i64, i64, i64, i64, String, i32, i32, i32, i32)> = sqlx::query_as(
-        "SELECT f.x, f.y, f.width, f.height, p.path,
-                p.exif_orientation, p.rotation, p.flip_h, p.flip_v
-         FROM faces f JOIN photos p ON p.id = f.photo_id
+    let row: Option<(i64, i64, i64, i64, String, i32, i32, i32, i32, String, Option<i64>)> = sqlx::query_as(
+        "SELECT f.x, f.y, f.width, f.height, COALESCE(dv.path, p.path), \
+                p.exif_orientation, p.rotation, p.flip_h, p.flip_v, \
+                COALESCE(vr.orientation_mode, 'legacy_unknown'), vr.display_orientation \
+         FROM faces f JOIN photos p ON p.id = f.photo_id \
+         LEFT JOIN assets a ON a.photo_id = p.id \
+         LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
+         LEFT JOIN variant_renditions vr ON vr.variant_id = dv.id
          WHERE f.id = ?",
     )
     .bind(face_id)
@@ -461,7 +465,7 @@ pub async fn get_face_thumb(
     .await
     .unwrap_or(None);
 
-    let Some((x, y, w, h, photo_path, exif_orient, rotation, flip_h, flip_v)) = row else {
+    let Some((x, y, w, h, photo_path, exif_orient, rotation, flip_h, flip_v, mode, display_orient)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -471,7 +475,16 @@ pub async fn get_face_thumb(
         if cache_path.exists() {
             return std::fs::read(&cache_path).map_err(|e| anyhow::anyhow!(e));
         }
-        let bytes = crop_face(&photo_path, exif_orient as u8, rotation, flip_h != 0, flip_v != 0, x, y, w, h)?;
+        let bytes = crop_face(
+            &photo_path,
+            OrientationMode::from_catalog(Some(&mode)),
+            display_orient.map(|value| value as u8),
+            exif_orient as u8,
+            rotation,
+            flip_h != 0,
+            flip_v != 0,
+            x, y, w, h,
+        )?;
         if let Some(parent) = cache_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -491,6 +504,8 @@ pub async fn get_face_thumb(
 
 fn crop_face(
     path: &str,
+    mode: OrientationMode,
+    display_orientation: Option<u8>,
     exif_orient: u8,
     rotation: i32,
     flip_h: bool,
@@ -505,13 +520,16 @@ fn crop_face(
 
     let p = std::path::Path::new(path);
     let img = crate::image_open::open_image(p)?;
-    let effective_orient = if crate::image_open::is_heic(p) {
-        crate::image_open::read_exif_orientation(p).unwrap_or(exif_orient)
-    } else {
-        exif_orient
-    };
-    let img = apply_exif_orientation(img, effective_orient);
-    let img = apply_transform(img, rotation, flip_h, flip_v);
+    let img = DisplayTransform::new(
+        mode,
+        display_orientation,
+        exif_orient,
+        p,
+        rotation,
+        flip_h,
+        flip_v,
+    )
+    .apply(img);
     let iw = img.width() as i64;
     let ih = img.height() as i64;
 
