@@ -1,6 +1,7 @@
 pub mod activities;
 pub mod album;
 pub mod animal;
+pub mod catalog;
 pub mod face;
 pub mod config;
 pub mod dedup;
