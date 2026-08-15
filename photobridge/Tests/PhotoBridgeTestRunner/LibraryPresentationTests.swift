@@ -24,5 +24,10 @@ func runLibraryPresentationTests() {
                 equals: .systemBrowser(configuration.serviceURL!)
             )
         }
+
+        test("joins the app switcher only while the library window is visible") {
+            try expect(appActivationMode(libraryWindowVisible: true), equals: .regular)
+            try expect(appActivationMode(libraryWindowVisible: false), equals: .accessory)
+        }
     }
 }

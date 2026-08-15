@@ -5,13 +5,14 @@ import PhotoBridgeLib
 @main
 struct PicManagerMacApp: App {
     @StateObject private var model = AppModel()
+    @StateObject private var activation = AppActivationController()
 
     var body: some Scene {
         MenuBarExtra("PicManager", systemImage: "photo.on.rectangle.angled") {
             MenuBarContent(model: model)
         }
         Window("PicManager", id: "library") {
-            LibraryShellView(model: model)
+            LibraryShellView(model: model, activation: activation)
                 .frame(minWidth: 900, minHeight: 600)
         }
         Settings {
@@ -61,22 +62,27 @@ private struct MenuBarContent: View {
 
 private struct LibraryShellView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var activation: AppActivationController
 
     var body: some View {
-        if model.onboardingRequired {
-            OnboardingAssistant(model: model)
-        } else {
-            LibraryPresentationView(model: model)
-                .task {
-                    if await model.ensureServiceRunning() {
-                        await model.refreshDashboard()
-                        model.startHealthMonitoring()
+        Group {
+            if model.onboardingRequired {
+                OnboardingAssistant(model: model)
+            } else {
+                LibraryPresentationView(model: model)
+                    .task {
+                        if await model.ensureServiceRunning() {
+                            await model.refreshDashboard()
+                            model.startHealthMonitoring()
+                        }
                     }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-                    model.stopService()
-                }
+                    .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
+                        model.stopService()
+                    }
+            }
         }
+        .onAppear { activation.setLibraryWindowVisible(true) }
+        .onDisappear { activation.setLibraryWindowVisible(false) }
     }
 }
 
