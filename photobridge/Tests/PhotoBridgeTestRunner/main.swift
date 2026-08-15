@@ -36,4 +36,16 @@ runInventoryRecordTests()
 
 runRenditionExportTests()
 
+runMacAppConfigurationTests()
+runOnboardingReadinessTests()
+runServiceDashboardTests()
+runServiceExecutableTests()
+runServiceLifecycleTests()
+runServiceMonitoringTests()
+runLibraryOwnershipTests()
+runLibraryPresentationTests()
+runAppleInventoryIngestTests()
+runLaunchAtLoginPreferenceTests()
+runDiagnosticExportTests()
+
 finish()

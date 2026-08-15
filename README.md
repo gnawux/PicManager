@@ -12,6 +12,7 @@ A family photo management tool. Import, de-duplicate, organise by time / locatio
 |--------|----------|---------|
 | `picmanager` | Rust | Main tool — import, dedup, serve Web UI, CLI |
 | `photobridge` | Swift | iCloud Photos companion — export from Photos.app and feed into picmanager |
+| `PicManager.app` | Swift + Rust/Web | macOS menu-bar product with embedded or browser UI |
 
 ---
 
@@ -56,6 +57,10 @@ codesign --force --sign - \
 
 ## Quick start
 
+For macOS daily use, build/install `PicManager.app`, choose a dedicated library folder,
+grant Full Photos access, and refresh Apple Photos inventory from the menu bar. See the
+**[Mac app guide](docs/MACOS_APP.md)**.
+
 ```bash
 # 1. Import a folder of photos (moves files into the library)
 picmanager import ~/Downloads/photos/
@@ -76,3 +81,5 @@ The modern interface is served at `/`; the previous interface remains available 
 `/legacy/` during the transition. Before upgrading an existing library, follow the
 **[upgrade guide](docs/UPGRADE_GUIDE.md)**. See **[docs/MANUAL.md](docs/MANUAL.md)**
 for the full CLI reference, REST API, configuration, and PhotoBridge options.
+
+Current documentation is indexed at **[docs/README.md](docs/README.md)**.

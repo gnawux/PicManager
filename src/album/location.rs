@@ -2,6 +2,7 @@ use reqwest::Client;
 use sqlx::SqlitePool;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::error::Result;
@@ -47,12 +48,28 @@ pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64> {
 /// Uses OSM Nominatim for reverse geocoding, with a local geocache to avoid
 /// redundant requests and to respect the 1 req/s rate limit.
 pub async fn group_by_location(pool: &SqlitePool) -> Result<()> {
+    group_by_location_with_progress(pool, Arc::new(GeoProgress::default())).await
+}
+
+#[derive(Default)]
+pub struct GeoProgress {
+    pub total: AtomicUsize,
+    pub processed: AtomicUsize,
+}
+
+pub type SharedGeoProgress = Arc<GeoProgress>;
+
+pub async fn group_by_location_with_progress(
+    pool: &SqlitePool,
+    progress: SharedGeoProgress,
+) -> Result<()> {
     let photos: Vec<(i64, f64, f64)> = sqlx::query_as(
         "SELECT id, gps_lat, gps_lon FROM photos
          WHERE import_status = 'imported' AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL",
     )
     .fetch_all(pool)
     .await?;
+    progress.total.store(photos.len(), Relaxed);
 
     if photos.is_empty() {
         return Ok(());
@@ -68,8 +85,10 @@ pub async fn group_by_location(pool: &SqlitePool) -> Result<()> {
     let mut session_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for (photo_id, lat, lon) in photos {
         let (city, _) = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache).await;
-        let Some(city) = city else { continue };
-        ensure_location_album(pool, photo_id, &city).await?;
+        if let Some(city) = city {
+            ensure_location_album(pool, photo_id, &city).await?;
+        }
+        progress.processed.fetch_add(1, Relaxed);
     }
     Ok(())
 }

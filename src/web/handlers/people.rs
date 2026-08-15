@@ -129,6 +129,7 @@ pub async fn get_person_photos(
          SELECT COUNT(DISTINCT f.photo_id)
          FROM person_faces pf
          JOIN faces f ON f.id = pf.face_id
+         JOIN photos ph ON ph.id = f.photo_id AND ph.import_status = 'imported'
          JOIN subtree s ON pf.person_id = s.id",
     )
     .bind(person_id)
@@ -147,6 +148,7 @@ pub async fn get_person_photos(
          JOIN faces f ON f.id = pf.face_id
          JOIN photos ph ON ph.id = f.photo_id
          JOIN subtree s ON pf.person_id = s.id
+         WHERE ph.import_status = 'imported'
          ORDER BY ph.taken_at DESC NULLS LAST, ph.id DESC
          LIMIT ? OFFSET ?",
     )
@@ -458,7 +460,7 @@ pub async fn get_face_thumb(
          LEFT JOIN assets a ON a.photo_id = p.id \
          LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
          LEFT JOIN variant_renditions vr ON vr.variant_id = dv.id
-         WHERE f.id = ?",
+         WHERE f.id = ? AND p.import_status = 'imported'",
     )
     .bind(face_id)
     .fetch_optional(&state.pool)

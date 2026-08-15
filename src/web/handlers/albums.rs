@@ -33,11 +33,11 @@ pub async fn list_albums(
 ) -> Result<Json<Vec<AlbumRow>>, StatusCode> {
     let rows: Vec<(i64, String, String, i64, Option<String>)> = sqlx::query_as(
         "SELECT a.id, a.name, a.kind,
-                COUNT(pa.photo_id) as photo_count,
+                COUNT(p.id) as photo_count,
                 MAX(p.taken_at) as latest_photo_at
          FROM albums a
          LEFT JOIN photo_albums pa ON pa.album_id = a.id
-         LEFT JOIN photos p ON p.id = pa.photo_id
+         LEFT JOIN photos p ON p.id = pa.photo_id AND p.import_status = 'imported'
          GROUP BY a.id ORDER BY a.kind, a.name",
     )
     .fetch_all(&state.pool)
@@ -69,7 +69,10 @@ pub async fn list_album_photos(
 
     let offset = (pag.page.saturating_sub(1)) as i64 * pag.per_page as i64;
     let total: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM photo_albums WHERE album_id = ?")
+        sqlx::query_as(
+            "SELECT COUNT(*) FROM photo_albums pa JOIN photos p ON p.id = pa.photo_id \
+             WHERE pa.album_id = ? AND p.import_status = 'imported'",
+        )
             .bind(album_id)
             .fetch_one(&state.pool)
             .await
@@ -79,7 +82,7 @@ pub async fn list_album_photos(
     let sql = format!(
         "SELECT p.id, p.path, p.taken_at, p.camera
          FROM photos p JOIN photo_albums pa ON pa.photo_id = p.id
-         WHERE pa.album_id = ?
+         WHERE pa.album_id = ? AND p.import_status = 'imported'
          ORDER BY p.taken_at {dir} NULLS LAST, p.id {dir}
          LIMIT ? OFFSET ?"
     );

@@ -69,6 +69,53 @@ async fn get_import_status_returns_200() {
 }
 
 #[tokio::test]
+async fn health_api_returns_structured_service_and_job_state() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/health?deep=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "healthy");
+    assert_eq!(json["sqlite_quick_check"], "ok");
+    assert!(json["schema_version"].as_i64().unwrap() >= 26);
+    assert!(json["reconciliation"].is_object());
+}
+
+#[tokio::test]
+async fn versioned_service_health_diagnostics_and_tasks_contracts_are_available() {
+    let app = test_app().await;
+    for (uri, expected_field) in [
+        ("/api/v1/service", "api_version"),
+        ("/api/v1/metrics", "queued"),
+        ("/api/v1/health", "status"),
+        ("/api/v1/diagnostics", "reconciliation"),
+        ("/api/v1/tasks", "tasks"),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder().uri(uri).body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{uri}");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(!json[expected_field].is_null(), "{uri} missing {expected_field}");
+        if uri == "/api/v1/service" {
+            assert_eq!(json["api_version"], "v1");
+            assert_eq!(json["local_trusted_only"], true);
+        }
+    }
+}
+
+#[tokio::test]
 async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
     let (app, pool, _tmp) = test_app_with_pool().await;
     let failed_id: i64 = sqlx::query_scalar(
@@ -131,6 +178,55 @@ async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
     let body = axum::body::to_bytes(missing.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["error"]["code"], "task_not_found");
+}
+
+#[tokio::test]
+async fn task_api_exposes_and_controls_application_jobs_without_id_collisions() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO application_jobs \
+         (kind, payload_json, status, max_attempts, attempt_count, error_code, error_message, finished_at) \
+         VALUES ('test_control', '{}', 'failed', 1, 1, 'scan_failed', 'scan failed', datetime('now')) \
+         RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let public_id = -job_id;
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/tasks?source=application&status=failed")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["tasks"][0]["id"], public_id);
+    assert_eq!(json["tasks"][0]["source"], "application");
+
+    let retry = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{public_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(retry.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "queued");
+
+    let cancel = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{public_id}/cancel"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(cancel.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "cancelled");
+
+    let conflict = app.oneshot(
+        Request::builder().uri(format!("/api/tasks/{public_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
 }
 
 #[tokio::test]
@@ -334,6 +430,72 @@ async fn get_photo_faces_empty_returns_empty_array() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert!(json.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn deleted_photos_are_hidden_from_browse_and_derived_media_apis() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    sqlx::query(
+        "INSERT INTO photos (id, path, sha256, format, import_status) \
+         VALUES (41, '/tmp/deleted.jpg', 'deleted-lifecycle', 'jpeg', 'deleted')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let album_id: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('Hidden', 'manual') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (41, ?)")
+        .bind(album_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO animals (photo_id, species, confidence, x, y, width, height) \
+         VALUES (41, 'cat', 0.9, 0, 0, 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO faces (photo_id, x, y, width, height) VALUES (41, 0, 0, 1, 1)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    for uri in [
+        "/api/photos/41",
+        "/api/photos/41/thumb",
+        "/api/photos/41/file",
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder().uri(uri).body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "{uri}");
+    }
+    for uri in [
+        format!("/api/albums/{album_id}/photos"),
+        "/api/animals/species".into(),
+        "/api/photos/41/animals".into(),
+        "/api/photos/41/faces".into(),
+    ] {
+        let response = app.clone().oneshot(
+            Request::builder().uri(uri).body(Body::empty()).unwrap(),
+        ).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        if json.is_array() {
+            assert!(json.as_array().unwrap().is_empty());
+        } else {
+            assert_eq!(json["total"], 0);
+            assert!(json["photos"].as_array().unwrap().is_empty());
+        }
+    }
 }
 
 #[tokio::test]

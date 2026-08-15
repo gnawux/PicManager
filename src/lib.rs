@@ -1,5 +1,6 @@
 pub mod activities;
 pub mod album;
+pub mod application;
 pub mod apple;
 pub mod animal;
 pub mod catalog;
@@ -10,6 +11,7 @@ pub mod derived;
 pub mod error;
 pub mod image_open;
 pub mod importer;
+pub mod jobs;
 pub mod metadata;
 pub mod migration;
 pub mod orientation;

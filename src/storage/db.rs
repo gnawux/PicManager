@@ -1,13 +1,31 @@
-use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{SqlitePool, sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous}};
 use std::str::FromStr;
+use std::time::Duration;
 use crate::error::Result;
 
 pub async fn connect(db_url: &str) -> Result<SqlitePool> {
+    connect_with_settings(db_url, 8, Duration::from_secs(5)).await
+}
+
+pub async fn connect_with_settings(
+    db_url: &str,
+    max_connections: u32,
+    busy_timeout: Duration,
+) -> Result<SqlitePool> {
     let opts = SqliteConnectOptions::from_str(db_url)?
         .create_if_missing(true)
-        .foreign_keys(true);
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        .synchronous(SqliteSynchronous::Normal)
+        .busy_timeout(busy_timeout);
 
-    let pool = SqlitePool::connect_with(opts).await?;
+    let pool = SqlitePoolOptions::new()
+        .min_connections(1)
+        .max_connections(max_connections.clamp(1, 64))
+        .acquire_timeout(busy_timeout.max(Duration::from_secs(1)))
+        .connect_with(opts)
+        .await?;
+    sqlx::query("SELECT 1").execute(&pool).await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }
@@ -37,6 +55,31 @@ mod tests {
             .await
             .expect("photos table should exist");
         assert_eq!(row.0, 0);
+    }
+
+    #[tokio::test]
+    async fn configured_connections_enable_wal_foreign_keys_and_busy_timeout() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}", directory.path().join("catalog.db").display());
+        let pool = connect_with_settings(&url, 3, Duration::from_millis(1_750))
+            .await
+            .unwrap();
+        let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let foreign_keys: i64 = sqlx::query_scalar("PRAGMA foreign_keys")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let busy_timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(journal, "wal");
+        assert_eq!(foreign_keys, 1);
+        assert_eq!(busy_timeout, 1_750);
+        assert!(pool.size() >= 1);
     }
 
     #[tokio::test]
@@ -79,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn all_tables_exist() {
         let pool = test_pool().await;
-        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs", "sync_jobs", "sync_items", "provider_checkpoints", "variant_renditions", "asset_display_revisions", "derived_media_state"] {
+        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs", "sync_jobs", "sync_items", "provider_checkpoints", "variant_renditions", "asset_display_revisions", "derived_media_state", "application_jobs", "application_job_attempts", "application_job_events"] {
             let row: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
             )

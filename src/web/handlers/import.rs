@@ -1,11 +1,12 @@
+use crate::application::{ImportCommand, RequestContext};
+use crate::jobs::{self, Job};
+use crate::web::AppState;
 use axum::{
-    extract::{Query, State},
-    http::StatusCode,
     Json,
+    extract::{Extension, Query, State},
+    http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
-use crate::web::AppState;
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ImportStatus {
@@ -17,8 +18,6 @@ pub struct ImportStatus {
     pub source_dir: Option<String>,
 }
 
-pub type SharedImportStatus = Arc<Mutex<ImportStatus>>;
-
 #[derive(Debug, Deserialize)]
 pub struct ImportRequest {
     pub dir: String,
@@ -28,50 +27,49 @@ pub struct ImportRequest {
 
 pub async fn start_import(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Json(req): Json<ImportRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let mut status = state.import_status.lock().unwrap();
-    if status.running {
+    let jobs = jobs::list(state.application.pool(), None, Some("import"), None, 100)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if jobs.iter().any(|job| matches!(job.status.as_str(), "queued" | "running" | "retry_wait")) {
         return Err(StatusCode::CONFLICT);
     }
-    *status = ImportStatus {
-        running: true,
-        source_dir: Some(req.dir.clone()),
-        ..Default::default()
-    };
-    drop(status);
+    let command = ImportCommand::directory(&req.dir, req.copy);
+    let queued = state.application.imports().enqueue(&context, command)
+        .await
+        .map_err(|error| {
+            tracing::error!("failed to enqueue import: {error}");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
-    let pool = state.pool.clone();
-    let import_status = state.import_status.clone();
-    let dir = std::path::PathBuf::from(req.dir.clone());
-    let library_path = state.config.library_path.clone();
-    let copy_only = req.copy;
-
-    tokio::spawn(async move {
-        let result = crate::importer::import_dir(&pool, &dir, &library_path, copy_only).await;
-        let mut status = import_status.lock().unwrap();
-        match result {
-            Ok(summary) => {
-                status.total = summary.total;
-                status.imported = summary.imported;
-                status.skipped = summary.skipped;
-                status.errors = summary.errors;
-            }
-            Err(e) => {
-                tracing::error!("import failed: {e}");
-                status.errors += 1;
-            }
-        }
-        status.running = false;
-    });
-
-    Ok(Json(serde_json::json!({ "status": "started", "dir": req.dir })))
+    Ok(Json(
+        serde_json::json!({ "status": "started", "dir": req.dir, "job_id": queued.job.id }),
+    ))
 }
 
 pub async fn get_import_status(
     State(state): State<AppState>,
     Query(_): Query<std::collections::HashMap<String, String>>,
 ) -> Json<ImportStatus> {
-    let status = state.import_status.lock().unwrap().clone();
-    Json(status)
+    let latest = jobs::list(state.application.pool(), None, Some("import"), None, 1)
+        .await
+        .ok()
+        .and_then(|mut jobs| jobs.pop());
+    Json(latest.as_ref().map(status_from_job).unwrap_or_default())
+}
+
+fn status_from_job(job: &Job) -> ImportStatus {
+    let command = serde_json::from_str::<ImportCommand>(&job.payload_json).ok();
+    let result = job.result_json.as_deref()
+        .and_then(|value| serde_json::from_str::<crate::jobs::handlers::ImportJobResult>(value).ok());
+    ImportStatus {
+        running: matches!(job.status.as_str(), "queued" | "running" | "retry_wait"),
+        total: result.as_ref().map_or(job.progress_total.unwrap_or(0).max(0) as usize, |value| value.total),
+        imported: result.as_ref().map_or(0, |value| value.imported),
+        skipped: result.as_ref().map_or(0, |value| value.skipped),
+        errors: result.as_ref().map_or(usize::from(job.status == "failed"), |value| value.errors),
+        source_dir: command.map(|value| value.source_dir.to_string_lossy().into_owned()),
+    }
 }

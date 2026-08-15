@@ -59,28 +59,32 @@ pub async fn list_groups(pool: &SqlitePool) -> Result<Vec<DedupGroup>> {
 
 /// Mark `keep_ids` as kept, soft-delete the rest, resolve the group.
 pub async fn resolve(pool: &SqlitePool, group_id: i64, keep_ids: &[i64]) -> Result<()> {
+    let mut tx = pool.begin().await?;
     // Verify group exists and is pending
     let row: Option<(String,)> =
         sqlx::query_as("SELECT status FROM dedup_groups WHERE id = ?")
             .bind(group_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *tx)
             .await?;
     match row {
         None => return Err(crate::error::AppError::NotFound(format!("dedup group {group_id}"))),
-        Some((s,)) if s != "pending" => return Ok(()), // already resolved
+        Some((s,)) if s != "pending" => {
+            tx.commit().await?;
+            return Ok(());
+        }
         _ => {}
     }
 
     // Mark keep flags on members
     sqlx::query("UPDATE dedup_members SET keep = 0 WHERE group_id = ?")
         .bind(group_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     for id in keep_ids {
         sqlx::query("UPDATE dedup_members SET keep = 1 WHERE group_id = ? AND photo_id = ?")
             .bind(group_id)
             .bind(id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
 
@@ -92,7 +96,7 @@ pub async fn resolve(pool: &SqlitePool, group_id: i64, keep_ids: &[i64]) -> Resu
          )",
     )
     .bind(group_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -101,15 +105,16 @@ pub async fn resolve(pool: &SqlitePool, group_id: i64, keep_ids: &[i64]) -> Resu
          ) WHERE id = 1",
     )
     .bind(group_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     // Mark group resolved
     sqlx::query("UPDATE dedup_groups SET status = 'resolved' WHERE id = ?")
         .bind(group_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -228,6 +233,38 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count.0, 1, "soft-deleting one photo should decrement by 1");
+    }
+
+    #[tokio::test]
+    async fn resolve_rolls_back_every_mutation_when_finalization_fails() {
+        let pool = test_pool().await;
+        let (group_id, keep_id, delete_id) = setup_group(&pool).await;
+        sqlx::query(
+            "CREATE TEMP TRIGGER reject_dedup_resolution \
+             BEFORE UPDATE OF status ON dedup_groups \
+             WHEN NEW.status = 'resolved' BEGIN SELECT RAISE(ABORT, 'test failure'); END",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(resolve(&pool, group_id, &[keep_id]).await.is_err());
+        let statuses: Vec<String> = sqlx::query_scalar(
+            "SELECT import_status FROM photos WHERE id IN (?, ?) ORDER BY id",
+        )
+        .bind(keep_id)
+        .bind(delete_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let group_status: String =
+            sqlx::query_scalar("SELECT status FROM dedup_groups WHERE id = ?")
+                .bind(group_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(statuses, vec!["imported", "imported"]);
+        assert_eq!(group_status, "pending");
     }
 
     #[tokio::test]

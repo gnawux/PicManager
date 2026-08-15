@@ -1,6 +1,6 @@
-use axum::{extract::{Query, State}, http::StatusCode, Json};
+use axum::{extract::{Extension, Query, State}, http::StatusCode, Json};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::Ordering;
+use crate::application::RequestContext;
 use crate::web::AppState;
 
 #[derive(Debug, Serialize)]
@@ -160,8 +160,14 @@ pub async fn get_geo_photos(
 
 pub async fn start_regeocode(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    if state.geo_running.swap(true, Ordering::SeqCst) {
+    let active = crate::jobs::list(&state.pool, None, Some("geocode"), None, 100)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .any(|job| matches!(job.status.as_str(), "queued" | "running" | "retry_wait"));
+    if active {
         return Ok(Json(serde_json::json!({"status": "already_running"})));
     }
 
@@ -199,23 +205,20 @@ pub async fn start_regeocode(
     )
     .fetch_one(&state.pool)
     .await
-    .map_err(|_| {
-        state.geo_running.store(false, Ordering::SeqCst);
-        StatusCode::INTERNAL_SERVER_ERROR
-    })?;
-
-    let pool = state.pool.clone();
-    let running = state.geo_running.clone();
-    tokio::spawn(async move {
-        let _ = crate::album::group_by_location(&pool).await;
-        running.store(false, Ordering::SeqCst);
-    });
-
-    Ok(Json(serde_json::json!({"status": "started", "count": count})))
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let queued = crate::jobs::handlers::enqueue_geocode(&state.application, &context)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({"status": "started", "count": count, "job_id": queued.job.id})))
 }
 
 pub async fn get_regeocode_status(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {
-    Json(serde_json::json!({"running": state.geo_running.load(Ordering::SeqCst)}))
+    let running = crate::jobs::list(&state.pool, None, Some("geocode"), None, 100)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .any(|job| matches!(job.status.as_str(), "queued" | "running" | "retry_wait"));
+    Json(serde_json::json!({"running": running}))
 }

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use picmanager::{activities, album, apple, config::Config, face, metadata, migration, storage, importer, dedup};
+use picmanager::{activities, album, application::{Application, CallerKind, ImportCommand}, apple, config::Config, face, metadata, migration, storage, importer, jobs};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering::Relaxed;
 
@@ -73,6 +73,20 @@ enum Command {
         #[command(subcommand)]
         action: MigrateAction,
     },
+    /// 创建、校验和恢复 SQLite 目录备份
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
+    },
+    /// 输出数据库、任务和可选文件系统诊断
+    Diagnostics {
+        /// 检查媒体、variant、intent 和派生缓存
+        #[arg(long)]
+        deep: bool,
+        /// 输出 JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Apple Photos inventory and synchronization
     Apple {
         #[command(subcommand)]
@@ -144,6 +158,27 @@ enum MigrateAction {
         #[arg(long)]
         json: bool,
     },
+    /// 检查目录、媒体文件、暂存写入和派生缓存的一致性
+    Reconcile {
+        /// 修复可安全重建的目录状态；不会删除原始媒体
+        #[arg(long)]
+        repair: bool,
+        /// 输出 JSON 报告
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BackupAction {
+    /// 在线创建一致的数据库快照
+    Create,
+    /// 列出当前保留的备份
+    List,
+    /// 校验备份完整性
+    Verify { path: PathBuf },
+    /// 恢复到一个尚不存在的新数据库文件
+    Restore { backup: PathBuf, target: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -219,21 +254,44 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load();
 
     std::fs::create_dir_all(&config.library_path)?;
-    let pool = storage::connect(&config.db_url()).await?;
+    let _service_ownership = if matches!(&cli.command, Command::Serve) {
+        Some(storage::LibraryServiceOwnership::acquire(&config.library_path)?)
+    } else {
+        None
+    };
+    let pool = storage::connect_with_settings(
+        &config.db_url(),
+        config.database_max_connections,
+        std::time::Duration::from_millis(config.database_busy_timeout_ms),
+    ).await?;
+    let application = Application::new(pool.clone(), config.clone());
 
     match cli.command {
         Command::Import { dir, copy, batch_size, log, dry_run } => {
-            import_with_progress(&pool, &dir, &config.library_path, copy, batch_size, log.as_deref(), dry_run).await?;
+            import_with_progress(&application, &dir, copy, batch_size, log.as_deref(), dry_run).await?;
         }
         Command::Dedup { full } => {
-            let n = if full {
-                dedup::scan_full(&pool).await?
-            } else {
-                dedup::scan(&pool).await?
+            let context = application.request_context(CallerKind::Cli);
+            let queued = jobs::handlers::enqueue_dedup_scan(&application, &context, full).await?;
+            let worker = jobs::WorkerRuntime::new(
+                pool.clone(), jobs::handlers::registry(application.clone()),
+                jobs::WorkerConfig::default(), "cli-dedup-worker",
+            ).start();
+            let completed = loop {
+                let job = jobs::get(&pool, queued.job.id).await?;
+                if matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled") {
+                    break job;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             };
+            worker.shutdown().await;
+            if completed.status != "succeeded" {
+                anyhow::bail!(completed.error_message.unwrap_or_else(|| "去重扫描失败".into()));
+            }
+            let n = completed.result()?.and_then(|value| value["groups_created"].as_u64()).unwrap_or(0);
             println!("扫描完成，发现 {n} 个新重复组");
 
-            let groups = dedup::list_groups(&pool).await?;
+            let groups = application.dedup().list(&context).await?;
             if groups.is_empty() {
                 println!("没有待确认的重复组，无需操作");
             } else {
@@ -246,6 +304,9 @@ async fn main() -> anyhow::Result<()> {
             println!("host         : {}", config.host);
             println!("port         : {}", config.port);
             println!("thumb_size   : {}", config.thumb_size);
+            println!("db_pool_size : {}", config.database_max_connections);
+            println!("db_busy_ms   : {}", config.database_busy_timeout_ms);
+            println!("backup_keep  : {}", config.backup_retention);
             let cfg_file = dirs::config_dir()
                 .map(|p| p.join("picmanager/config.toml").display().to_string())
                 .unwrap_or_else(|| "(unknown)".to_string());
@@ -270,21 +331,23 @@ async fn main() -> anyhow::Result<()> {
                 } else {
                     Some(photo_ids)
                 };
-                let job_id = face::job::run_job(&pool, scope).await?;
+                let context = application.request_context(CallerKind::Cli);
+                let queued = jobs::handlers::enqueue_face_analysis(&application, &context, scope).await?;
+                let job_id = queued.job.id;
+                let worker = jobs::WorkerRuntime::new(
+                    pool.clone(), jobs::handlers::registry(application.clone()),
+                    jobs::WorkerConfig::default(), "cli-analysis-worker",
+                ).start();
                 println!("人脸分析任务已启动（job_id={job_id}），等待完成…");
-                // Poll until done
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                    let status: String =
-                        sqlx::query_scalar("SELECT status FROM face_jobs WHERE id = ?")
-                            .bind(job_id)
-                            .fetch_one(&pool)
-                            .await?;
-                    if status != "running" {
-                        println!("任务 {job_id} 完成：{status}");
+                    let job = jobs::get(&pool, job_id).await?;
+                    if matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled") {
+                        println!("任务 {job_id} 完成：{}", job.status);
                         break;
                     }
                 }
+                worker.shutdown().await;
             }
         },
         Command::Models { action } => match action {
@@ -296,7 +359,7 @@ async fn main() -> anyhow::Result<()> {
             }
         },
         Command::FillMissing { faces, geo } => {
-            fill_missing(&pool, faces, geo).await?;
+            fill_missing(&application, faces, geo).await?;
         }
         Command::Activities { action } => match action {
             ActivitiesAction::Import { path, dry_run } => {
@@ -419,7 +482,66 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
             }
+            MigrateAction::Reconcile { repair, json } => {
+                let report = storage::reconcile(&pool, &config, repair).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("missing photo files       : {}", report.missing_photo_files);
+                    println!("missing variant files     : {}", report.missing_variant_files);
+                    println!("invalid master pointers   : {}", report.invalid_master_pointers);
+                    println!("invalid display pointers  : {}", report.invalid_display_pointers);
+                    println!("incomplete file intents   : {}", report.incomplete_filesystem_intents);
+                    println!("missing ready thumbnails  : {}", report.missing_ready_thumbnails);
+                    println!("stale cache files         : {}", report.stale_cache_files);
+                    println!("repaired records          : {}", report.repaired_records);
+                    println!("removed cache files       : {}", report.removed_cache_files);
+                }
+            }
         },
+        Command::Backup { action } => match action {
+            BackupAction::Create => {
+                let report = storage::create_backup(
+                    &pool,
+                    &config.backup_dir(),
+                    config.backup_retention as usize,
+                ).await?;
+                println!("备份完成：{}（{} bytes，完整性 {}）", report.path.display(), report.bytes, report.integrity);
+            }
+            BackupAction::List => {
+                for path in storage::list_backups(&config.backup_dir())? {
+                    println!("{}", path.display());
+                }
+            }
+            BackupAction::Verify { path } => {
+                let report = storage::verify_backup(&path).await?;
+                println!("备份有效：{}（{} bytes）", report.path.display(), report.bytes);
+            }
+            BackupAction::Restore { backup, target } => {
+                let report = storage::restore_backup(&backup, &target).await?;
+                println!("恢复完成：{}（完整性 {}）", report.path.display(), report.integrity);
+            }
+        },
+        Command::Diagnostics { deep, json } => {
+            let report = storage::health_report(&pool, &config, deep).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("status          : {}", report.status);
+                println!("sqlite          : {}", report.sqlite_quick_check);
+                println!("journal_mode    : {}", report.journal_mode);
+                println!("schema_version  : {}", report.schema_version);
+                println!("jobs queued     : {}", report.application_jobs_queued);
+                println!("jobs running    : {}", report.application_jobs_running);
+                println!("jobs failed     : {}", report.application_jobs_failed);
+                println!("sync failed     : {}", report.sync_jobs_failed);
+                if let Some(reconciliation) = report.reconciliation {
+                    println!("missing media   : {}", reconciliation.missing_photo_files);
+                    println!("missing variants: {}", reconciliation.missing_variant_files);
+                    println!("pending intents : {}", reconciliation.incomplete_filesystem_intents);
+                }
+            }
+        }
         Command::Apple { action } => match action {
             AppleAction::Inventory { file, dry_run, json } => {
                 let report = apple::ingest_inventory(&pool, &file, dry_run).await?;
@@ -452,7 +574,24 @@ async fn main() -> anyhow::Result<()> {
             AppleAction::CommitPackage { source_id, package, json } => {
                 let result = apple::commit_rendition_package(&pool, source_id, &package).await?;
                 if result.derived_invalidated {
-                    face::job::reanalyze_one_photo(&pool, result.photo_id).await;
+                    let context = application.request_context(CallerKind::Cli);
+                    let correlation = context.request_id.to_string();
+                    jobs::handlers::enqueue_derived_maintenance(
+                        &application, &context, Some(vec![result.photo_id]),
+                    ).await?;
+                    let worker = jobs::WorkerRuntime::new(
+                        pool.clone(), jobs::handlers::registry(application.clone()),
+                        jobs::WorkerConfig::default(), "cli-derived-worker",
+                    ).start();
+                    loop {
+                        let active = jobs::list(&pool, None, None, None, 500).await?
+                            .into_iter()
+                            .any(|job| job.correlation_id.as_deref() == Some(&correlation)
+                                && matches!(job.status.as_str(), "queued" | "running" | "retry_wait"));
+                        if !active { break; }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                    worker.shutdown().await;
                 }
                 if json {
                     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -473,9 +612,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn import_with_progress(
-    pool: &sqlx::SqlitePool,
+    application: &Application,
     dir: &std::path::Path,
-    library_path: &std::path::Path,
     copy: bool,
     batch_size: Option<usize>,
     log_path: Option<&std::path::Path>,
@@ -483,33 +621,51 @@ async fn import_with_progress(
 ) -> anyhow::Result<()> {
     println!("从 {} 导入照片，扫描中…", dir.display());
 
-    if dry_run {
-        let progress = importer::SharedImportProgress::default();
-        let result = importer::import_dir_batch(
-            pool, dir, library_path, copy,
-            batch_size, log_path, true, progress,
-        ).await?;
-        println!(
-            "[dry-run] 目录 {} 个文件，将处理 {} 个（本批），剩余 {} 个待处理",
-            result.total_files,
-            result.summary.total,
-            result.remaining,
-        );
-        return Ok(());
-    }
-
     let progress = importer::SharedImportProgress::default();
-    let pool2 = pool.clone();
-    let dir2 = dir.to_path_buf();
-    let lib2 = library_path.to_path_buf();
+    let context = application.request_context(CallerKind::Cli);
     let progress2 = progress.clone();
-    let log2 = log_path.map(|p| p.to_path_buf());
-
+    let command = ImportCommand {
+        source_dir: dir.to_path_buf(), copy_only: copy, batch_size,
+        log_path: log_path.map(|path| path.to_path_buf()), dry_run,
+    };
+    let queued = application.imports().enqueue(&context, command).await?;
+    let pool = application.pool().clone();
+    let worker = jobs::WorkerRuntime::new(
+        pool.clone(),
+        jobs::handlers::registry(application.clone()),
+        jobs::WorkerConfig::default(),
+        "cli-worker",
+    ).start();
+    let job_id = queued.job.id;
     let handle = tokio::spawn(async move {
-        importer::import_dir_batch(
-            &pool2, &dir2, &lib2, copy,
-            batch_size, log2.as_deref(), false, progress2,
-        ).await
+        let result = loop {
+            let job = jobs::get(&pool, job_id).await?;
+            progress2.total.store(job.progress_total.unwrap_or(0).max(0) as usize, Relaxed);
+            progress2.processed.store(job.progress_completed.max(0) as usize, Relaxed);
+            match job.status.as_str() {
+                "succeeded" => {
+                    let value = job.result()?.ok_or_else(|| anyhow::anyhow!("导入任务缺少结果摘要"))?;
+                    let summary: jobs::handlers::ImportJobResult = serde_json::from_value(value)?;
+                    break Ok(importer::BatchResult {
+                        summary: importer::ImportSummary {
+                            total: summary.total,
+                            imported: summary.imported,
+                            skipped: summary.skipped,
+                            errors: summary.errors,
+                        },
+                        total_files: summary.total_files,
+                        remaining: summary.remaining,
+                    });
+                }
+                "failed" => break Err(anyhow::anyhow!(job.error_message.unwrap_or_else(|| "导入任务失败".into()))),
+                "cancelled" => break Err(anyhow::anyhow!("导入任务已取消")),
+                _ => tokio::time::sleep(std::time::Duration::from_millis(500)).await,
+            }
+        };
+        if !worker.shutdown().await {
+            tracing::warn!("CLI import worker did not stop within the shutdown timeout");
+        }
+        result
     });
 
     let start = std::time::Instant::now();
@@ -579,6 +735,15 @@ async fn import_with_progress(
     }
 
     let batch_result = handle.await??;
+    if dry_run {
+        println!(
+            "[dry-run] 目录 {} 个文件，将处理 {} 个（本批），剩余 {} 个待处理",
+            batch_result.total_files,
+            batch_result.summary.total,
+            batch_result.remaining,
+        );
+        return Ok(());
+    }
     let elapsed = start.elapsed();
     let remaining_note = if batch_result.remaining > 0 {
         format!("（剩余 {} 张未处理）", batch_result.remaining)
@@ -599,10 +764,11 @@ async fn import_with_progress(
 }
 
 async fn fill_missing(
-    pool: &sqlx::SqlitePool,
+    application: &Application,
     only_faces: bool,
     only_geo: bool,
 ) -> anyhow::Result<()> {
+    let pool = application.pool();
     // No flags = fill both
     let fill_faces = only_faces || (!only_faces && !only_geo);
     let fill_geo = only_geo || (!only_faces && !only_geo);
@@ -633,27 +799,29 @@ async fn fill_missing(
     }
 
     // ── Phase 2: start tasks ──────────────────────────────────────────────────
+    let context = application.request_context(CallerKind::Cli);
     let face_job_id: Option<i64> = if fill_faces && !face_ids.is_empty() {
-        Some(face::job::run_job(pool, Some(face_ids)).await?)
+        Some(jobs::handlers::enqueue_face_analysis(application, &context, Some(face_ids)).await?.job.id)
     } else {
         if fill_faces { println!("  人脸：所有照片已分析，跳过。"); }
         None
     };
 
-    let pool2 = pool.clone();
-    let geo_handle: Option<tokio::task::JoinHandle<_>> = if fill_geo && geo_total > 0 {
-        Some(tokio::spawn(async move {
-            album::group_by_location(&pool2).await
-        }))
+    let geo_job_id: Option<i64> = if fill_geo && geo_total > 0 {
+        Some(jobs::handlers::enqueue_geocode(application, &context).await?.job.id)
     } else {
         if fill_geo { println!("  地理：所有 GPS 照片已编码，跳过。"); }
         None
     };
 
-    if face_job_id.is_none() && geo_handle.is_none() {
+    if face_job_id.is_none() && geo_job_id.is_none() {
         println!("无需补全，退出。");
         return Ok(());
     }
+    let worker = jobs::WorkerRuntime::new(
+        pool.clone(), jobs::handlers::registry(application.clone()),
+        jobs::WorkerConfig::default(), "cli-fill-worker",
+    ).start();
 
     // ── Phase 3: progress loop ────────────────────────────────────────────────
     let start = std::time::Instant::now();
@@ -668,17 +836,17 @@ async fn fill_missing(
         let face_done = match face_job_id {
             None => true,
             Some(id) => {
-                let status: String =
-                    sqlx::query_scalar("SELECT status FROM face_jobs WHERE id = ?")
-                        .bind(id)
-                        .fetch_one(pool)
-                        .await
-                        .unwrap_or_else(|_| "running".to_string());
-                status != "running"
+                let status = jobs::get(pool, id).await.map(|job| job.status).unwrap_or_else(|_| "running".into());
+                matches!(status.as_str(), "succeeded" | "failed" | "cancelled")
             }
         };
 
-        let geo_done = geo_handle.as_ref().map_or(true, |h| h.is_finished());
+        let geo_done = match geo_job_id {
+            None => true,
+            Some(id) => jobs::get(pool, id).await
+                .map(|job| matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled"))
+                .unwrap_or(false),
+        };
 
         let now = std::time::Instant::now();
         if now.duration_since(last_print) >= print_interval || (face_done && geo_done) {
@@ -689,13 +857,9 @@ async fn fill_missing(
             let mut parts: Vec<String> = Vec::new();
 
             if let Some(id) = face_job_id {
-                let (processed, total): (i64, Option<i64>) =
-                    sqlx::query_as("SELECT processed, total FROM face_jobs WHERE id = ?")
-                        .bind(id)
-                        .fetch_one(pool)
-                        .await
-                        .unwrap_or((0, None));
-                let t = total.unwrap_or(0);
+                let job = jobs::get(pool, id).await.ok();
+                let processed = job.as_ref().map_or(0, |job| job.progress_completed);
+                let t = job.and_then(|job| job.progress_total).unwrap_or(0);
                 let pct = if t > 0 { processed * 100 / t } else { 100 };
                 parts.push(format!("人脸：{processed}/{t} ({pct}%)"));
             }
@@ -725,12 +889,7 @@ async fn fill_missing(
     );
 
     if let Some(id) = face_job_id {
-        let processed: i64 =
-            sqlx::query_scalar("SELECT processed FROM face_jobs WHERE id = ?")
-                .bind(id)
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0);
+        let processed = jobs::get(pool, id).await.map_or(0, |job| job.progress_completed);
         let new_faces: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM faces f \
              JOIN photos p ON p.id = f.photo_id \
@@ -750,6 +909,8 @@ async fn fill_missing(
             "  地理：编码了 {encoded} 个新位置，{failed} 张无城市信息（已跳过），共 {geo_total} 张待处理"
         );
     }
+
+    worker.shutdown().await;
 
     Ok(())
 }
