@@ -6,6 +6,7 @@
   import PlacesView from './lib/places/PlacesView.svelte';
   import ActivitiesView from './lib/activities/ActivitiesView.svelte';
   import AppleSyncView from './lib/apple/AppleSyncView.svelte';
+  import TaskCenter from './lib/tasks/TaskCenter.svelte';
   import StatusBadge from './lib/components/StatusBadge.svelte';
   import TimelineView from './lib/timeline/TimelineView.svelte';
   import { createHashRouter, routes } from './lib/router';
@@ -80,6 +81,11 @@
         <div><p class="eyebrow">Apple Photos</p><h1 id="page-title">Apple 照片</h1><p class="subtitle">明确看见已同步、未同步和需要处理的每一项。</p></div>
       </section>
       <AppleSyncView {api} />
+    {:else if $router.id === 'tasks'}
+      <section class="page-heading" aria-labelledby="page-title">
+        <div><p class="eyebrow">Operations</p><h1 id="page-title">任务中心</h1><p class="subtitle">跟踪后台进度，并安全处理重复照片。</p></div>
+      </section>
+      <TaskCenter {api} />
     {:else}
       <section class="page-heading" aria-labelledby="page-title">
         <div>

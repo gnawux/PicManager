@@ -73,17 +73,56 @@ export interface TimelinePage {
 export interface TaskSummary {
   id: number;
   kind: string;
-  provider: string;
+  provider: string | null;
   status: string;
+  checkpoint_before: number[] | null;
+  checkpoint_after: number[] | null;
   total_items: number;
   completed_items: number;
   failed_items: number;
+  error: string | null;
   created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
 }
 
 export interface TaskPage {
   tasks: TaskSummary[];
-  next_cursor: number | null;
+  next_before_id: number | null;
+}
+
+export interface TaskItem {
+  id: number;
+  job_id: number;
+  source_id: number | null;
+  external_id: string;
+  operation: string;
+  status: string;
+  attempt_count: number;
+  max_attempts: number;
+  last_error: string | null;
+}
+
+export interface TaskDetail extends TaskSummary {
+  items: TaskItem[];
+}
+
+export interface DedupMember {
+  photo_id: number;
+  path: string;
+  filename: string;
+  taken_at: string | null;
+  camera: string | null;
+  width: number | null;
+  height: number | null;
+  keep: boolean;
+}
+
+export interface DedupGroup {
+  group_id: number;
+  status: string;
+  members: DedupMember[];
 }
 
 export interface AppleSourceSummary {

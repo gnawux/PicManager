@@ -16,6 +16,8 @@ import type {
   CollectionSummary,
   GeoHierarchy,
   GeoPoint,
+  DedupGroup,
+  TaskDetail,
   TaskPage,
   TimelinePage,
 } from './types';
@@ -93,6 +95,17 @@ export function createApiClient(options: ApiClientOptions = {}) {
     },
     tasks: {
       list: () => request<TaskPage>('/api/tasks?limit=50'),
+      get: (id: number) => request<TaskDetail>(`/api/tasks/${id}`),
+      retry: (id: number) => request<TaskDetail>(`/api/tasks/${id}/retry`, { method: 'POST' }),
+      cancel: (id: number) => request<TaskDetail>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
+    },
+    dedup: {
+      list: () => request<DedupGroup[]>('/api/dedup'),
+      resolve: (groupId: number, keep: number[]) => request<void>(`/api/dedup/${groupId}/resolve`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ keep }),
+      }),
     },
     apple: {
       sources: (status?: string, search?: string, beforeId?: number) => {

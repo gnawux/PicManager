@@ -135,4 +135,16 @@ describe('API client', () => {
     await client.apple.sources('failed', 'IMG 42');
     expect(fetcher.mock.calls[0][0]).toBe('/api/apple/sources?limit=100&status=failed&search=IMG+42');
   });
+
+  it('posts explicit keep ids when resolving duplicate groups', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(null, { status: 200 }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.dedup.resolve(4, [10, 12]);
+    expect(fetcher).toHaveBeenCalledWith('/api/dedup/4/resolve', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ keep: [10, 12] }),
+    }));
+  });
 });
