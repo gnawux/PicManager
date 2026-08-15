@@ -71,6 +71,99 @@ pub struct ProviderCheckpoint {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SyncJobDetail {
+    #[serde(flatten)]
+    pub job: SyncJob,
+    pub items: Vec<SyncItem>,
+}
+
+pub async fn list_jobs(
+    pool: &SqlitePool,
+    provider: Option<&str>,
+    status: Option<&str>,
+    before_id: Option<i64>,
+    limit: u32,
+) -> Result<Vec<SyncJob>> {
+    let jobs = sqlx::query_as(
+        "SELECT * FROM sync_jobs \
+         WHERE (? IS NULL OR provider = ?) \
+           AND (? IS NULL OR status = ?) \
+           AND (? IS NULL OR id < ?) \
+         ORDER BY id DESC LIMIT ?",
+    )
+    .bind(provider).bind(provider)
+    .bind(status).bind(status)
+    .bind(before_id).bind(before_id)
+    .bind(i64::from(limit.clamp(1, 100)))
+    .fetch_all(pool).await?;
+    Ok(jobs)
+}
+
+pub async fn get_job(pool: &SqlitePool, job_id: i64) -> Result<SyncJobDetail> {
+    let job = sqlx::query_as("SELECT * FROM sync_jobs WHERE id = ?")
+        .bind(job_id).fetch_optional(pool).await?
+        .ok_or_else(|| crate::error::AppError::NotFound(format!("sync job {job_id}")))?;
+    let items = sqlx::query_as("SELECT * FROM sync_items WHERE job_id = ? ORDER BY id")
+        .bind(job_id).fetch_all(pool).await?;
+    Ok(SyncJobDetail { job, items })
+}
+
+/// Requeue only terminal failures while preserving already completed work.
+pub async fn retry_job(pool: &SqlitePool, job_id: i64) -> Result<SyncJobDetail> {
+    let mut tx = pool.begin().await?;
+    let status: Option<String> = sqlx::query_scalar("SELECT status FROM sync_jobs WHERE id = ?")
+        .bind(job_id).fetch_optional(&mut *tx).await?;
+    match status.as_deref() {
+        None => return Err(crate::error::AppError::NotFound(format!("sync job {job_id}"))),
+        Some("failed") => {}
+        Some(value) => return Err(crate::error::AppError::Metadata(format!(
+            "sync job {job_id} cannot be retried from {value}"
+        ))),
+    }
+    sqlx::query(
+        "UPDATE sync_items SET status = 'queued', attempt_count = 0, \
+         available_at = datetime('now'), lease_owner = NULL, lease_expires_at = NULL, \
+         last_error = NULL, started_at = NULL, finished_at = NULL, updated_at = datetime('now') \
+         WHERE job_id = ? AND status = 'failed'",
+    ).bind(job_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE sync_jobs SET status = 'queued', failed_items = 0, error = NULL, \
+         finished_at = NULL, updated_at = datetime('now') WHERE id = ?",
+    ).bind(job_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    get_job(pool, job_id).await
+}
+
+/// Cancel all unfinished work. Completed items remain immutable and auditable.
+pub async fn cancel_job(pool: &SqlitePool, job_id: i64) -> Result<SyncJobDetail> {
+    let mut tx = pool.begin().await?;
+    let status: Option<String> = sqlx::query_scalar("SELECT status FROM sync_jobs WHERE id = ?")
+        .bind(job_id).fetch_optional(&mut *tx).await?;
+    match status.as_deref() {
+        None => return Err(crate::error::AppError::NotFound(format!("sync job {job_id}"))),
+        Some("queued" | "running" | "paused" | "failed") => {}
+        Some(value) => return Err(crate::error::AppError::Metadata(format!(
+            "sync job {job_id} cannot be cancelled from {value}"
+        ))),
+    }
+    sqlx::query(
+        "UPDATE sync_items SET status = 'cancelled', lease_owner = NULL, \
+         lease_expires_at = NULL, finished_at = datetime('now'), updated_at = datetime('now') \
+         WHERE job_id = ? AND status IN ('queued', 'leased', 'failed')",
+    ).bind(job_id).execute(&mut *tx).await?;
+    let completed: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sync_items WHERE job_id = ? \
+         AND status IN ('succeeded', 'excluded', 'cancelled')",
+    ).bind(job_id).fetch_one(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE sync_jobs SET status = 'cancelled', completed_items = ?, failed_items = 0, \
+         finished_at = datetime('now'), updated_at = datetime('now') WHERE id = ?",
+    ).bind(completed).bind(job_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    get_job(pool, job_id).await
+}
+
 /// Persist all discovered work and advance the provider token in one transaction.
 /// A duplicate or invalid item rolls back both the job and checkpoint update.
 pub async fn persist_discovery(pool: &SqlitePool, batch: &DiscoveryBatch<'_>) -> Result<SyncJob> {
@@ -462,5 +555,58 @@ mod tests {
             .fetch_one(&pool).await.unwrap();
         assert_eq!(job.status, "failed");
         assert_eq!(job.failed_items, 1);
+    }
+
+    #[tokio::test]
+    async fn failed_job_retry_preserves_success_and_requeues_failures() {
+        let pool = test_pool().await;
+        let job = persist_discovery(&pool, &batch(None, Some(b"token-1"))).await.unwrap();
+        let first = claim_next_item(&pool, "worker", 60).await.unwrap().unwrap();
+        mark_item_succeeded(&pool, first.id, "worker").await.unwrap();
+        let second = claim_next_item(&pool, "worker", 60).await.unwrap().unwrap();
+        sqlx::query("UPDATE sync_items SET attempt_count = max_attempts WHERE id = ?")
+            .bind(second.id).execute(&pool).await.unwrap();
+        assert!(!fail_item(&pool, second.id, "worker", "offline").await.unwrap());
+        let retried = retry_job(&pool, job.id).await.unwrap();
+        assert_eq!(retried.job.status, "queued");
+        assert_eq!(retried.job.completed_items, 1);
+        assert_eq!(retried.job.failed_items, 0);
+        assert_eq!(retried.items[0].status, "succeeded");
+        assert_eq!(retried.items[1].status, "queued");
+        assert_eq!(retried.items[1].attempt_count, 0);
+        assert!(retried.items[1].last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn cancellation_releases_leases_and_is_not_retryable() {
+        let pool = test_pool().await;
+        let job = persist_discovery(&pool, &batch(None, Some(b"token-1"))).await.unwrap();
+        claim_next_item(&pool, "worker", 60).await.unwrap().unwrap();
+        let cancelled = cancel_job(&pool, job.id).await.unwrap();
+        assert_eq!(cancelled.job.status, "cancelled");
+        assert_eq!(cancelled.job.completed_items, 2);
+        assert!(cancelled.items.iter().all(|item| item.status == "cancelled"));
+        assert!(cancelled.items.iter().all(|item| item.lease_owner.is_none()));
+        assert!(retry_job(&pool, job.id).await.is_err());
+        assert!(cancel_job(&pool, job.id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn job_queries_filter_and_cursor_without_hiding_details() {
+        let pool = test_pool().await;
+        let first = persist_discovery(&pool, &batch(None, Some(b"token-1"))).await.unwrap();
+        let second = persist_discovery(&pool, &DiscoveryBatch {
+            checkpoint_before: Some(b"token-1"), checkpoint_after: Some(b"token-2"),
+            items: vec![], ..batch(None, None)
+        }).await.unwrap();
+        let completed = list_jobs(&pool, Some("apple_photos"), Some("completed"), None, 10)
+            .await.unwrap();
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].id, second.id);
+        let older = list_jobs(&pool, None, None, Some(second.id), 10).await.unwrap();
+        assert_eq!(older.len(), 1);
+        assert_eq!(older[0].id, first.id);
+        assert_eq!(get_job(&pool, first.id).await.unwrap().items.len(), 2);
+        assert!(get_job(&pool, 9999).await.is_err());
     }
 }

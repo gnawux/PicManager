@@ -69,6 +69,71 @@ async fn get_import_status_returns_200() {
 }
 
 #[tokio::test]
+async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let failed_id: i64 = sqlx::query_scalar(
+        "INSERT INTO sync_jobs (kind, provider, status, total_items, failed_items) \
+         VALUES ('apple_full', 'apple_photos', 'failed', 1, 1) RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO sync_items (job_id, external_id, operation, status, attempt_count, \
+         max_attempts, last_error) VALUES (?, 'asset-1', 'download', 'failed', 3, 3, 'offline')",
+    )
+    .bind(failed_id).execute(&pool).await.unwrap();
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/tasks?provider=apple_photos&status=failed")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["tasks"][0]["id"], failed_id);
+
+    let detail = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(detail.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["items"][0]["last_error"], "offline");
+
+    let retry = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(retry.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "queued");
+    assert_eq!(json["items"][0]["status"], "queued");
+
+    let cancel = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}/cancel"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(cancel.status(), StatusCode::OK);
+    let conflict = app.clone().oneshot(
+        Request::builder().uri(format!("/api/tasks/{failed_id}/retry"))
+            .method("POST").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    let body = axum::body::to_bytes(conflict.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "invalid_task_transition");
+
+    let missing = app.oneshot(
+        Request::builder().uri("/api/tasks/9999").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    let body = axum::body::to_bytes(missing.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["error"]["code"], "task_not_found");
+}
+
+#[tokio::test]
 async fn get_thumb_unknown_id_returns_404() {
     let app = test_app().await;
     let response = app

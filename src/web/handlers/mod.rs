@@ -8,3 +8,4 @@ pub mod geo;
 pub mod import;
 pub mod people;
 pub mod photos;
+pub mod tasks;
