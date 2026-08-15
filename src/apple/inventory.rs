@@ -48,6 +48,7 @@ pub struct AppleInventoryReport {
     pub excluded_assets: usize,
     pub exact_links: usize,
     pub ambiguous_links: usize,
+    pub review_candidates: usize,
     pub queued_assets: usize,
     pub missing_assets: u64,
     pub job_id: Option<i64>,
@@ -60,7 +61,7 @@ pub async fn ingest_inventory(
 ) -> Result<AppleInventoryReport> {
     let text = std::fs::read_to_string(path)?;
     let parsed = parse_inventory(&text)?;
-    let legacy = load_legacy_candidates(pool).await?;
+    let legacy = load_legacy_catalog(pool).await?;
     let mut report = AppleInventoryReport {
         dry_run,
         total_assets: parsed.assets.len(),
@@ -71,18 +72,27 @@ pub async fn ingest_inventory(
             .count(),
         exact_links: 0,
         ambiguous_links: 0,
+        review_candidates: 0,
         queued_assets: 0,
         missing_assets: 0,
         job_id: None,
     };
     for asset in &parsed.assets {
         match legacy
+            .names
             .get(&sanitized_identifier(&asset.local_identifier))
             .map(Vec::len)
         {
             Some(1) => report.exact_links += 1,
             Some(n) if n > 1 => report.ambiguous_links += 1,
-            _ if asset.excluded_reason.is_none() => report.queued_assets += 1,
+            _ if asset.excluded_reason.is_none() => {
+                let candidates = structured_candidates(asset, &legacy);
+                if candidates.is_empty() {
+                    report.queued_assets += 1;
+                } else {
+                    report.review_candidates += candidates.len();
+                }
+            }
             _ => {}
         }
     }
@@ -152,7 +162,9 @@ pub async fn ingest_inventory(
             continue;
         }
 
-        let candidates = legacy.get(&sanitized_identifier(&asset.local_identifier));
+        let candidates = legacy
+            .names
+            .get(&sanitized_identifier(&asset.local_identifier));
         if let Some(candidates) = candidates {
             if candidates.len() == 1 {
                 let photo_id = candidates[0];
@@ -193,6 +205,24 @@ pub async fn ingest_inventory(
 
         if asset.excluded_reason.is_some() {
             sqlx::query("UPDATE asset_sources SET sync_status = 'excluded' WHERE id = ?")
+                .bind(source_id)
+                .execute(&mut *tx)
+                .await?;
+            continue;
+        }
+        let secondary = structured_candidates(asset, &legacy);
+        if !secondary.is_empty() {
+            for candidate in secondary {
+                sqlx::query(
+                    "INSERT INTO asset_links (source_id, photo_id, method, confidence, status, evidence_json) \
+                     VALUES (?, ?, 'structured_metadata', ?, 'candidate', ?) \
+                     ON CONFLICT(source_id, photo_id, method) DO UPDATE SET confidence = excluded.confidence, \
+                     evidence_json = excluded.evidence_json WHERE asset_links.status = 'candidate'",
+                )
+                .bind(source_id).bind(candidate.photo_id).bind(candidate.confidence)
+                .bind(candidate.evidence_json).execute(&mut *tx).await?;
+            }
+            sqlx::query("UPDATE asset_sources SET sync_status = 'discovered' WHERE id = ?")
                 .bind(source_id)
                 .execute(&mut *tx)
                 .await?;
@@ -325,21 +355,141 @@ fn decode_checkpoint(value: Option<&serde_json::Value>) -> Result<Option<Vec<u8>
     }
 }
 
-async fn load_legacy_candidates(pool: &SqlitePool) -> Result<HashMap<String, Vec<i64>>> {
-    let rows: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, path FROM photos WHERE import_status = 'imported' ORDER BY id")
-            .fetch_all(pool)
-            .await?;
-    let mut result: HashMap<String, Vec<i64>> = HashMap::new();
-    for (id, path) in rows {
-        if let Some(stem) = PathBuf::from(path).file_stem().and_then(|s| s.to_str()) {
+#[derive(Debug)]
+struct LegacyPhotoEvidence {
+    id: i64,
+    filename: String,
+    width: Option<i64>,
+    height: Option<i64>,
+    taken_at: Option<i64>,
+}
+
+#[derive(Debug, Default)]
+struct LegacyCatalog {
+    names: HashMap<String, Vec<i64>>,
+    photos: Vec<LegacyPhotoEvidence>,
+    by_filename: HashMap<String, Vec<usize>>,
+    by_second: HashMap<i64, Vec<usize>>,
+}
+
+#[derive(Debug)]
+struct StructuredCandidate {
+    photo_id: i64,
+    confidence: f64,
+    evidence_json: String,
+}
+
+async fn load_legacy_catalog(pool: &SqlitePool) -> Result<LegacyCatalog> {
+    let rows: Vec<(i64, String, Option<String>, Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT id, path, taken_at, width, height FROM photos \
+         WHERE import_status = 'imported' ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut result = LegacyCatalog::default();
+    for (id, path, taken_at, width, height) in rows {
+        if let Some(stem) = PathBuf::from(&path).file_stem().and_then(|s| s.to_str()) {
             result
+                .names
                 .entry(stem.to_ascii_lowercase())
                 .or_default()
                 .push(id);
         }
+        let filename = PathBuf::from(&path)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&path)
+            .to_ascii_lowercase();
+        let taken_at = taken_at.as_deref().and_then(parse_timestamp);
+        let index = result.photos.len();
+        result.photos.push(LegacyPhotoEvidence {
+            id,
+            filename: filename.clone(),
+            width,
+            height,
+            taken_at,
+        });
+        result.by_filename.entry(filename).or_default().push(index);
+        if let Some(second) = taken_at {
+            result.by_second.entry(second).or_default().push(index);
+        }
     }
     Ok(result)
+}
+
+fn structured_candidates(
+    asset: &InventoryAsset,
+    legacy: &LegacyCatalog,
+) -> Vec<StructuredCandidate> {
+    let filename = asset
+        .original_filename
+        .as_deref()
+        .map(str::to_ascii_lowercase);
+    let taken_at = asset.creation_date.as_deref().and_then(parse_timestamp);
+    let mut indices: HashSet<usize> = HashSet::new();
+    if let Some(filename) = &filename {
+        if let Some(found) = legacy.by_filename.get(filename) {
+            indices.extend(found.iter().copied());
+        }
+    }
+    if let Some(second) = taken_at {
+        for offset in -2..=2 {
+            if let Some(found) = legacy.by_second.get(&(second + offset)) {
+                indices.extend(found.iter().copied());
+            }
+        }
+    }
+    let mut candidates = Vec::new();
+    for index in indices {
+        let photo = &legacy.photos[index];
+        let filename_match = filename.as_deref() == Some(photo.filename.as_str());
+        let dimension_match =
+            photo.width == Some(asset.pixel_width) && photo.height == Some(asset.pixel_height);
+        let rotated_dimension_match =
+            photo.width == Some(asset.pixel_height) && photo.height == Some(asset.pixel_width);
+        let time_delta = taken_at.zip(photo.taken_at).map(|(a, b)| (a - b).abs());
+        let mut confidence = if filename_match { 0.5 } else { 0.0 };
+        if dimension_match {
+            confidence += 0.2;
+        } else if rotated_dimension_match {
+            confidence += 0.15;
+        }
+        if matches!(time_delta, Some(0..=2)) {
+            confidence += 0.3;
+        }
+        if confidence < 0.65 {
+            continue;
+        }
+        let evidence_json = serde_json::json!({
+            "filename_match": filename_match,
+            "dimension_match": dimension_match,
+            "rotated_dimension_match": rotated_dimension_match,
+            "time_delta_seconds": time_delta,
+        })
+        .to_string();
+        candidates.push(StructuredCandidate {
+            photo_id: photo.id,
+            confidence,
+            evidence_json,
+        });
+    }
+    candidates.sort_by(|a, b| {
+        b.confidence
+            .total_cmp(&a.confidence)
+            .then(a.photo_id.cmp(&b.photo_id))
+    });
+    candidates
+}
+
+fn parse_timestamp(value: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .map(|dt| dt.timestamp())
+        .ok()
+        .or_else(|| {
+            chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S")
+                .map(|dt| dt.and_utc().timestamp())
+                .ok()
+        })
 }
 
 fn sanitized_identifier(identifier: &str) -> String {
@@ -504,5 +654,49 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(after, "missing");
+    }
+
+    #[tokio::test]
+    async fn structured_evidence_creates_review_candidate_without_auto_link_or_download() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO photos (path, sha256, format, import_status, taken_at, width, height) \
+             VALUES ('/library/IMG_0099.HEIC', 'sha-99', 'heic', 'imported', \
+                     '2026-08-15 01:02:03', 4032, 3024)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            temp.path(),
+            inventory(&[asset("unlinked/L0/099", "IMG_0099.HEIC", None)]),
+        )
+        .unwrap();
+
+        let report = ingest_inventory(&pool, temp.path(), false).await.unwrap();
+        assert_eq!(report.review_candidates, 1);
+        assert_eq!(report.queued_assets, 0);
+        let source: (String, Option<i64>) = sqlx::query_as(
+            "SELECT sync_status, asset_id FROM asset_sources WHERE provider = 'apple_photos'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(source.0, "discovered");
+        assert!(source.1.is_none());
+        let link: (String, String, f64) =
+            sqlx::query_as("SELECT method, status, confidence FROM asset_links")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(link.0, "structured_metadata");
+        assert_eq!(link.1, "candidate");
+        assert_eq!(link.2, 1.0);
+        let items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sync_items")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(items, 0);
     }
 }

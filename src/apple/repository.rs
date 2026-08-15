@@ -29,6 +29,25 @@ pub struct AppleSourcePage {
     pub next_before_id: Option<i64>,
 }
 
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct AppleLinkCandidate {
+    pub id: i64,
+    pub source_id: i64,
+    pub photo_id: i64,
+    pub method: String,
+    pub confidence: f64,
+    pub status: String,
+    pub evidence_json: Option<String>,
+    pub original_filename: Option<String>,
+    pub source_taken_at: Option<String>,
+    pub source_width: Option<i64>,
+    pub source_height: Option<i64>,
+    pub photo_path: String,
+    pub photo_taken_at: Option<String>,
+    pub photo_width: Option<i64>,
+    pub photo_height: Option<i64>,
+}
+
 pub async fn list_sources(
     pool: &SqlitePool,
     status: Option<&str>,
@@ -137,6 +156,122 @@ pub async fn retry_source(pool: &SqlitePool, source_id: i64) -> Result<(i64, App
     Ok((job_id, get_source(pool, source_id).await?))
 }
 
+pub async fn list_link_candidates(
+    pool: &SqlitePool,
+    before_id: Option<i64>,
+    limit: u32,
+) -> Result<Vec<AppleLinkCandidate>> {
+    Ok(sqlx::query_as(
+        "SELECT l.id, l.source_id, l.photo_id, l.method, l.confidence, l.status, l.evidence_json, \
+         s.original_filename, s.taken_at AS source_taken_at, s.width AS source_width, \
+         s.height AS source_height, p.path AS photo_path, p.taken_at AS photo_taken_at, \
+         p.width AS photo_width, p.height AS photo_height \
+         FROM asset_links l JOIN asset_sources s ON s.id = l.source_id \
+         JOIN photos p ON p.id = l.photo_id \
+         WHERE s.provider = 'apple_photos' AND l.status IN ('candidate', 'conflict') \
+           AND (? IS NULL OR l.id < ?) ORDER BY l.id DESC LIMIT ?",
+    )
+    .bind(before_id)
+    .bind(before_id)
+    .bind(i64::from(limit.clamp(1, 100)))
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn review_link(pool: &SqlitePool, link_id: i64, accept: bool) -> Result<Option<i64>> {
+    let mut tx = pool.begin().await?;
+    let link: Option<(i64, i64, String, Option<i64>, String)> = sqlx::query_as(
+        "SELECT l.source_id, l.photo_id, l.status, s.asset_id, s.external_id \
+         FROM asset_links l JOIN asset_sources s ON s.id = l.source_id \
+         WHERE l.id = ? AND s.provider = 'apple_photos'",
+    )
+    .bind(link_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (source_id, photo_id, status, existing_asset_id, external_id) =
+        link.ok_or_else(|| AppError::NotFound(format!("Apple Photos link candidate {link_id}")))?;
+    if !matches!(status.as_str(), "candidate" | "conflict") {
+        return Err(AppError::Metadata(format!(
+            "link candidate {link_id} is already {status}"
+        )));
+    }
+
+    if accept {
+        sqlx::query("INSERT OR IGNORE INTO assets (photo_id) VALUES (?)")
+            .bind(photo_id)
+            .execute(&mut *tx)
+            .await?;
+        let asset_id: i64 = sqlx::query_scalar("SELECT id FROM assets WHERE photo_id = ?")
+            .bind(photo_id)
+            .fetch_one(&mut *tx)
+            .await?;
+        if existing_asset_id.is_some_and(|existing| existing != asset_id) {
+            return Err(AppError::Metadata(
+                "source is already linked to another asset".into(),
+            ));
+        }
+        sqlx::query(
+            "UPDATE asset_links SET status = 'accepted', confidence = 1.0, \
+             reviewed_at = datetime('now') WHERE id = ?",
+        )
+        .bind(link_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE asset_links SET status = 'rejected', reviewed_at = datetime('now') \
+             WHERE source_id = ? AND id != ? AND status IN ('candidate', 'conflict')",
+        )
+        .bind(source_id)
+        .bind(link_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE asset_sources SET asset_id = ?, sync_status = 'ready', last_error = NULL, \
+             updated_at = datetime('now') WHERE id = ?",
+        )
+        .bind(asset_id)
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(None);
+    }
+
+    sqlx::query(
+        "UPDATE asset_links SET status = 'rejected', reviewed_at = datetime('now') WHERE id = ?",
+    )
+    .bind(link_id)
+    .execute(&mut *tx)
+    .await?;
+    let remaining: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM asset_links WHERE source_id = ? AND status IN ('candidate', 'conflict')",
+    ).bind(source_id).fetch_one(&mut *tx).await?;
+    let job_id = if remaining == 0 && existing_asset_id.is_none() {
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, total_items) \
+             VALUES ('apple_candidate_rejected', 'apple_photos', 1) RETURNING id",
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation) \
+             VALUES (?, ?, ?, 'export_original')",
+        )
+        .bind(job_id)
+        .bind(source_id)
+        .bind(external_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE asset_sources SET sync_status = 'queued', updated_at = datetime('now') WHERE id = ?")
+            .bind(source_id).execute(&mut *tx).await?;
+        Some(job_id)
+    } else {
+        None
+    };
+    tx.commit().await?;
+    Ok(job_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -194,5 +329,62 @@ mod tests {
         assert_eq!(item_job, job_id);
         assert!(retry_source(&pool, failed).await.is_err());
         assert!(retry_source(&pool, ready).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn candidate_review_links_existing_photo_or_queues_after_rejection() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status) \
+             VALUES (1, '/one.jpg', 'one', 'jpeg', 'imported'), \
+                    (2, '/two.jpg', 'two', 'jpeg', 'imported')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let source_id = source(&pool, "apple-one", "IMG_0001.JPG", "discovered").await;
+        let first: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_links (source_id, photo_id, method, confidence, status) \
+             VALUES (?, 1, 'structured_metadata', 0.9, 'candidate') RETURNING id",
+        )
+        .bind(source_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let second: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_links (source_id, photo_id, method, confidence, status) \
+             VALUES (?, 2, 'structured_metadata', 0.8, 'candidate') RETURNING id",
+        )
+        .bind(source_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(review_link(&pool, first, false).await.unwrap().is_none());
+        assert!(review_link(&pool, second, true).await.unwrap().is_none());
+        let linked: (String, Option<i64>) =
+            sqlx::query_as("SELECT sync_status, asset_id FROM asset_sources WHERE id = ?")
+                .bind(source_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(linked.0, "ready");
+        assert!(linked.1.is_some());
+
+        let rejected_source = source(&pool, "apple-two", "IMG_0002.JPG", "discovered").await;
+        let rejected: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_links (source_id, photo_id, method, confidence, status) \
+             VALUES (?, 1, 'structured_metadata', 0.7, 'candidate') RETURNING id",
+        )
+        .bind(rejected_source)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let job_id = review_link(&pool, rejected, false).await.unwrap().unwrap();
+        let item_job: i64 = sqlx::query_scalar("SELECT job_id FROM sync_items WHERE source_id = ?")
+            .bind(rejected_source)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(item_job, job_id);
     }
 }

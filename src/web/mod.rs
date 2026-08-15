@@ -11,7 +11,7 @@ use crate::config::Config;
 use embed::static_handler;
 use handlers::{
     activities::{list_activities, get_activity, get_activity_track, get_activity_photos, trim_activity, merge_activities},
-    apple::{list_apple_sources, retry_apple_source},
+    apple::{list_apple_candidates, list_apple_sources, retry_apple_source, review_apple_candidate},
     albums::{list_albums, list_album_photos, merge_albums},
     collections::{list_collections, create_collection, rename_collection, delete_collection, add_photos, remove_photos, list_collection_photos},
     animals::{list_species, list_species_photos, list_photo_animals},
@@ -56,6 +56,8 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
         .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/apple/sources", get(list_apple_sources))
         .route("/api/apple/sources/{id}/retry", post(retry_apple_source))
+        .route("/api/apple/link-candidates", get(list_apple_candidates))
+        .route("/api/apple/link-candidates/{id}/review", post(review_apple_candidate))
         .route("/api/dedup", get(list_dedup_groups))
         .route("/api/dedup/{group_id}/resolve", post(resolve_group))
         .route("/api/albums", get(list_albums))

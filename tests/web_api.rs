@@ -179,6 +179,46 @@ async fn apple_source_api_filters_inventory_and_retries_failures() {
 }
 
 #[tokio::test]
+async fn apple_candidate_api_exposes_evidence_and_accepts_review() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    sqlx::query(
+        "INSERT INTO photos (id, path, sha256, format, import_status, width, height) \
+         VALUES (1, '/library/IMG_0100.JPG', 'sha', 'jpeg', 'imported', 100, 80)",
+    ).execute(&pool).await.unwrap();
+    let source_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_sources (provider, external_id, original_filename, sync_status) \
+         VALUES ('apple_photos', 'candidate-1', 'IMG_0100.JPG', 'discovered') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    let link_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_links (source_id, photo_id, method, confidence, status, evidence_json) \
+         VALUES (?, 1, 'structured_metadata', 0.9, 'candidate', '{\"filename_match\":true}') RETURNING id",
+    ).bind(source_id).fetch_one(&pool).await.unwrap();
+
+    let list = app.clone().oneshot(
+        Request::builder().uri("/api/apple/link-candidates")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(list.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(list.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json[0]["id"], link_id);
+    assert_eq!(json[0]["original_filename"], "IMG_0100.JPG");
+    assert_eq!(json[0]["photo_path"], "/library/IMG_0100.JPG");
+
+    let review = app.oneshot(
+        Request::builder().uri(format!("/api/apple/link-candidates/{link_id}/review"))
+            .method("POST").header("content-type", "application/json")
+            .body(Body::from(r#"{"accept":true}"#)).unwrap(),
+    ).await.unwrap();
+    assert_eq!(review.status(), StatusCode::OK);
+    let linked: (String, Option<i64>) = sqlx::query_as(
+        "SELECT sync_status, asset_id FROM asset_sources WHERE id = ?",
+    ).bind(source_id).fetch_one(&pool).await.unwrap();
+    assert_eq!(linked.0, "ready");
+    assert!(linked.1.is_some());
+}
+
+#[tokio::test]
 async fn get_thumb_unknown_id_returns_404() {
     let app = test_app().await;
     let response = app

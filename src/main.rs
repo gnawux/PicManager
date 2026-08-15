@@ -415,6 +415,7 @@ async fn main() -> anyhow::Result<()> {
                     println!("Photos assets      : {}", report.total_assets);
                     println!("exact legacy links : {}", report.exact_links);
                     println!("ambiguous links    : {}", report.ambiguous_links);
+                    println!("review candidates  : {}", report.review_candidates);
                     println!("queued for export  : {}", report.queued_assets);
                     println!("policy excluded    : {}", report.excluded_assets);
                     println!("now missing        : {}", report.missing_assets);
