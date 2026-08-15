@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn all_tables_exist() {
         let pool = test_pool().await;
-        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs", "sync_jobs", "sync_items", "provider_checkpoints", "variant_renditions", "asset_display_revisions", "derived_media_state"] {
+        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs", "sync_jobs", "sync_items", "provider_checkpoints", "variant_renditions", "asset_display_revisions", "derived_media_state", "application_jobs", "application_job_attempts", "application_job_events"] {
             let row: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
             )

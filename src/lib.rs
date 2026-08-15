@@ -11,6 +11,7 @@ pub mod derived;
 pub mod error;
 pub mod image_open;
 pub mod importer;
+pub mod jobs;
 pub mod metadata;
 pub mod migration;
 pub mod orientation;
