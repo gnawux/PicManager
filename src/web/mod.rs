@@ -22,6 +22,7 @@ use handlers::{
     import::{start_import, get_import_status, ImportStatus},
     photos::{list_photos, get_thumb, get_photo_file, get_photo, get_gps_points, patch_photo, batch_update_photos},
     tasks::{cancel_task, get_task, list_tasks, retry_task},
+    timeline::list_timeline,
 };
 
 #[derive(Clone)]
@@ -43,6 +44,7 @@ pub fn router(pool: SqlitePool, config: Config) -> Router {
 
     Router::new()
         .route("/api/photos", get(list_photos))
+        .route("/api/timeline", get(list_timeline))
         .route("/api/photos/gps-points", get(get_gps_points))
         .route("/api/photos/batch-update", post(batch_update_photos))
         .route("/api/photos/{id}", get(get_photo).patch(patch_photo))

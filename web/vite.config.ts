@@ -8,5 +8,12 @@ export default defineConfig({
     outDir: '../frontend',
     emptyOutDir: false,
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/app.js',
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: 'assets/app.[ext]',
+      },
+    },
   },
 });

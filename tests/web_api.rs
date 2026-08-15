@@ -408,6 +408,119 @@ async fn get_thumb_generates_and_caches() {
 }
 
 #[tokio::test]
+async fn sized_thumbnail_contract_generates_revision_and_size_specific_cache() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/with_exif.jpg");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'sized-thumb', 'jpeg', 'imported') RETURNING id",
+    )
+    .bind(fixture.to_str().unwrap())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/photos/{id}/thumb?size=128"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (128, 128));
+    assert!(tmp.path().join(format!("{id}_r0_s128.jpg")).exists());
+}
+
+#[tokio::test]
+async fn timeline_cursor_pages_are_stable_across_ties_and_null_dates() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    for (id, taken_at) in [
+        (1_i64, Some("2024-01-01T10:00:00")),
+        (2, Some("2024-01-01T10:00:00")),
+        (3, Some("2024-02-01T10:00:00")),
+        (4, None),
+        (5, None),
+    ] {
+        sqlx::query(
+            "INSERT INTO photos \
+                 (id, path, sha256, format, import_status, taken_at, width, height) \
+             VALUES (?, ?, ?, 'jpeg', 'imported', ?, 4000, 3000)",
+        )
+        .bind(id)
+        .bind(format!("/tmp/timeline-{id}.jpg"))
+        .bind(format!("timeline-{id}"))
+        .bind(taken_at)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO photos (id, path, sha256, format, import_status, taken_at) \
+         VALUES (6, '/tmp/deleted.jpg', 'timeline-deleted', 'jpeg', 'deleted', '2025-01-01')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut cursor: Option<String> = None;
+    let mut ids = Vec::new();
+    loop {
+        let uri = cursor.as_ref().map_or_else(
+            || "/api/timeline?limit=2".to_owned(),
+            |cursor| format!("/api/timeline?limit=2&cursor={cursor}"),
+        );
+        let response = app
+            .clone()
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        ids.extend(
+            page["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|item| item["id"].as_i64().unwrap()),
+        );
+        if ids.len() == 2 {
+            assert_eq!(page["items"][0]["preview"]["aspect_ratio"], 4.0 / 3.0);
+            assert!(page["items"][0]["preview"]["srcset"]
+                .as_str()
+                .unwrap()
+                .contains("1024w"));
+        }
+        cursor = page["next_cursor"].as_str().map(ToOwned::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+    assert_eq!(ids, vec![3, 2, 1, 5, 4]);
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/timeline?cursor=not-a-cursor")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn transform_revision_never_reuses_a_stale_thumbnail() {
     let (app, pool, tmp) = test_app_with_pool().await;
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

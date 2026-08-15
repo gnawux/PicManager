@@ -59,6 +59,15 @@ pub fn thumbnail_cache_path(cache_dir: &Path, photo_id: i64, revision: i64) -> P
     }
 }
 
+pub fn sized_thumbnail_cache_path(
+    cache_dir: &Path,
+    photo_id: i64,
+    revision: i64,
+    size: u32,
+) -> PathBuf {
+    cache_dir.join(format!("{photo_id}_r{revision}_s{size}.jpg"))
+}
+
 pub async fn mark_thumbnail_ready(pool: &SqlitePool, photo_id: i64, revision: i64) {
     let _ = sqlx::query(
         "INSERT INTO derived_media_state \
@@ -157,6 +166,10 @@ mod tests {
         assert_eq!(
             thumbnail_cache_path(Path::new("cache"), 7, 3),
             Path::new("cache/7_r3.jpg")
+        );
+        assert_eq!(
+            sized_thumbnail_cache_path(Path::new("cache"), 7, 3, 512),
+            Path::new("cache/7_r3_s512.jpg")
         );
     }
 }

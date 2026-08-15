@@ -1,4 +1,10 @@
-import type { ApiErrorEnvelope, AppleSourcePage, PhotoPage, TaskPage } from './types';
+import type {
+  ApiErrorEnvelope,
+  AppleSourcePage,
+  PhotoPage,
+  TaskPage,
+  TimelinePage,
+} from './types';
 
 export class ApiError extends Error {
   constructor(
@@ -55,6 +61,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
         request<PhotoPage>(
           `/api/photos?page=${page}&per_page=${perPage}&order=${order}`,
         ),
+    },
+    timeline: {
+      page: (cursor?: string, limit = 120, order: 'asc' | 'desc' = 'desc') => {
+        const query = new URLSearchParams({ limit: String(limit), order });
+        if (cursor) query.set('cursor', cursor);
+        return request<TimelinePage>(`/api/timeline?${query}`);
+      },
     },
     tasks: {
       list: () => request<TaskPage>('/api/tasks?limit=50'),

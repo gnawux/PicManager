@@ -344,9 +344,15 @@ pub async fn list_photos(
     }))
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct ThumbQuery {
+    pub size: Option<u32>,
+}
+
 pub async fn get_thumb(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(query): Query<ThumbQuery>,
 ) -> Response {
     let row: Option<(String, i32, i32, i32, i32, String, Option<i64>, i64)> = sqlx::query_as(
         "SELECT COALESCE(dv.path, p.path), p.rotation, p.flip_h, p.flip_v, \
@@ -367,12 +373,18 @@ pub async fn get_thumb(
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    let cache_path = crate::derived::thumbnail_cache_path(
-        &state.config.thumb_cache_dir,
-        id,
-        render_revision,
-    );
-    let thumb_size = state.config.thumb_size;
+    let requested_size = query.size.map(|size| size.clamp(128, 2048));
+    let cache_path = if let Some(size) = requested_size {
+        crate::derived::sized_thumbnail_cache_path(
+            &state.config.thumb_cache_dir,
+            id,
+            render_revision,
+            size,
+        )
+    } else {
+        crate::derived::thumbnail_cache_path(&state.config.thumb_cache_dir, id, render_revision)
+    };
+    let thumb_size = requested_size.unwrap_or(state.config.thumb_size);
 
     let result = tokio::task::spawn_blocking(move || {
         if cache_path.exists() {

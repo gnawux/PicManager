@@ -33,4 +33,18 @@ describe('API client', () => {
     };
     await expect(client.tasks.list()).rejects.toMatchObject(expected);
   });
+
+  it('passes opaque timeline cursors without inspecting them', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ items: [], next_cursor: null, has_more: false }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.timeline.page('opaque_cursor', 80, 'desc');
+    expect(fetcher.mock.calls[0][0]).toBe(
+      '/api/timeline?limit=80&order=desc&cursor=opaque_cursor',
+    );
+  });
 });
