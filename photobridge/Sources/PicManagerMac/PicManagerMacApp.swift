@@ -301,6 +301,10 @@ private struct ConfigurationView: View {
                 Text("Embedded window").tag(PhotoPresentationMode.embedded)
                 Text("System browser").tag(PhotoPresentationMode.systemBrowser)
             }
+            Toggle("Launch PicManager at login", isOn: $model.configuration.launchAtLogin)
+            Text(model.launchAtLoginStatus)
+                .font(.caption)
+                .foregroundStyle(.secondary)
             if let error = model.lastError {
                 Text(error).foregroundStyle(.red)
             }

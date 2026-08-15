@@ -49,6 +49,7 @@ let package = Package(
                 .linkedFramework("WebKit"),
                 .linkedFramework("Photos"),
                 .linkedFramework("UserNotifications"),
+                .linkedFramework("ServiceManagement"),
                 .unsafeFlags([
                     "-Xlinker", "-sectcreate",
                     "-Xlinker", "__TEXT",

@@ -45,5 +45,6 @@ runServiceMonitoringTests()
 runLibraryOwnershipTests()
 runLibraryPresentationTests()
 runAppleInventoryIngestTests()
+runLaunchAtLoginPreferenceTests()
 
 finish()

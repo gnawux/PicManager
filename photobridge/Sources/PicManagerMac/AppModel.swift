@@ -17,11 +17,13 @@ final class AppModel: ObservableObject {
     @Published var serviceExecutable: ResolvedServiceExecutable?
     @Published var inventorySyncInProgress = false
     @Published var inventorySyncProgress = ""
+    @Published var launchAtLoginStatus = "Disabled"
     private let serviceProcess = ServiceProcessController()
     private let notifications = NativeNotifications()
     private var healthMonitorTask: Task<Void, Never>?
     private var alertPolicy = ServiceFailureAlertPolicy()
     private var libraryOwnership: LibraryOwnershipLock?
+    private let launchAtLogin = LaunchAtLoginController()
 
     init() {
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
@@ -32,11 +34,14 @@ final class AppModel: ObservableObject {
         serviceProcess.onStateChange = { [weak self] state in
             self?.serviceStatus = state.label
         }
+        launchAtLoginStatus = launchAtLogin.statusLabel
     }
 
     func saveConfiguration() {
         do {
+            try launchAtLogin.apply(preferred: configuration.launchAtLogin)
             try configuration.save(to: MacAppConfiguration.applicationSupportURL)
+            launchAtLoginStatus = launchAtLogin.statusLabel
             lastError = nil
         } catch {
             lastError = error.localizedDescription
