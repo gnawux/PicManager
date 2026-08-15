@@ -3,6 +3,10 @@ import type {
   AppleSourcePage,
   AlbumPhotoPage,
   AlbumSummary,
+  ActivityPage,
+  ActivityPhotos,
+  ActivitySummary,
+  ActivityTrack,
   BatchPhotoUpdate,
   PhotoDetail,
   PersonSummary,
@@ -137,6 +141,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
       regeocode: () => request<{ status: string; count?: number }>('/api/geo/regeocode', {
         method: 'POST',
       }),
+    },
+    activities: {
+      list: (type?: string) => {
+        const query = new URLSearchParams({ page: '1', per_page: '100' });
+        if (type) query.set('type', type);
+        return request<ActivityPage>(`/api/activities?${query}`);
+      },
+      get: (id: number) => request<ActivitySummary>(`/api/activities/${id}`),
+      track: (id: number) => request<ActivityTrack>(`/api/activities/${id}/track`),
+      photos: (id: number) => request<ActivityPhotos>(`/api/activities/${id}/photos`),
     },
     request,
   };

@@ -4,6 +4,7 @@
   import AlbumsView from './lib/albums/AlbumsView.svelte';
   import PeopleView from './lib/people/PeopleView.svelte';
   import PlacesView from './lib/places/PlacesView.svelte';
+  import ActivitiesView from './lib/activities/ActivitiesView.svelte';
   import StatusBadge from './lib/components/StatusBadge.svelte';
   import TimelineView from './lib/timeline/TimelineView.svelte';
   import { createHashRouter, routes } from './lib/router';
@@ -68,6 +69,11 @@
         <div><p class="eyebrow">Places</p><h1 id="page-title">地点</h1><p class="subtitle">在地图和地点层级中重新发现照片。</p></div>
       </section>
       <PlacesView {api} />
+    {:else if $router.id === 'activities'}
+      <section class="page-heading" aria-labelledby="page-title">
+        <div><p class="eyebrow">Activities</p><h1 id="page-title">活动</h1><p class="subtitle">把运动路线、指标和沿途照片放在一起。</p></div>
+      </section>
+      <ActivitiesView {api} />
     {:else}
       <section class="page-heading" aria-labelledby="page-title">
         <div>

@@ -162,6 +162,55 @@ export interface GeoPoint {
   gps_lon: number;
 }
 
+export interface ActivitySummary {
+  id: number;
+  title: string | null;
+  activity_type: string;
+  start_time: string | null;
+  end_time: string | null;
+  duration_seconds: number | null;
+  distance_meters: number | null;
+  elevation_gain_meters: number | null;
+  avg_heart_rate: number | null;
+  max_heart_rate: number | null;
+  calories: number | null;
+  device: string | null;
+  file_format: string;
+  sensors: unknown;
+}
+
+export interface ActivityPage {
+  activities: ActivitySummary[];
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+export interface ActivityTrack {
+  points: Array<{
+    ts: string;
+    lat: number;
+    lon: number;
+    elevation: number | null;
+    heart_rate: number | null;
+    cadence: number | null;
+    speed: number | null;
+  }>;
+  original_count: number;
+  downsampled: boolean;
+}
+
+export interface ActivityPhotos {
+  photos: Array<{
+    id: number;
+    path: string;
+    format: string;
+    taken_at: string | null;
+    gps_lat: number | null;
+    gps_lon: number | null;
+  }>;
+}
+
 export interface ApiErrorEnvelope {
   error?: {
     code?: string;

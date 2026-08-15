@@ -10,5 +10,6 @@ describe('application routes', () => {
   it('resolves feature routes without server-side rewrites', () => {
     expect(routeFromHash('#/apple').id).toBe('apple');
     expect(routeFromHash('#/tasks').label).toBe('任务');
+    expect(routeFromHash('#/activities').id).toBe('activities');
   });
 });
