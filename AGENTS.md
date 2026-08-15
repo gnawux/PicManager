@@ -29,6 +29,17 @@ These repository-wide instructions apply to every automated coding session.
 - Do not run `cargo fmt --all`; legacy files contain unrelated formatting. Format only
   files changed by the milestone when safe.
 
+## Git integration
+
+- Prefer fast-forward integration from development branches into `main` so the primary
+  branch keeps the milestone commit history without an additional merge commit.
+- Before integration, rebase or otherwise update the development branch onto the
+  current `main` when this can be done safely, then use `git merge --ff-only`.
+- Create a merge commit only when preserving non-linear history has a concrete benefit
+  or fast-forward integration is unsafe or impractical; do not add merge commits merely
+  to record that work originated on a development branch.
+- Never rewrite shared or published history solely to make a fast-forward possible.
+
 ## Current sequencing
 
 - Phase 4 and Phase 5 are implemented. Preserve their service contracts, durable-job,
