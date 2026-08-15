@@ -31,7 +31,19 @@ private struct MenuBarContent: View {
         if let dashboard = model.dashboard {
             Text("Tasks: \(dashboard.metrics.running) running, \(dashboard.metrics.queued) queued")
             Text("Apple Photos: \(dashboard.synchronizedSourceCount) synchronized")
+            if let failed = dashboard.tasks.first(where: \.canRetry) {
+                Button("Retry \(failed.kind.replacingOccurrences(of: "_", with: " "))") {
+                    Task { await model.retryTask(failed) }
+                }
+            }
         }
+        if model.inventorySyncInProgress {
+            Text(model.inventorySyncProgress)
+        }
+        Button("Refresh Apple Photos Inventory") {
+            Task { await model.synchronizeAppleInventory() }
+        }
+        .disabled(model.inventorySyncInProgress || model.serviceExecutable == nil)
         Button("Open Library") {
             switch libraryPresentationTarget(for: model.configuration) {
             case .embedded: openWindow(id: "library")
@@ -140,6 +152,11 @@ private struct DashboardView: View {
                                     Text(task.status.capitalized).foregroundStyle(.secondary)
                                     Text("\(task.completedItems)/\(task.totalItems)")
                                         .monospacedDigit().foregroundStyle(.secondary)
+                                    if task.canRetry {
+                                        Button("Retry") { Task { await model.retryTask(task) } }
+                                    } else if task.canCancel {
+                                        Button("Cancel") { Task { await model.cancelTask(task) } }
+                                    }
                                 }
                                 .padding(.vertical, 8)
                                 if task.id != dashboard.tasks.prefix(8).last?.id { Divider() }
@@ -181,6 +198,13 @@ private struct DashboardView: View {
                     .foregroundStyle(.secondary)
                 Text(model.dashboard?.latestAppleSync?.status.capitalized ?? "No sync recorded")
                     .foregroundStyle(.secondary)
+                if model.inventorySyncInProgress {
+                    ProgressView().controlSize(.small)
+                    Text(model.inventorySyncProgress).foregroundStyle(.secondary)
+                } else {
+                    Button("Refresh Inventory") { Task { await model.synchronizeAppleInventory() } }
+                        .disabled(model.serviceExecutable == nil)
+                }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
         }
     }

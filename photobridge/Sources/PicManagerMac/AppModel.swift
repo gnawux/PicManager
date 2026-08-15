@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
     @Published var dashboard: ServiceDashboard?
     @Published var dashboardLoading = false
     @Published var serviceExecutable: ResolvedServiceExecutable?
+    @Published var inventorySyncInProgress = false
+    @Published var inventorySyncProgress = ""
     private let serviceProcess = ServiceProcessController()
     private let notifications = NativeNotifications()
     private var healthMonitorTask: Task<Void, Never>?
@@ -198,6 +200,58 @@ final class AppModel: ObservableObject {
             return
         }
         NSWorkspace.shared.open(url)
+    }
+
+    func synchronizeAppleInventory() async {
+        guard !inventorySyncInProgress, let serviceExecutable else { return }
+        inventorySyncInProgress = true
+        inventorySyncProgress = "Preparing Apple Photos inventory…"
+        defer { inventorySyncInProgress = false }
+        let inventoryURL = MacAppConfiguration.applicationSupportURL
+            .deletingLastPathComponent().appendingPathComponent("Sync/apple-inventory.ndjson")
+        defer { try? FileManager.default.removeItem(at: inventoryURL) }
+        do {
+            let updateProgress: @Sendable (Int, Int) -> Void = { [weak self] completed, total in
+                guard completed % 250 == 0 || completed == total else { return }
+                Task { @MainActor [weak self] in
+                    self?.inventorySyncProgress = "Reading Apple Photos: \(completed)/\(total)"
+                }
+            }
+            let count = try await Task.detached {
+                try writeApplePhotoInventory(to: inventoryURL, progress: updateProgress)
+            }.value
+            inventorySyncProgress = "Comparing \(count) Apple Photos items…"
+            _ = try await ingestAppleInventory(AppleInventoryIngestCommand(
+                executableURL: serviceExecutable.url,
+                inventoryURL: inventoryURL,
+                libraryPath: configuration.libraryPath
+            ))
+            inventorySyncProgress = "Apple Photos inventory is up to date."
+            await refreshDashboard()
+        } catch {
+            inventorySyncProgress = "Inventory refresh failed."
+            lastError = error.localizedDescription
+        }
+    }
+
+    func retryTask(_ task: ServiceTask) async {
+        await updateTask(task, retry: true)
+    }
+
+    func cancelTask(_ task: ServiceTask) async {
+        await updateTask(task, retry: false)
+    }
+
+    private func updateTask(_ task: ServiceTask, retry: Bool) async {
+        guard let serviceURL = configuration.serviceURL else { return }
+        do {
+            let client = ServiceDashboardClient(baseURL: serviceURL)
+            if retry { _ = try await client.retry(taskID: task.id) }
+            else { _ = try await client.cancel(taskID: task.id) }
+            await refreshDashboard()
+        } catch {
+            lastError = error.localizedDescription
+        }
     }
 
     private static func photoAccessReadiness() -> PhotoAccessReadiness {

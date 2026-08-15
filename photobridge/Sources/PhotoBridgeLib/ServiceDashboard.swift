@@ -43,6 +43,9 @@ public struct ServiceTask: Decodable, Equatable, Sendable, Identifiable {
     public let updatedAt: String
     public let source: String
     public let progressStage: String?
+
+    public var canRetry: Bool { ["failed", "cancelled"].contains(status) }
+    public var canCancel: Bool { ["queued", "leased", "running", "retry_wait"].contains(status) }
 }
 
 public struct ServiceTaskList: Decodable, Equatable, Sendable {
@@ -153,11 +156,28 @@ public struct ServiceDashboardClient: Sendable {
         )
     }
 
+    public func retry(taskID: Int) async throws -> ServiceTask {
+        try await request("api/v1/tasks/\(taskID)/retry", method: "POST")
+    }
+
+    public func cancel(taskID: Int) async throws -> ServiceTask {
+        try await request("api/v1/tasks/\(taskID)/cancel", method: "POST")
+    }
+
     private func get<Response: Decodable & Sendable>(_ path: String) async throws -> Response {
+        try await request(path, method: "GET")
+    }
+
+    private func request<Response: Decodable & Sendable>(
+        _ path: String,
+        method: String
+    ) async throws -> Response {
         guard let url = URL(string: path, relativeTo: baseURL) else {
             throw ServiceDashboardError.invalidBaseURL
         }
-        let (data, response) = try await session.data(from: url)
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ServiceDashboardError.response((response as? HTTPURLResponse)?.statusCode ?? 0)
         }
