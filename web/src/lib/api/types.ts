@@ -106,6 +106,33 @@ export interface AppleSourcePage {
   next_cursor: number | null;
 }
 
+export interface AlbumSummary {
+  id: number;
+  name: string;
+  kind: string;
+  photo_count: number;
+  latest_photo_at: string | null;
+}
+
+export interface CollectionSummary {
+  id: number;
+  name: string;
+  photo_count: number;
+  created_at: string;
+}
+
+export interface AlbumPhotoPage {
+  photos: Array<{
+    id: number;
+    path: string;
+    taken_at: string | null;
+    camera: string | null;
+  }>;
+  total: number;
+  page: number;
+  per_page: number;
+}
+
 export interface ApiErrorEnvelope {
   error?: {
     code?: string;

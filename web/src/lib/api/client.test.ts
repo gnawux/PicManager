@@ -82,4 +82,19 @@ describe('API client', () => {
       }),
     );
   });
+
+  it('creates curated collections with a JSON body', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ id: 3, name: '旅行' }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.collections.create('旅行');
+    expect(fetcher).toHaveBeenCalledWith('/api/collections', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ name: '旅行' }),
+    }));
+  });
 });

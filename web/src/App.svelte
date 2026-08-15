@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { createApiClient } from './lib/api/client';
+  import AlbumsView from './lib/albums/AlbumsView.svelte';
   import StatusBadge from './lib/components/StatusBadge.svelte';
   import TimelineView from './lib/timeline/TimelineView.svelte';
   import { createHashRouter, routes } from './lib/router';
@@ -50,6 +51,11 @@
         </div>
       </section>
       <TimelineView {api} />
+    {:else if $router.id === 'albums'}
+      <section class="page-heading" aria-labelledby="page-title">
+        <div><p class="eyebrow">Collections</p><h1 id="page-title">相册</h1><p class="subtitle">浏览自动整理的图库，也建立自己的精选集。</p></div>
+      </section>
+      <AlbumsView {api} />
     {:else}
       <section class="page-heading" aria-labelledby="page-title">
         <div>

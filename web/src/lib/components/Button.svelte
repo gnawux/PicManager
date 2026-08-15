@@ -6,6 +6,7 @@
     variant?: 'primary' | 'secondary' | 'ghost';
     disabled?: boolean;
     pressed?: boolean;
+    type?: 'button' | 'submit';
     onclick?: (event: MouseEvent) => void;
   }
 
@@ -14,13 +15,14 @@
     variant = 'secondary',
     disabled = false,
     pressed,
+    type = 'button',
     onclick,
   }: Props = $props();
 </script>
 
 <button
   class="button {variant}"
-  type="button"
+  {type}
   {disabled}
   aria-pressed={pressed}
   {onclick}

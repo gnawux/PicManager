@@ -1,9 +1,12 @@
 import type {
   ApiErrorEnvelope,
   AppleSourcePage,
+  AlbumPhotoPage,
+  AlbumSummary,
   BatchPhotoUpdate,
   PhotoDetail,
   PhotoPage,
+  CollectionSummary,
   TaskPage,
   TimelinePage,
 } from './types';
@@ -88,6 +91,21 @@ export function createApiClient(options: ApiClientOptions = {}) {
       },
       retry: (sourceId: number) =>
         request<unknown>(`/api/apple/sources/${sourceId}/retry`, { method: 'POST' }),
+    },
+    albums: {
+      list: () => request<AlbumSummary[]>('/api/albums'),
+      photos: (id: number, page = 1, perPage = 100) =>
+        request<AlbumPhotoPage>(`/api/albums/${id}/photos?page=${page}&per_page=${perPage}`),
+    },
+    collections: {
+      list: () => request<CollectionSummary[]>('/api/collections'),
+      create: (name: string) => request<{ id: number; name: string }>('/api/collections', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      }),
+      photos: (id: number, page = 1, perPage = 100) =>
+        request<AlbumPhotoPage>(`/api/collections/${id}/photos?page=${page}&per_page=${perPage}`),
     },
     request,
   };
