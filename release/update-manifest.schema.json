@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://picmanager.local/schemas/update-manifest-v1.json",
+  "title": "PicManager Update Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "channel", "version", "artifact", "compatibility", "generated_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "channel": { "enum": ["stable", "beta"] },
+    "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "sha256", "size_bytes"],
+      "properties": {
+        "url": { "type": "string", "format": "uri" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["service_api", "catalog_schema", "minimum_rollback_version", "backup_required_before_rollback"],
+      "properties": {
+        "service_api": { "const": "v1" },
+        "catalog_schema": { "type": "integer", "minimum": 1 },
+        "minimum_rollback_version": { "type": "string" },
+        "backup_required_before_rollback": { "const": true }
+      }
+    }
+  }
+}
