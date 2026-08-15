@@ -149,6 +149,15 @@ enum MigrateAction {
         #[arg(long)]
         json: bool,
     },
+    /// 检查目录、媒体文件、暂存写入和派生缓存的一致性
+    Reconcile {
+        /// 修复可安全重建的目录状态；不会删除原始媒体
+        #[arg(long)]
+        repair: bool,
+        /// 输出 JSON 报告
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -457,6 +466,22 @@ async fn main() -> anyhow::Result<()> {
                             println!("        error: {error}");
                         }
                     }
+                }
+            }
+            MigrateAction::Reconcile { repair, json } => {
+                let report = storage::reconcile(&pool, &config, repair).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("missing photo files       : {}", report.missing_photo_files);
+                    println!("missing variant files     : {}", report.missing_variant_files);
+                    println!("invalid master pointers   : {}", report.invalid_master_pointers);
+                    println!("invalid display pointers  : {}", report.invalid_display_pointers);
+                    println!("incomplete file intents   : {}", report.incomplete_filesystem_intents);
+                    println!("missing ready thumbnails  : {}", report.missing_ready_thumbnails);
+                    println!("stale cache files         : {}", report.stale_cache_files);
+                    println!("repaired records          : {}", report.repaired_records);
+                    println!("removed cache files       : {}", report.removed_cache_files);
                 }
             }
         },

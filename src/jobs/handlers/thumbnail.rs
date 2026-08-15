@@ -127,9 +127,47 @@ impl JobHandler for ThumbnailJobHandler {
                 })?;
             }
             let temporary = cache_path.with_extension(format!("jpg.job-{}", job.id));
-            std::fs::write(&temporary, bytes)
-                .and_then(|_| std::fs::rename(&temporary, &cache_path))
-                .map_err(|error| JobFailure::retryable("cache_write_failed", error.to_string()))?;
+            let intent_id: i64 = sqlx::query_scalar(
+                "INSERT INTO filesystem_intents \
+                 (kind, owner_kind, owner_id, target_path, staging_path) \
+                 VALUES ('thumbnail', 'application_job', ?, ?, ?) RETURNING id",
+            )
+            .bind(job.id)
+            .bind(cache_path.to_string_lossy().as_ref())
+            .bind(temporary.to_string_lossy().as_ref())
+            .fetch_one(application.pool())
+            .await
+            .map_err(|error| JobFailure::retryable("intent_write_failed", error.to_string()))?;
+            if let Err(error) = std::fs::write(&temporary, bytes) {
+                let _ = fail_intent(application.pool(), intent_id, &error.to_string()).await;
+                return Err(JobFailure::retryable(
+                    "cache_write_failed",
+                    error.to_string(),
+                ));
+            }
+            sqlx::query(
+                "UPDATE filesystem_intents SET status = 'staged', updated_at = datetime('now') \
+                 WHERE id = ?",
+            )
+            .bind(intent_id)
+            .execute(application.pool())
+            .await
+            .map_err(|error| JobFailure::retryable("intent_write_failed", error.to_string()))?;
+            if let Err(error) = std::fs::rename(&temporary, &cache_path) {
+                let _ = fail_intent(application.pool(), intent_id, &error.to_string()).await;
+                return Err(JobFailure::retryable(
+                    "cache_commit_failed",
+                    error.to_string(),
+                ));
+            }
+            sqlx::query(
+                "UPDATE filesystem_intents SET status = 'committed', completed_at = datetime('now'), \
+                 updated_at = datetime('now') WHERE id = ?",
+            )
+            .bind(intent_id)
+            .execute(application.pool())
+            .await
+            .map_err(|error| JobFailure::retryable("intent_write_failed", error.to_string()))?;
             mark_thumbnail_ready(
                 application.pool(),
                 payload.photo_id,
@@ -149,6 +187,22 @@ impl JobHandler for ThumbnailJobHandler {
             Ok(())
         })
     }
+}
+
+async fn fail_intent(
+    pool: &sqlx::SqlitePool,
+    intent_id: i64,
+    error: &str,
+) -> crate::error::Result<()> {
+    sqlx::query(
+        "UPDATE filesystem_intents SET status = 'failed', error = ?, updated_at = datetime('now') \
+         WHERE id = ?",
+    )
+    .bind(error)
+    .bind(intent_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[cfg(test)]
