@@ -28,6 +28,35 @@ pub async fn reconcile(
     repair: bool,
 ) -> Result<ReconciliationReport> {
     let mut report = ReconciliationReport::default();
+    reconcile_catalog(pool, repair, &mut report).await?;
+    reconcile_intents(pool, repair, &mut report).await?;
+    reconcile_media_into(pool, config, repair, &mut report).await?;
+    Ok(report)
+}
+
+pub async fn reconcile_startup(pool: &SqlitePool, repair: bool) -> Result<ReconciliationReport> {
+    let mut report = ReconciliationReport::default();
+    reconcile_catalog(pool, repair, &mut report).await?;
+    reconcile_intents(pool, repair, &mut report).await?;
+    Ok(report)
+}
+
+pub async fn reconcile_media(
+    pool: &SqlitePool,
+    config: &Config,
+    repair: bool,
+) -> Result<ReconciliationReport> {
+    let mut report = ReconciliationReport::default();
+    reconcile_media_into(pool, config, repair, &mut report).await?;
+    Ok(report)
+}
+
+async fn reconcile_media_into(
+    pool: &SqlitePool,
+    config: &Config,
+    repair: bool,
+    report: &mut ReconciliationReport,
+) -> Result<()> {
     let photo_paths: Vec<String> =
         sqlx::query_scalar("SELECT path FROM photos WHERE import_status = 'imported' ORDER BY id")
             .fetch_all(pool)
@@ -44,6 +73,15 @@ pub async fn reconcile(
         .iter()
         .filter(|path| !Path::new(path).is_file())
         .count();
+    reconcile_derived(pool, &config.thumb_cache_dir, repair, report).await?;
+    Ok(())
+}
+
+async fn reconcile_catalog(
+    pool: &SqlitePool,
+    repair: bool,
+    report: &mut ReconciliationReport,
+) -> Result<()> {
     report.invalid_master_pointers = sqlx::query_scalar(
         "SELECT COUNT(*) FROM assets a JOIN asset_variants v ON v.id = a.master_variant_id \
          WHERE v.asset_id != a.id",
@@ -79,10 +117,7 @@ pub async fn reconcile(
         .rows_affected();
         report.repaired_records += (master + display) as usize;
     }
-
-    reconcile_intents(pool, repair, &mut report).await?;
-    reconcile_derived(pool, &config.thumb_cache_dir, repair, &mut report).await?;
-    Ok(report)
+    Ok(())
 }
 
 async fn reconcile_intents(
@@ -350,5 +385,42 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(valid, (Some(50000), Some(50000)));
+    }
+
+    #[tokio::test]
+    async fn startup_reconciliation_does_not_walk_media_or_cache_files() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status, render_revision) \
+             VALUES (1, '/missing/photo.jpg', 'missing-photo', 'jpeg', 'imported', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO derived_media_state \
+             (photo_id, render_revision, thumbnail_status, face_status) \
+             VALUES (1, 1, 'ready', 'ready')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let report = reconcile_startup(&pool, true).await.unwrap();
+
+        assert_eq!(report.missing_photo_files, 0);
+        assert_eq!(report.missing_ready_thumbnails, 0);
+        let status: String = sqlx::query_scalar(
+            "SELECT thumbnail_status FROM derived_media_state WHERE photo_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "ready");
     }
 }

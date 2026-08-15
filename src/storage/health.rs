@@ -5,7 +5,7 @@ use sqlx::SqlitePool;
 use crate::config::Config;
 use crate::error::Result;
 
-use super::{ReconciliationReport, reconcile};
+use super::{ReconciliationReport, reconcile, reconcile_startup};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StartupRecoveryReport {
@@ -32,10 +32,10 @@ pub struct HealthReport {
     pub reconciliation: Option<ReconciliationReport>,
 }
 
-pub async fn recover_startup(pool: &SqlitePool, config: &Config) -> Result<StartupRecoveryReport> {
+pub async fn recover_startup(pool: &SqlitePool, _config: &Config) -> Result<StartupRecoveryReport> {
     let application_leases_recovered = crate::jobs::recover_expired(pool).await?;
     let sync_leases_recovered = crate::sync::recover_expired_leases(pool).await?;
-    let reconciliation = reconcile(pool, config, true).await?;
+    let reconciliation = reconcile_startup(pool, true).await?;
     Ok(StartupRecoveryReport {
         application_leases_recovered,
         sync_leases_recovered,

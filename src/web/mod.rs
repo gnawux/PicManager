@@ -9,7 +9,7 @@ use axum::{
 use sqlx::SqlitePool;
 use std::sync::Arc;
 use crate::config::Config;
-use crate::application::Application;
+use crate::application::{Application, CallerKind};
 use embed::static_handler;
 use handlers::{
     activities::{list_activities, get_activity, get_activity_track, get_activity_photos, trim_activity, merge_activities},
@@ -148,6 +148,24 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
         "startup recovery completed"
     );
     let application = Application::new(pool.clone(), config);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let reconciliation_context = application.request_context(CallerKind::InternalWorker);
+    match crate::jobs::handlers::enqueue_library_reconciliation(
+        &application,
+        &reconciliation_context,
+    )
+    .await
+    {
+        Ok(queued) => tracing::info!(
+            job_id = queued.job.id,
+            created = queued.created,
+            "background library reconciliation scheduled"
+        ),
+        Err(error) => tracing::warn!(
+            error = %error,
+            "background library reconciliation could not be scheduled"
+        ),
+    }
     let worker = crate::jobs::WorkerRuntime::new(
         pool,
         crate::jobs::handlers::registry(application.clone()),
@@ -156,7 +174,6 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
     )
     .start();
     let app = router_with_application(application, None);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("Web 服务启动：http://{addr}");
     axum::serve(listener, app)
         .with_graceful_shutdown(async {

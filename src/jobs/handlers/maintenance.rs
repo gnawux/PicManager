@@ -13,11 +13,19 @@ struct DerivedMaintenancePayload {
     photo_ids: Option<Vec<i64>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LibraryReconciliationPayload {
+    repair: bool,
+}
+
 #[derive(Clone)]
 pub struct DedupScanJobHandler(pub Application);
 
 #[derive(Clone)]
 pub struct DerivedMaintenanceJobHandler(pub Application);
+
+#[derive(Clone)]
+pub struct LibraryReconciliationJobHandler(pub Application);
 
 pub async fn enqueue_dedup_scan(
     application: &Application,
@@ -45,6 +53,40 @@ pub async fn enqueue_derived_maintenance(
         serde_json::to_value(DerivedMaintenancePayload { photo_ids }).unwrap(),
     )
     .await
+}
+
+pub async fn enqueue_library_reconciliation(
+    application: &Application,
+    context: &RequestContext,
+) -> ServiceResult<EnqueueResult> {
+    if let Some(job_id) = sqlx::query_scalar(
+        "SELECT id FROM application_jobs \
+         WHERE kind = 'library_reconciliation' \
+           AND status IN ('queued', 'running', 'retry_wait') \
+         ORDER BY id LIMIT 1",
+    )
+    .fetch_optional(application.pool())
+    .await
+    .map_err(crate::error::AppError::from)
+    .map_err(ServiceError::from)?
+    {
+        return Ok(EnqueueResult {
+            job: crate::jobs::get(application.pool(), job_id)
+                .await
+                .map_err(ServiceError::from)?,
+            created: false,
+        });
+    }
+    let mut job = NewJob::new(
+        "library_reconciliation",
+        serde_json::to_value(LibraryReconciliationPayload { repair: true }).unwrap(),
+    );
+    job.priority = -100;
+    job.max_attempts = 2;
+    job.correlation_id = Some(context.request_id.to_string());
+    crate::jobs::enqueue(application.pool(), &job)
+        .await
+        .map_err(ServiceError::from)
 }
 
 async fn enqueue_job(
@@ -179,6 +221,38 @@ impl JobHandler for DerivedMaintenanceJobHandler {
     }
 }
 
+impl JobHandler for LibraryReconciliationJobHandler {
+    fn execute(&self, job: Job, control: JobControl) -> HandlerFuture {
+        let application = self.0.clone();
+        Box::pin(async move {
+            let payload: LibraryReconciliationPayload = serde_json::from_str(&job.payload_json)
+                .map_err(|error| JobFailure::terminal("invalid_payload", error.to_string()))?;
+            control
+                .progress(0, Some(1), Some("checking_media_and_cache"))
+                .await
+                .map_err(progress_failure)?;
+            let report = crate::storage::reconcile_media(
+                application.pool(),
+                application.config(),
+                payload.repair,
+            )
+            .await
+            .map_err(|error| JobFailure::retryable("reconciliation_failed", error.to_string()))?;
+            control
+                .progress(1, Some(1), Some("completed"))
+                .await
+                .map_err(progress_failure)?;
+            control
+                .set_result(&serde_json::to_value(report).map_err(|error| {
+                    JobFailure::terminal("result_serialization_failed", error.to_string())
+                })?)
+                .await
+                .map_err(result_failure)?;
+            Ok(())
+        })
+    }
+}
+
 fn service_failure(error: crate::application::ServiceError) -> JobFailure {
     JobFailure {
         code: "service_error".into(),
@@ -296,5 +370,80 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn library_reconciliation_runs_as_low_priority_durable_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(4)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status, render_revision) \
+             VALUES (1, '/missing/background.jpg', 'background-missing', 'jpeg', 'imported', 1)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO derived_media_state \
+             (photo_id, render_revision, thumbnail_status, face_status) \
+             VALUES (1, 1, 'ready', 'ready')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut config = Config::default();
+        config.thumb_cache_dir = directory.path().join("cache");
+        let application = Application::new(pool.clone(), config);
+        let context = application.request_context(CallerKind::InternalWorker);
+        let queued = enqueue_library_reconciliation(&application, &context)
+            .await
+            .unwrap();
+        assert!(queued.created);
+        assert_eq!(queued.job.priority, -100);
+        let duplicate = enqueue_library_reconciliation(&application, &context)
+            .await
+            .unwrap();
+        assert!(!duplicate.created);
+        assert_eq!(duplicate.job.id, queued.job.id);
+
+        let worker = WorkerRuntime::new(
+            pool.clone(),
+            crate::jobs::handlers::registry(application),
+            WorkerConfig {
+                concurrency: 1,
+                poll_interval: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_secs(2),
+                ..Default::default()
+            },
+            "reconciliation-test",
+        )
+        .start();
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let job = get(&pool, queued.job.id).await.unwrap();
+                if job.status == "succeeded" {
+                    break job;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        worker.shutdown().await;
+        let result = completed.result().unwrap().unwrap();
+        assert_eq!(result["missing_photo_files"], 1);
+        assert_eq!(result["missing_ready_thumbnails"], 1);
+        let status: String = sqlx::query_scalar(
+            "SELECT thumbnail_status FROM derived_media_state WHERE photo_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(status, "pending");
     }
 }

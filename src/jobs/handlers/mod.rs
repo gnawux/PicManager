@@ -5,8 +5,8 @@ mod thumbnail;
 
 pub use import::{ImportJobHandler, ImportJobResult};
 pub use maintenance::{
-    DedupScanJobHandler, DerivedMaintenanceJobHandler, enqueue_dedup_scan,
-    enqueue_derived_maintenance,
+    DedupScanJobHandler, DerivedMaintenanceJobHandler, LibraryReconciliationJobHandler,
+    enqueue_dedup_scan, enqueue_derived_maintenance, enqueue_library_reconciliation,
 };
 pub use thumbnail::{ThumbnailJobHandler, ThumbnailJobPayload, enqueue as enqueue_thumbnail};
 
@@ -26,6 +26,10 @@ pub fn registry(application: Application) -> WorkerRegistry {
         .register(
             "derived_maintenance",
             DerivedMaintenanceJobHandler(application.clone()),
+        )
+        .register(
+            "library_reconciliation",
+            LibraryReconciliationJobHandler(application.clone()),
         )
         .register("thumbnail", ThumbnailJobHandler::new(application))
 }
