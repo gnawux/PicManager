@@ -75,15 +75,23 @@ public struct ServiceExecutableLocator: Sendable {
             let directory = $0.deletingLastPathComponent()
             return [directory.appendingPathComponent("picmanager-service"), directory.appendingPathComponent("picmanager")]
         } ?? []
-        var candidates: [URL] = configuredPath.map { [URL(fileURLWithPath: $0)] } ?? []
-        candidates.append(installed)
-        if let match = candidates.first(where: { fileManager.isExecutableFile(atPath: $0.path) }) {
-            return match
+        let configured = configuredPath.map { URL(fileURLWithPath: $0) }
+        if let configured,
+           configured.standardizedFileURL != installed.standardizedFileURL,
+           fileManager.isExecutableFile(atPath: configured.path) {
+            return configured
         }
         if let bundled, fileManager.isExecutableFile(atPath: bundled.path) {
-            return try installBundledService(from: bundled, to: installed)
+            if !fileManager.isExecutableFile(atPath: installed.path)
+                || !fileManager.contentsEqual(atPath: bundled.path, andPath: installed.path) {
+                return try installBundledService(from: bundled, to: installed)
+            }
+            return installed
         }
-        candidates = siblings + pathCandidates(pathEnvironment)
+        if fileManager.isExecutableFile(atPath: installed.path) {
+            return installed
+        }
+        let candidates = siblings + pathCandidates(pathEnvironment)
         if let match = candidates.first(where: { fileManager.isExecutableFile(atPath: $0.path) }) {
             return match
         }

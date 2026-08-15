@@ -44,5 +44,35 @@ func runServiceExecutableTests() {
             try expect(located.path, equals: support.appendingPathComponent("Service/picmanager").path)
             try expect(FileManager.default.isExecutableFile(atPath: located.path))
         }
+
+        test("refreshes the managed service when a same-version bundle changes") {
+            let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let resources = directory.appendingPathComponent("resources")
+            let support = directory.appendingPathComponent("support")
+            let installed = support.appendingPathComponent("Service/picmanager")
+            try FileManager.default.createDirectory(
+                at: installed.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try FileManager.default.createDirectory(at: resources, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            try Data("old 1.0.1 service".utf8).write(to: installed)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installed.path)
+            let bundled = resources.appendingPathComponent("picmanager")
+            try Data("fixed 1.0.1 service".utf8).write(to: bundled)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bundled.path)
+
+            let located = try ServiceExecutableLocator().locate(
+                configuredPath: installed.path,
+                bundleResourceURL: resources,
+                applicationSupportURL: support,
+                hostExecutableURL: nil,
+                pathEnvironment: ""
+            )
+
+            try expect(located, equals: installed)
+            try expect(try String(contentsOf: installed, encoding: .utf8), equals: "fixed 1.0.1 service")
+            try expect(FileManager.default.isExecutableFile(atPath: installed.path))
+        }
     }
 }
