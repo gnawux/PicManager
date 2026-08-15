@@ -11,6 +11,7 @@ pub struct Config {
     pub thumb_size: u32,
     pub database_max_connections: u32,
     pub database_busy_timeout_ms: u64,
+    pub backup_retention: u32,
 }
 
 /// Subset that can be overridden via config file.
@@ -22,6 +23,7 @@ struct FileConfig {
     thumb_size: Option<u32>,
     database_max_connections: Option<u32>,
     database_busy_timeout_ms: Option<u64>,
+    backup_retention: Option<u32>,
 }
 
 impl Default for Config {
@@ -38,6 +40,7 @@ impl Default for Config {
             thumb_size: 300,
             database_max_connections: 8,
             database_busy_timeout_ms: 5_000,
+            backup_retention: 5,
         }
     }
 }
@@ -61,6 +64,9 @@ impl Config {
             if let Some(value) = file_cfg.database_busy_timeout_ms {
                 cfg.database_busy_timeout_ms = value.clamp(100, 60_000);
             }
+            if let Some(value) = file_cfg.backup_retention {
+                cfg.backup_retention = value.clamp(1, 100);
+            }
         }
         apply_env_overrides(cfg, |key| std::env::var(key).ok())
     }
@@ -75,6 +81,10 @@ impl Config {
 
     pub fn activities_dir(&self) -> PathBuf {
         self.library_path.join(".activities")
+    }
+
+    pub fn backup_dir(&self) -> PathBuf {
+        self.library_path.join(".backups")
     }
 }
 
@@ -98,6 +108,9 @@ fn apply_env_overrides(
     }
     if let Some(value) = get("PICMANAGER_DB_BUSY_TIMEOUT_MS").and_then(|value| value.parse::<u64>().ok()) {
         config.database_busy_timeout_ms = value.clamp(100, 60_000);
+    }
+    if let Some(value) = get("PICMANAGER_BACKUP_RETENTION").and_then(|value| value.parse::<u32>().ok()) {
+        config.backup_retention = value.clamp(1, 100);
     }
     config
 }

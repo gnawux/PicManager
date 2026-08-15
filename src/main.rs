@@ -73,6 +73,11 @@ enum Command {
         #[command(subcommand)]
         action: MigrateAction,
     },
+    /// 创建、校验和恢复 SQLite 目录备份
+    Backup {
+        #[command(subcommand)]
+        action: BackupAction,
+    },
     /// Apple Photos inventory and synchronization
     Apple {
         #[command(subcommand)]
@@ -144,6 +149,18 @@ enum MigrateAction {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum BackupAction {
+    /// 在线创建一致的数据库快照
+    Create,
+    /// 列出当前保留的备份
+    List,
+    /// 校验备份完整性
+    Verify { path: PathBuf },
+    /// 恢复到一个尚不存在的新数据库文件
+    Restore { backup: PathBuf, target: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -266,6 +283,7 @@ async fn main() -> anyhow::Result<()> {
             println!("thumb_size   : {}", config.thumb_size);
             println!("db_pool_size : {}", config.database_max_connections);
             println!("db_busy_ms   : {}", config.database_busy_timeout_ms);
+            println!("backup_keep  : {}", config.backup_retention);
             let cfg_file = dirs::config_dir()
                 .map(|p| p.join("picmanager/config.toml").display().to_string())
                 .unwrap_or_else(|| "(unknown)".to_string());
@@ -440,6 +458,29 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                 }
+            }
+        },
+        Command::Backup { action } => match action {
+            BackupAction::Create => {
+                let report = storage::create_backup(
+                    &pool,
+                    &config.backup_dir(),
+                    config.backup_retention as usize,
+                ).await?;
+                println!("备份完成：{}（{} bytes，完整性 {}）", report.path.display(), report.bytes, report.integrity);
+            }
+            BackupAction::List => {
+                for path in storage::list_backups(&config.backup_dir())? {
+                    println!("{}", path.display());
+                }
+            }
+            BackupAction::Verify { path } => {
+                let report = storage::verify_backup(&path).await?;
+                println!("备份有效：{}（{} bytes）", report.path.display(), report.bytes);
+            }
+            BackupAction::Restore { backup, target } => {
+                let report = storage::restore_backup(&backup, &target).await?;
+                println!("恢复完成：{}（完整性 {}）", report.path.display(), report.integrity);
             }
         },
         Command::Apple { action } => match action {
