@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::{Application, CallerKind, ImportCommand, ServiceError};
 use crate::importer::SharedImportProgress;
-use crate::jobs::{HandlerFuture, Job, JobControl, JobFailure, JobHandler, WorkerRegistry};
+use crate::jobs::{HandlerFuture, Job, JobControl, JobFailure, JobHandler};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ImportJobResult {
@@ -101,10 +101,6 @@ impl JobHandler for ImportJobHandler {
     }
 }
 
-pub fn registry(application: Application) -> WorkerRegistry {
-    WorkerRegistry::new().register("import", ImportJobHandler::new(application))
-}
-
 fn service_failure(error: ServiceError) -> JobFailure {
     let code = serde_json::to_value(error.code)
         .ok()
@@ -147,7 +143,7 @@ mod tests {
             .unwrap();
         let worker = WorkerRuntime::new(
             pool.clone(),
-            registry(application),
+            crate::jobs::handlers::registry(application),
             WorkerConfig {
                 concurrency: 1,
                 poll_interval: Duration::from_millis(10),

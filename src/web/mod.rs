@@ -33,14 +33,25 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub config: Config,
     pub geo_running: Arc<AtomicBool>,
+    _worker: Option<Arc<crate::jobs::WorkerHandle>>,
 }
 
 pub fn router(pool: SqlitePool, config: Config) -> Router {
     let application = Application::new(pool.clone(), config.clone());
-    router_with_application(application)
+    let worker = crate::jobs::WorkerRuntime::new(
+        pool,
+        crate::jobs::handlers::registry(application.clone()),
+        crate::jobs::WorkerConfig::default(),
+        "router-worker",
+    )
+    .start();
+    router_with_application(application, Some(Arc::new(worker)))
 }
 
-fn router_with_application(application: Application) -> Router {
+fn router_with_application(
+    application: Application,
+    worker: Option<Arc<crate::jobs::WorkerHandle>>,
+) -> Router {
     let pool = application.pool().clone();
     let config = application.config().clone();
     std::fs::create_dir_all(&config.thumb_cache_dir).ok();
@@ -49,6 +60,7 @@ fn router_with_application(application: Application) -> Router {
         pool,
         config,
         geo_running: Arc::new(AtomicBool::new(false)),
+        _worker: worker,
     };
 
     Router::new()
@@ -127,7 +139,7 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
         "web-worker",
     )
     .start();
-    let app = router_with_application(application);
+    let app = router_with_application(application, None);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     println!("Web 服务启动：http://{addr}");
     axum::serve(listener, app)

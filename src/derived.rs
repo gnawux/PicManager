@@ -2,6 +2,7 @@ use sqlx::{Sqlite, SqlitePool, Transaction};
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
+use crate::orientation::{DisplayTransform, OrientationMode, apply_user_transform};
 
 /// Increment the photo render revision and atomically remove face data whose coordinates
 /// belong to the previous display pixels.
@@ -66,6 +67,43 @@ pub fn sized_thumbnail_cache_path(
     size: u32,
 ) -> PathBuf {
     cache_dir.join(format!("{photo_id}_r{revision}_s{size}.jpg"))
+}
+
+pub fn generate_thumbnail(
+    path: &str,
+    size: u32,
+    mode: OrientationMode,
+    display_orientation: Option<u8>,
+    exif_orientation: u8,
+    rotation: i32,
+    flip_h: bool,
+    flip_v: bool,
+) -> anyhow::Result<Vec<u8>> {
+    use image::ImageFormat;
+    use std::io::Cursor;
+
+    let path = Path::new(path);
+    let image = crate::image_open::open_image(path)?;
+    let transform = DisplayTransform::new(
+        mode,
+        display_orientation,
+        exif_orientation,
+        path,
+        rotation,
+        flip_h,
+        flip_v,
+    );
+    let image = crate::orientation::apply_exif_orientation(image, transform.source_orientation);
+    let thumbnail = image.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
+    let thumbnail = apply_user_transform(
+        thumbnail,
+        transform.rotation,
+        transform.flip_h,
+        transform.flip_v,
+    );
+    let mut bytes = Vec::new();
+    thumbnail.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Jpeg)?;
+    Ok(bytes)
 }
 
 pub async fn mark_thumbnail_ready(pool: &SqlitePool, photo_id: i64, revision: i64) {

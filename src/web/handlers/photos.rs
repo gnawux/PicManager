@@ -7,7 +7,9 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use crate::application::{PhotoMetadataUpdate, RequestContext, ServiceErrorCode};
 use crate::web::AppState;
-use crate::orientation::{apply_user_transform, DisplayTransform, OrientationMode};
+use crate::orientation::{DisplayTransform, OrientationMode};
+#[cfg(test)]
+use crate::orientation::apply_user_transform;
 
 #[derive(Debug, Serialize)]
 pub struct PhotoDetail {
@@ -288,25 +290,19 @@ pub struct ThumbQuery {
 
 pub async fn get_thumb(
     State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
     Path(id): Path<i64>,
     Query(query): Query<ThumbQuery>,
 ) -> Response {
-    let row: Option<(String, i32, i32, i32, i32, String, Option<i64>, i64)> = sqlx::query_as(
-        "SELECT COALESCE(dv.path, p.path), p.rotation, p.flip_h, p.flip_v, \
-                p.exif_orientation, COALESCE(vr.orientation_mode, 'legacy_unknown'), \
-                vr.display_orientation, p.render_revision \
-         FROM photos p \
-         LEFT JOIN assets a ON a.photo_id = p.id \
-         LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
-         LEFT JOIN variant_renditions vr ON vr.variant_id = dv.id \
-         WHERE p.id = ?",
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT render_revision FROM photos WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)
     .await
     .unwrap_or(None);
 
-    let Some((path, rotation, flip_h, flip_v, exif_orient, mode, display_orient, render_revision)) = row else {
+    let Some((render_revision,)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -321,37 +317,46 @@ pub async fn get_thumb(
     } else {
         crate::derived::thumbnail_cache_path(&state.config.thumb_cache_dir, id, render_revision)
     };
-    let thumb_size = requested_size.unwrap_or(state.config.thumb_size);
+    if cache_path.exists() {
+        return match tokio::fs::read(cache_path).await {
+            Ok(bytes) => ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+    }
 
-    let result = tokio::task::spawn_blocking(move || {
-        if cache_path.exists() {
-            std::fs::read(&cache_path).map_err(|e| anyhow::anyhow!(e))
-        } else {
-            let bytes = generate_thumb(
-                &path,
-                thumb_size,
-                OrientationMode::from_catalog(Some(&mode)),
-                display_orient.map(|value| value as u8),
-                exif_orient as u8,
-                rotation,
-                flip_h != 0,
-                flip_v != 0,
-            )?;
-            if let Some(parent) = cache_path.parent() {
-                std::fs::create_dir_all(parent)?;
+    let queued = crate::jobs::handlers::enqueue_thumbnail(
+        &state.application,
+        &context,
+        crate::jobs::handlers::ThumbnailJobPayload {
+            photo_id: id,
+            render_revision,
+            size: requested_size,
+        },
+    )
+    .await;
+    let Ok(queued) = queued else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
+    let completed = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let job = crate::jobs::get(&state.pool, queued.job.id).await.ok()?;
+            if matches!(job.status.as_str(), "succeeded" | "failed" | "cancelled") {
+                return Some(job);
             }
-            std::fs::write(&cache_path, &bytes)?;
-            Ok(bytes)
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         }
     })
     .await;
-
-    match result {
-        Ok(Ok(bytes)) => {
-            crate::derived::mark_thumbnail_ready(&state.pool, id, render_revision).await;
-            ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response()
+    match completed {
+        Ok(Some(job)) if job.status == "succeeded" => match tokio::fs::read(cache_path).await {
+            Ok(bytes) => ([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response(),
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        },
+        Ok(Some(job)) if job.error_code.as_deref() == Some("photo_not_found") => {
+            StatusCode::NOT_FOUND.into_response()
         }
-        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(Some(_)) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
@@ -480,6 +485,7 @@ fn apply_transforms_full(
     Ok(buf)
 }
 
+#[cfg(test)]
 fn generate_thumb(
     path: &str,
     size: u32,
@@ -490,22 +496,16 @@ fn generate_thumb(
     flip_h: bool,
     flip_v: bool,
 ) -> anyhow::Result<Vec<u8>> {
-    use image::ImageFormat;
-    use std::io::Cursor;
-
-    let p = std::path::Path::new(path);
-    let img = crate::image_open::open_image(p)?;
-    // Apply EXIF orientation BEFORE resize so resize_to_fill crops in display orientation.
-    let transform = DisplayTransform::new(
-        mode, display_orientation, exif_orient, p, rotation, flip_h, flip_v,
-    );
-    let img = crate::orientation::apply_exif_orientation(img, transform.source_orientation);
-    let thumb = img.resize_to_fill(size, size, image::imageops::FilterType::Triangle);
-    let thumb = apply_user_transform(thumb, transform.rotation, transform.flip_h, transform.flip_v);
-
-    let mut buf = Vec::new();
-    thumb.write_to(&mut Cursor::new(&mut buf), ImageFormat::Jpeg)?;
-    Ok(buf)
+    crate::derived::generate_thumbnail(
+        path,
+        size,
+        mode,
+        display_orientation,
+        exif_orient,
+        rotation,
+        flip_h,
+        flip_v,
+    )
 }
 
 impl sqlx::FromRow<'_, sqlx::sqlite::SqliteRow> for PhotoRow {
