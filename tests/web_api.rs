@@ -631,6 +631,50 @@ async fn photo_file_uses_catalog_display_variant_and_orientation_policy() {
 }
 
 #[tokio::test]
+async fn photo_file_selects_original_and_rejects_unknown_variant() {
+    let (app, pool, tmp) = test_app_with_pool().await;
+    let original = tmp.path().join("variant-original.png");
+    let current = tmp.path().join("variant-current.png");
+    image::DynamicImage::new_rgb8(4, 3).save(&original).unwrap();
+    image::DynamicImage::new_rgb8(7, 5).save(&current).unwrap();
+
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status) \
+         VALUES (?, 'variant-select', 'png', 'imported') RETURNING id",
+    )
+    .bind(original.to_str().unwrap()).fetch_one(&pool).await.unwrap();
+    let asset_id: i64 = sqlx::query_scalar("INSERT INTO assets (photo_id) VALUES (?) RETURNING id")
+        .bind(photo_id).fetch_one(&pool).await.unwrap();
+    let original_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path, mime_type) \
+         VALUES (?, 'original', ?, 'image/png') RETURNING id",
+    )
+    .bind(asset_id).bind(original.to_str().unwrap()).fetch_one(&pool).await.unwrap();
+    let current_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path, mime_type) \
+         VALUES (?, 'current', ?, 'image/png') RETURNING id",
+    )
+    .bind(asset_id).bind(current.to_str().unwrap()).fetch_one(&pool).await.unwrap();
+    sqlx::query("UPDATE assets SET master_variant_id = ?, display_variant_id = ? WHERE id = ?")
+        .bind(original_id).bind(current_id).bind(asset_id).execute(&pool).await.unwrap();
+
+    let response = app.clone().oneshot(
+        Request::builder().uri(format!("/api/photos/{photo_id}/file?variant=original"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let image = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (4, 3));
+
+    let response = app.oneshot(
+        Request::builder().uri(format!("/api/photos/{photo_id}/file?variant=unknown"))
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn get_photo_detail_returns_full_metadata() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 
@@ -642,6 +686,22 @@ async fn get_photo_detail_returns_full_metadata() {
     .fetch_one(&pool)
     .await
     .unwrap();
+
+    let asset_id: i64 = sqlx::query_scalar("INSERT INTO assets (photo_id) VALUES (?) RETURNING id")
+        .bind(id).fetch_one(&pool).await.unwrap();
+    let original_id: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_variants (asset_id, role, path, width, height) \
+         VALUES (?, 'original', '/tmp/detail.jpg', 4032, 3024) RETURNING id",
+    )
+    .bind(asset_id).fetch_one(&pool).await.unwrap();
+    sqlx::query("UPDATE assets SET display_variant_id = ?, master_variant_id = ? WHERE id = ?")
+        .bind(original_id).bind(original_id).bind(asset_id).execute(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO asset_sources \
+         (asset_id, provider, external_id, original_filename, sync_status) \
+         VALUES (?, 'apple_photos', 'asset-detail', 'IMG_0042.HEIC', 'ready')",
+    )
+    .bind(asset_id).execute(&pool).await.unwrap();
 
     let response = app
         .oneshot(
@@ -660,6 +720,13 @@ async fn get_photo_detail_returns_full_metadata() {
     assert_eq!(json["camera"], "iPhone 15");
     assert_eq!(json["timezone_offset"], 480);
     assert!((json["gps_lat"].as_f64().unwrap() - 37.77).abs() < 0.01);
+    assert_eq!(json["width"], 4032);
+    assert_eq!(json["height"], 3024);
+    assert_eq!(json["sources"][0]["provider"], "apple_photos");
+    assert_eq!(json["sources"][0]["original_filename"], "IMG_0042.HEIC");
+    assert_eq!(json["renditions"]["display"], format!("/api/photos/{id}/file"));
+    assert_eq!(json["renditions"]["original"], format!("/api/photos/{id}/file?variant=original"));
+    assert!(json["renditions"]["current"].is_null());
 }
 
 #[tokio::test]

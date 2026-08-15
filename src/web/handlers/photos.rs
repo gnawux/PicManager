@@ -19,6 +19,24 @@ pub struct PhotoDetail {
     pub gps_lat: Option<f64>,
     pub gps_lon: Option<f64>,
     pub import_status: String,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub sources: Vec<PhotoSourceDetail>,
+    pub renditions: PhotoRenditions,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhotoSourceDetail {
+    pub provider: String,
+    pub original_filename: Option<String>,
+    pub sync_status: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PhotoRenditions {
+    pub display: String,
+    pub original: Option<String>,
+    pub current: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,20 +112,52 @@ pub async fn get_photo(
     State(state): State<AppState>,
     Path(id): Path<i64>,
 ) -> Result<Json<PhotoDetail>, StatusCode> {
-    let row: Option<(i64, String, String, Option<String>, Option<i64>, Option<String>, Option<f64>, Option<f64>, String)> =
+    let row: Option<(i64, String, String, Option<String>, Option<i64>, Option<String>, Option<f64>, Option<f64>, String, Option<i64>, Option<i64>, i64, i64)> =
         sqlx::query_as(
-            "SELECT id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status
-             FROM photos WHERE id = ?",
+            "SELECT p.id, p.path, p.format, p.taken_at, p.timezone_offset, p.camera, \
+                    p.gps_lat, p.gps_lon, p.import_status, COALESCE(dv.width, p.width), \
+                    COALESCE(dv.height, p.height), \
+                    EXISTS(SELECT 1 FROM asset_variants ov \
+                           WHERE ov.asset_id = a.id AND ov.role = 'original' AND ov.path IS NOT NULL), \
+                    EXISTS(SELECT 1 FROM asset_variants cv \
+                           WHERE cv.asset_id = a.id AND cv.role = 'current' AND cv.path IS NOT NULL) \
+             FROM photos p \
+             LEFT JOIN assets a ON a.photo_id = p.id \
+             LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
+             WHERE p.id = ?",
         )
         .bind(id)
         .fetch_optional(&state.pool)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let (id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status) =
+    let (id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status,
+        width, height, has_original, has_current) =
         row.ok_or(StatusCode::NOT_FOUND)?;
 
-    Ok(Json(PhotoDetail { id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status }))
+    let sources = sqlx::query_as::<_, (String, Option<String>, String)>(
+        "SELECT provider, original_filename, sync_status FROM asset_sources \
+         WHERE asset_id = (SELECT id FROM assets WHERE photo_id = ?) ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    .into_iter()
+    .map(|(provider, original_filename, sync_status)| PhotoSourceDetail {
+        provider, original_filename, sync_status,
+    })
+    .collect();
+    let base = format!("/api/photos/{id}/file");
+    Ok(Json(PhotoDetail {
+        id, path, format, taken_at, timezone_offset, camera, gps_lat, gps_lon, import_status,
+        width, height, sources,
+        renditions: PhotoRenditions {
+            display: base.clone(),
+            original: (has_original != 0).then(|| format!("{base}?variant=original")),
+            current: (has_current != 0).then(|| format!("{base}?variant=current")),
+        },
+    }))
 }
 
 #[derive(Debug, Deserialize)]
@@ -418,26 +468,48 @@ pub async fn get_thumb(
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct PhotoFileQuery {
+    pub variant: Option<String>,
+}
+
 pub async fn get_photo_file(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(query): Query<PhotoFileQuery>,
 ) -> Response {
-    let row: Option<(String, String, i32, i32, i32, i32, String, Option<i64>)> = sqlx::query_as(
-        "SELECT COALESCE(dv.path, p.path), p.format, p.rotation, p.flip_h, p.flip_v, \
+    let variant_join = match query.variant.as_deref().unwrap_or("display") {
+        "display" => "LEFT JOIN asset_variants sv ON sv.id = a.display_variant_id",
+        "original" => "LEFT JOIN asset_variants sv ON sv.id = (\
+            SELECT id FROM asset_variants WHERE asset_id = a.id AND role = 'original' \
+            AND path IS NOT NULL ORDER BY is_primary DESC, id LIMIT 1)",
+        "current" => "LEFT JOIN asset_variants sv ON sv.id = (\
+            SELECT id FROM asset_variants WHERE asset_id = a.id AND role = 'current' \
+            AND path IS NOT NULL ORDER BY id DESC LIMIT 1)",
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let path_expression = if query.variant.as_deref().unwrap_or("display") == "display" {
+        "COALESCE(sv.path, p.path)"
+    } else {
+        "sv.path"
+    };
+    let sql = format!(
+        "SELECT {path_expression}, sv.mime_type, p.format, p.rotation, p.flip_h, p.flip_v, \
                 p.exif_orientation, COALESCE(vr.orientation_mode, 'legacy_unknown'), \
                 vr.display_orientation \
          FROM photos p \
          LEFT JOIN assets a ON a.photo_id = p.id \
-         LEFT JOIN asset_variants dv ON dv.id = a.display_variant_id \
-         LEFT JOIN variant_renditions vr ON vr.variant_id = dv.id \
-         WHERE p.id = ?",
-    )
+         {variant_join} \
+         LEFT JOIN variant_renditions vr ON vr.variant_id = sv.id \
+         WHERE p.id = ?"
+    );
+    let row: Option<(Option<String>, Option<String>, String, i32, i32, i32, i32, String, Option<i64>)> = sqlx::query_as(&sql)
     .bind(id)
     .fetch_optional(&state.pool)
     .await
     .unwrap_or(None);
 
-    let Some((path, format, rotation, flip_h_i, flip_v_i, exif_orient, mode, display_orient)) = row else {
+    let Some((Some(path), variant_mime, format, rotation, flip_h_i, flip_v_i, exif_orient, mode, display_orient)) = row else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
@@ -473,18 +545,29 @@ pub async fn get_photo_file(
         }
     }
 
-    let mime = match format.to_lowercase().as_str() {
-        "jpeg" | "jpg"  => "image/jpeg",
-        "png"           => "image/png",
-        "gif"           => "image/gif",
-        "webp"          => "image/webp",
-        "tiff" | "tif"  => "image/tiff",
-        _               => "application/octet-stream",
-    };
+    let mime = variant_mime
+        .filter(|mime| mime.starts_with("image/"))
+        .unwrap_or_else(|| mime_for_path_or_format(&path, &format).to_owned());
 
     match tokio::fs::read(&path).await {
         Ok(bytes) => ([(header::CONTENT_TYPE, mime)], bytes).into_response(),
         Err(_)    => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+fn mime_for_path_or_format(path: &str, format: &str) -> &'static str {
+    let extension = std::path::Path::new(path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or(format)
+        .to_ascii_lowercase();
+    match extension.as_str() {
+        "jpeg" | "jpg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "tiff" | "tif" => "image/tiff",
+        _ => "application/octet-stream",
     }
 }
 
