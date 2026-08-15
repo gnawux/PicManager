@@ -79,7 +79,7 @@ mod tests {
     #[tokio::test]
     async fn all_tables_exist() {
         let pool = test_pool().await;
-        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs"] {
+        for table in &["photos", "albums", "photo_albums", "dedup_groups", "dedup_members", "import_sessions", "faces", "face_jobs", "assets", "asset_sources", "asset_variants", "asset_links", "migration_runs"] {
             let row: (i64,) = sqlx::query_as(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
             )
@@ -89,6 +89,71 @@ mod tests {
             .unwrap();
             assert_eq!(row.0, 1, "table {table} should exist");
         }
+    }
+
+    #[tokio::test]
+    async fn asset_catalog_enforces_external_identity_and_lifecycle() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO asset_sources (provider, external_id) VALUES ('apple_photos', 'asset-1')",
+        )
+        .execute(&pool).await.unwrap();
+
+        let duplicate = sqlx::query(
+            "INSERT INTO asset_sources (provider, external_id) VALUES ('apple_photos', 'asset-1')",
+        )
+        .execute(&pool).await;
+        assert!(duplicate.is_err(), "provider source identity must be unique");
+
+        let invalid_status = sqlx::query(
+            "INSERT INTO asset_sources (provider, external_id, sync_status) VALUES ('apple_photos', 'asset-2', 'unknown')",
+        )
+        .execute(&pool).await;
+        assert!(invalid_status.is_err(), "unknown lifecycle states must be rejected");
+    }
+
+    #[tokio::test]
+    async fn asset_catalog_allows_one_primary_variant() {
+        let pool = test_pool().await;
+        let asset_id: i64 = sqlx::query_scalar("INSERT INTO assets DEFAULT VALUES RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO asset_variants (asset_id, role, path, is_primary) VALUES (?, 'original', '/original.jpg', 1)",
+        )
+        .bind(asset_id).execute(&pool).await.unwrap();
+
+        let second_primary = sqlx::query(
+            "INSERT INTO asset_variants (asset_id, role, path, is_primary) VALUES (?, 'current', '/current.jpg', 1)",
+        )
+        .bind(asset_id).execute(&pool).await;
+        assert!(second_primary.is_err(), "an asset may only have one primary variant");
+    }
+
+    #[tokio::test]
+    async fn deleting_asset_cascades_variants_but_preserves_source_inventory() {
+        let pool = test_pool().await;
+        let asset_id: i64 = sqlx::query_scalar("INSERT INTO assets DEFAULT VALUES RETURNING id")
+            .fetch_one(&pool).await.unwrap();
+        let source_id: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_sources (asset_id, provider, external_id) VALUES (?, 'apple_photos', 'asset-1') RETURNING id",
+        )
+        .bind(asset_id).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO asset_variants (asset_id, source_id, role, path) VALUES (?, ?, 'original', '/original.jpg')",
+        )
+        .bind(asset_id).bind(source_id).execute(&pool).await.unwrap();
+
+        sqlx::query("DELETE FROM assets WHERE id = ?")
+            .bind(asset_id).execute(&pool).await.unwrap();
+
+        let variants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM asset_variants")
+            .fetch_one(&pool).await.unwrap();
+        let source_asset: Option<i64> = sqlx::query_scalar(
+            "SELECT asset_id FROM asset_sources WHERE id = ?",
+        )
+        .bind(source_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(variants, 0);
+        assert_eq!(source_asset, None, "provider inventory survives unlinking");
     }
 
     #[tokio::test]
