@@ -6,6 +6,7 @@ pub mod collections;
 pub mod dedup;
 pub mod faces;
 pub mod geo;
+pub mod health;
 pub mod import;
 pub mod people;
 pub mod photos;

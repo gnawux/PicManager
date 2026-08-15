@@ -69,6 +69,29 @@ async fn get_import_status_returns_200() {
 }
 
 #[tokio::test]
+async fn health_api_returns_structured_service_and_job_state() {
+    let app = test_app().await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/health?deep=true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["status"], "healthy");
+    assert_eq!(json["sqlite_quick_check"], "ok");
+    assert!(json["schema_version"].as_i64().unwrap() >= 26);
+    assert!(json["reconciliation"].is_object());
+}
+
+#[tokio::test]
 async fn task_api_lists_details_retries_and_cancels_with_structured_errors() {
     let (app, pool, _tmp) = test_app_with_pool().await;
     let failed_id: i64 = sqlx::query_scalar(

@@ -78,6 +78,15 @@ enum Command {
         #[command(subcommand)]
         action: BackupAction,
     },
+    /// 输出数据库、任务和可选文件系统诊断
+    Diagnostics {
+        /// 检查媒体、variant、intent 和派生缓存
+        #[arg(long)]
+        deep: bool,
+        /// 输出 JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Apple Photos inventory and synchronization
     Apple {
         #[command(subcommand)]
@@ -508,6 +517,26 @@ async fn main() -> anyhow::Result<()> {
                 println!("恢复完成：{}（完整性 {}）", report.path.display(), report.integrity);
             }
         },
+        Command::Diagnostics { deep, json } => {
+            let report = storage::health_report(&pool, &config, deep).await?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("status          : {}", report.status);
+                println!("sqlite          : {}", report.sqlite_quick_check);
+                println!("journal_mode    : {}", report.journal_mode);
+                println!("schema_version  : {}", report.schema_version);
+                println!("jobs queued     : {}", report.application_jobs_queued);
+                println!("jobs running    : {}", report.application_jobs_running);
+                println!("jobs failed     : {}", report.application_jobs_failed);
+                println!("sync failed     : {}", report.sync_jobs_failed);
+                if let Some(reconciliation) = report.reconciliation {
+                    println!("missing media   : {}", reconciliation.missing_photo_files);
+                    println!("missing variants: {}", reconciliation.missing_variant_files);
+                    println!("pending intents : {}", reconciliation.incomplete_filesystem_intents);
+                }
+            }
+        }
         Command::Apple { action } => match action {
             AppleAction::Inventory { file, dry_run, json } => {
                 let report = apple::ingest_inventory(&pool, &file, dry_run).await?;

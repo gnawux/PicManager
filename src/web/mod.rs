@@ -20,6 +20,7 @@ use handlers::{
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
     geo::{get_geo_hierarchy, get_geo_photos, start_regeocode, get_regeocode_status},
+    health::get_health,
     people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person, get_merge_suggestions, get_outlier_faces, eject_face, get_centroid_faces, get_embedding_map},
     import::{start_import, get_import_status},
     photos::{list_photos, get_thumb, get_photo_file, get_photo, get_gps_points, patch_photo, batch_update_photos},
@@ -62,6 +63,7 @@ fn router_with_application(
     };
 
     Router::new()
+        .route("/api/health", get(get_health))
         .route("/api/photos", get(list_photos))
         .route("/api/timeline", get(list_timeline))
         .route("/api/photos/gps-points", get(get_gps_points))
@@ -129,6 +131,13 @@ fn router_with_application(
 
 pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
     let addr = config.bind_addr();
+    let recovery = crate::storage::recover_startup(&pool, &config).await?;
+    tracing::info!(
+        application_leases = recovery.application_leases_recovered,
+        sync_leases = recovery.sync_leases_recovered,
+        filesystem_intents = recovery.filesystem_intents_recovered,
+        "startup recovery completed"
+    );
     let application = Application::new(pool.clone(), config);
     let worker = crate::jobs::WorkerRuntime::new(
         pool,
