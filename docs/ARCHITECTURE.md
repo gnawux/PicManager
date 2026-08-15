@@ -1,5 +1,38 @@
 # PicManager 架构设计
 
+> 本文保留早期模块细节；以下“当前架构”以及
+> [SERVICE_JOB_CONTRACT.md](SERVICE_JOB_CONTRACT.md)、[ASSET_MODEL.md](ASSET_MODEL.md)
+> 和 [MACOS_APP.md](MACOS_APP.md) 描述 Phase 4/5 后的权威边界。
+
+## 当前架构（Phase 4/5）
+
+PicManager 只有一套照片体验：Svelte 构建结果嵌入 Rust 服务，可由浏览器或
+WKWebView 展示。SwiftUI Mac App 是生命周期与系统集成外壳，不复制相册业务界面。
+
+```text
+Photos.app / folders
+        │ PhotoKit inventory, rendition packages, imports
+        ▼
+Rust application services ── durable jobs ── bounded workers
+        │                              │
+        ├── repositories ── SQLite WAL/catalog
+        ├── filesystem intents / reconciliation / backups
+        └── Axum v1 operational API + Web photo API
+                          │
+              Svelte Web UI / WKWebView
+                          │
+               SwiftUI menu-bar shell
+```
+
+业务写入通过 application service 和 request context；Web、CLI、worker 与 Mac 集成
+不应各自实现数据库规则。导入、缩略图、AI、地理编码、去重和 Apple 同步均使用持久
+任务、attempt、lease、取消与重试。文件与数据库的跨边界变化通过 intent 和启动恢复
+协调，派生文件可重建，原片不可被派生流程覆盖。
+
+Mac App 使用 `/api/v1/service|health|diagnostics|metrics|tasks`，并校验不可逆 library
+fingerprint，防止连接到同一端口上的其他资料库。App lock、service lock 和 SQLite
+lease 分别解决 UI 所有权、服务所有权和任务所有权，不可互相替代。
+
 ## 整体架构
 
 PicManager 由两个独立工具组成：**picmanager**（Rust，核心库）负责照片库管理，**photobridge**（Swift CLI）负责从 macOS 照片库导出照片并送入 picmanager。两者均为单一二进制，通过文件系统（暂存目录）和子进程调用（`picmanager import`）交互。

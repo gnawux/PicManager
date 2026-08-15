@@ -31,12 +31,10 @@ These repository-wide instructions apply to every automated coding session.
 
 ## Current sequencing
 
-- Complete architectural Phase 4 and macOS product Phase 5 before spending time on
-  minor UI defects. Record discovered defects for the post-refactor stabilization pass.
-- Phase 4 must establish shared service/repository boundaries, durable background work,
-  database concurrency hardening, backup/reconciliation and consistent API lifecycle
-  rules before Phase 5 depends on those interfaces.
+- Phase 4 and Phase 5 are implemented. Preserve their service contracts, durable-job,
+  recovery, ownership, Mac shell and data-migration guarantees during stabilization.
 - Phase 5 must reuse the Rust service and embedded web application. Do not create a
   second photo-management frontend in SwiftUI.
-- After Phase 4/5 implementation, reorganize and update architecture, operation,
-  packaging, upgrade and release documentation, then run the full release gates.
+- Use `docs/README.md` as the current documentation index. Treat `PLAN.md` and
+  `DESIGN.md` as historical records when they conflict with current documents.
+- Run the full release gates before merging release work to `main`.

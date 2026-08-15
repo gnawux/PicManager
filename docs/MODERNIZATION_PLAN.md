@@ -1,9 +1,9 @@
 # PicManager Modernization Plan
 
-Implementation status: Phase 0–3 and the M8 release-candidate hardening are complete.
-The additive catalog and migration safety work, reliable Apple Photos inventory and
-synchronization foundations, rendition fidelity model, and modern web application have
-passed the documented release gates. Phases 4–6 remain the forward roadmap.
+Implementation status: Phase 0–5 and M18.1–M18.2 stabilization are complete. The
+additive catalog, reliable Apple Photos inventory, rendition model, durable services,
+modern Web application, and macOS product are implemented. The full Phase 4/5 release
+gate and merge remain; Phase 6 is intentionally deferred.
 
 ## 1. Product direction
 
@@ -416,11 +416,15 @@ Status: complete. Release-gate evidence is recorded in `PHASE4_RELEASE_GATE.md`.
 
 ### M14 - macOS application foundation
 
+Status: complete.
+
 - M14.1: add a SwiftUI menu-bar application target and shared configuration model.
 - M14.2: implement first-run library selection and PhotoKit authorization assistant.
 - M14.3: display source inventory, synchronization and background-task health.
 
 ### M15 - Rust service lifecycle integration
+
+Status: complete.
 
 - M15.1: locate or install the bundled Rust service and validate compatible versions.
 - M15.2: start, monitor and gracefully stop the local service with crash recovery.
@@ -429,12 +433,16 @@ Status: complete. Release-gate evidence is recorded in `PHASE4_RELEASE_GATE.md`.
 
 ### M16 - Native shell and daily operation
 
+Status: complete.
+
 - M16.1: add embedded WKWebView and system-browser launch modes.
 - M16.2: add menu-bar task progress, retry shortcuts and synchronization controls.
 - M16.3: add launch-at-login management using current macOS service APIs.
 - M16.4: add diagnostic export with configuration redaction and no media inclusion.
 
 ### M17 - Distribution preparation
+
+Status: complete. External signing credentials and publication remain release-operator actions.
 
 - M17.1: define app bundle resources, entitlements and release build assembly.
 - M17.2: add signing/notarization scripts that require explicit external credentials.
@@ -443,8 +451,8 @@ Status: complete. Release-gate evidence is recorded in `PHASE4_RELEASE_GATE.md`.
 
 ### M18 - Phase 4/5 stabilization and documentation
 
-- M18.1: address deferred functional/UI defects after the refactor is complete.
-- M18.2: reorganize architecture, operations, macOS, migration and user documentation.
+- M18.1: complete — bind native clients to the selected library and restart safely after configuration changes.
+- M18.2: complete — reorganize architecture, operations, macOS, migration and user documentation.
 - M18.3: run Rust, Swift, frontend, migration, performance and browser release gates.
 - M18.4: merge the completed Phase 4/5 branch into `main` with a signed-off merge.
 
