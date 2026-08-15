@@ -95,6 +95,24 @@ enum MigrateAction {
         #[arg(long)]
         json: bool,
     },
+    /// 验证现有照片与新资产目录是否完整一致
+    Verify {
+        /// 输出 JSON 报告
+        #[arg(long)]
+        json: bool,
+        /// 跳过逐个照片文件存在性检查
+        #[arg(long)]
+        skip_files: bool,
+    },
+    /// 显示最近的迁移执行记录
+    Report {
+        /// 最多显示的记录数
+        #[arg(long, default_value_t = 20)]
+        limit: u32,
+        /// 输出 JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -325,6 +343,48 @@ async fn main() -> anyhow::Result<()> {
                         println!("created variants    : {}", report.created_variants);
                         println!("created links       : {}", report.created_links);
                         println!("migration run       : {}", report.migration_run_id.unwrap_or_default());
+                    }
+                }
+            }
+            MigrateAction::Verify { json, skip_files } => {
+                let report = migration::verify_catalog(&pool, !skip_files).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    println!("catalog assets          : {}", report.total_assets);
+                    println!("linked assets           : {}", report.linked_assets);
+                    println!("photos without assets   : {}", report.photos_without_assets);
+                    println!("assets without photos   : {}", report.assets_without_photos);
+                    println!("legacy sources          : {}", report.legacy_sources);
+                    println!("photos without sources  : {}", report.photos_without_legacy_sources);
+                    println!("orphan legacy sources   : {}", report.legacy_sources_without_assets);
+                    println!("variants                : {}", report.total_variants);
+                    println!("assets without primary  : {}", report.assets_without_primary_variants);
+                    println!("conflicting links       : {}", report.conflicting_links);
+                    println!("catalog result          : {}", if report.is_healthy() { "healthy" } else { "issues found" });
+                }
+                if !report.is_healthy() {
+                    std::process::exit(2);
+                }
+            }
+            MigrateAction::Report { limit, json } => {
+                let runs = migration::list_migration_runs(&pool, limit).await?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&runs)?);
+                } else if runs.is_empty() {
+                    println!("no migration runs recorded");
+                } else {
+                    for run in runs {
+                        println!(
+                            "#{:<5} {:<28} {:<10} {}",
+                            run.id,
+                            run.kind,
+                            run.status,
+                            run.finished_at.as_deref().or(run.started_at.as_deref()).unwrap_or(&run.created_at),
+                        );
+                        if let Some(error) = run.error {
+                            println!("        error: {error}");
+                        }
                     }
                 }
             }

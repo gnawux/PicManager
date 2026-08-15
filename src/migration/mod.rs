@@ -1,6 +1,8 @@
 mod backfill;
+mod verification;
 
 pub use backfill::{backfill_legacy_local, BackfillReport};
+pub use verification::{list_migration_runs, verify_catalog, CatalogVerificationReport, MigrationRun};
 
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
