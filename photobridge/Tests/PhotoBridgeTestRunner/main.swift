@@ -39,5 +39,6 @@ runRenditionExportTests()
 runMacAppConfigurationTests()
 runOnboardingReadinessTests()
 runServiceDashboardTests()
+runServiceExecutableTests()
 
 finish()

@@ -14,6 +14,7 @@ final class AppModel: ObservableObject {
     @Published var appleInventory: ApplePhotoInventory?
     @Published var dashboard: ServiceDashboard?
     @Published var dashboardLoading = false
+    @Published var serviceExecutable: ResolvedServiceExecutable?
 
     init() {
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
@@ -104,6 +105,24 @@ final class AppModel: ObservableObject {
         } catch {
             dashboard = nil
             serviceStatus = "Unavailable"
+            lastError = error.localizedDescription
+        }
+    }
+
+    func prepareServiceExecutable() {
+        do {
+            let locator = ServiceExecutableLocator()
+            let located = try locator.locate(
+                configuredPath: configuration.serviceExecutablePath,
+                bundleResourceURL: Bundle.main.resourceURL,
+                applicationSupportURL: MacAppConfiguration.applicationSupportURL.deletingLastPathComponent(),
+                hostExecutableURL: Bundle.main.executableURL
+            )
+            serviceExecutable = try locator.validate(located)
+            configuration.serviceExecutablePath = located.path
+            lastError = nil
+        } catch {
+            serviceExecutable = nil
             lastError = error.localizedDescription
         }
     }

@@ -48,7 +48,10 @@ private struct LibraryShellView: View {
             OnboardingAssistant(model: model)
         } else {
             DashboardView(model: model)
-                .task { await model.refreshDashboard() }
+                .task {
+                    model.prepareServiceExecutable()
+                    await model.refreshDashboard()
+                }
         }
     }
 }
@@ -138,6 +141,9 @@ private struct DashboardView: View {
                 Text("\(model.dashboard?.metrics.queued ?? 0) queued · \(model.dashboard?.metrics.retryWait ?? 0) retrying")
                     .foregroundStyle(.secondary)
                 Text("Service: \(model.serviceStatus)").foregroundStyle(.secondary)
+                if let executable = model.serviceExecutable {
+                    Text("Version \(executable.version.description)").foregroundStyle(.secondary)
+                }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
         }
     }
