@@ -158,8 +158,16 @@ export function createApiClient(options: ApiClientOptions = {}) {
     },
     geo: {
       hierarchy: () => request<GeoHierarchy>('/api/geo/hierarchy'),
-      clusters: (columns = 48, rows = 24) =>
-        request<GeoClusterPage>(`/api/geo/clusters?columns=${columns}&rows=${rows}`),
+      clusters: (columns = 48, rows = 24, bounds?: { west: number; east: number; south: number; north: number }) => {
+        const query = new URLSearchParams({ columns: String(columns), rows: String(rows) });
+        if (bounds) for (const [key, value] of Object.entries(bounds)) query.set(key, String(value));
+        return request<GeoClusterPage>(`/api/geo/clusters?${query}`);
+      },
+      clusterPhotos: (bounds: { west: number; east: number; south: number; north: number }) => {
+        const query = new URLSearchParams({ page: '1', per_page: '200' });
+        for (const [key, value] of Object.entries(bounds)) query.set(key, String(value));
+        return request<AlbumPhotoPage>(`/api/geo/cluster-photos?${query}`);
+      },
       photos: (filters: { country?: string; state?: string; city?: string }) => {
         const query = new URLSearchParams({ page: '1', per_page: '200' });
         for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);

@@ -136,6 +136,25 @@ describe('API client', () => {
     expect(fetcher.mock.calls[0][0]).toBe('/api/geo/clusters?columns=48&rows=24');
   });
 
+  it('encodes map viewport bounds for clusters and cluster photos', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ clusters: [], total_photos: 0, photos: [], total: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    const bounds = { west: 100, east: 110, south: 20, north: 30 };
+    await client.geo.clusters(32, 16, bounds);
+    await client.geo.clusterPhotos(bounds);
+    expect(fetcher.mock.calls[0][0]).toBe(
+      '/api/geo/clusters?columns=32&rows=16&west=100&east=110&south=20&north=30',
+    );
+    expect(fetcher.mock.calls[1][0]).toBe(
+      '/api/geo/cluster-photos?page=1&per_page=200&west=100&east=110&south=20&north=30',
+    );
+  });
+
   it('starts explicit geographic name normalization', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify({ status: 'started', count: 42 }), {

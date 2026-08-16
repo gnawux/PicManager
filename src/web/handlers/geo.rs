@@ -49,6 +49,10 @@ pub struct GeoClustersQuery {
     pub columns: i64,
     #[serde(default = "default_cluster_rows")]
     pub rows: i64,
+    pub west: Option<f64>,
+    pub east: Option<f64>,
+    pub south: Option<f64>,
+    pub north: Option<f64>,
 }
 
 fn default_cluster_columns() -> i64 { DEFAULT_CLUSTER_COLUMNS }
@@ -62,6 +66,10 @@ pub struct GeoCluster {
     pub gps_lon: f64,
     pub photo_count: i64,
     pub representative_photo_id: i64,
+    pub west: f64,
+    pub east: f64,
+    pub south: f64,
+    pub north: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -76,15 +84,21 @@ pub async fn get_geo_clusters(
 ) -> Result<Json<GeoClusterPage>, StatusCode> {
     let columns = params.columns.clamp(1, MAX_CLUSTER_COLUMNS);
     let rows = params.rows.clamp(1, MAX_CLUSTER_ROWS);
+    let mut west = params.west.unwrap_or(-180.0).clamp(-180.0, 180.0);
+    let mut east = params.east.unwrap_or(180.0).clamp(-180.0, 180.0);
+    let mut south = params.south.unwrap_or(-90.0).clamp(-90.0, 90.0);
+    let mut north = params.north.unwrap_or(90.0).clamp(-90.0, 90.0);
+    if east - west < 0.000_001 { west = -180.0; east = 180.0; }
+    if north - south < 0.000_001 { south = -90.0; north = 90.0; }
     let result: Vec<(i64, i64, f64, f64, i64, i64)> = sqlx::query_as(
         "WITH valid_photos AS (
              SELECT id, gps_lat, gps_lon,
-                    MIN(? - 1, CAST(((gps_lon + 180.0) / 360.0) * ? AS INTEGER)) AS x_bin,
-                    MIN(? - 1, CAST(((90.0 - gps_lat) / 180.0) * ? AS INTEGER)) AS y_bin
+                    MIN(? - 1, CAST(((gps_lon - ?) / (? - ?)) * ? AS INTEGER)) AS x_bin,
+                    MIN(? - 1, CAST(((? - gps_lat) / (? - ?)) * ? AS INTEGER)) AS y_bin
              FROM photos
              WHERE import_status = 'imported'
-               AND gps_lat BETWEEN -90.0 AND 90.0
-               AND gps_lon BETWEEN -180.0 AND 180.0
+               AND gps_lat BETWEEN ? AND ?
+               AND gps_lon BETWEEN ? AND ?
          )
          SELECT x_bin, y_bin, AVG(gps_lat), AVG(gps_lon), COUNT(*), MIN(id)
          FROM valid_photos
@@ -92,21 +106,93 @@ pub async fn get_geo_clusters(
          ORDER BY y_bin, x_bin",
     )
     .bind(columns)
+    .bind(west)
+    .bind(east)
+    .bind(west)
     .bind(columns)
     .bind(rows)
+    .bind(north)
+    .bind(north)
+    .bind(south)
     .bind(rows)
+    .bind(south)
+    .bind(north)
+    .bind(west)
+    .bind(east)
     .fetch_all(&state.pool)
     .await
     .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let lon_step = (east - west) / columns as f64;
+    let lat_step = (north - south) / rows as f64;
     let clusters = result.into_iter().map(
         |(x_bin, y_bin, gps_lat, gps_lon, photo_count, representative_photo_id)| GeoCluster {
             x_bin, y_bin, gps_lat, gps_lon, photo_count, representative_photo_id,
+            west: west + x_bin as f64 * lon_step,
+            east: west + (x_bin + 1) as f64 * lon_step,
+            north: north - y_bin as f64 * lat_step,
+            south: north - (y_bin + 1) as f64 * lat_step,
         },
     ).collect::<Vec<_>>();
     let total_photos = clusters.iter().map(|cluster| cluster.photo_count).sum();
 
     Ok(Json(GeoClusterPage { clusters, total_photos }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GeoClusterPhotosQuery {
+    pub west: f64,
+    pub east: f64,
+    pub south: f64,
+    pub north: f64,
+    #[serde(default = "default_page")]
+    pub page: i64,
+    #[serde(default = "default_per_page")]
+    pub per_page: i64,
+}
+
+pub async fn get_geo_cluster_photos(
+    State(state): State<AppState>,
+    Query(params): Query<GeoClusterPhotosQuery>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    if !params.west.is_finite() || !params.east.is_finite()
+        || !params.south.is_finite() || !params.north.is_finite()
+        || params.east <= params.west || params.north <= params.south
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let west = params.west.clamp(-180.0, 180.0);
+    let east = params.east.clamp(-180.0, 180.0);
+    let south = params.south.clamp(-90.0, 90.0);
+    let north = params.north.clamp(-90.0, 90.0);
+    let page = params.page.max(1);
+    let per_page = params.per_page.clamp(1, 200);
+    let offset = (page - 1) * per_page;
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos
+         WHERE import_status = 'imported'
+           AND gps_lat BETWEEN ? AND ? AND gps_lon BETWEEN ? AND ?",
+    )
+    .bind(south).bind(north).bind(west).bind(east)
+    .fetch_one(&state.pool).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let photos: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT id, path, taken_at, camera FROM photos
+         WHERE import_status = 'imported'
+           AND gps_lat BETWEEN ? AND ? AND gps_lon BETWEEN ? AND ?
+         ORDER BY taken_at DESC NULLS LAST, id DESC LIMIT ? OFFSET ?",
+    )
+    .bind(south).bind(north).bind(west).bind(east)
+    .bind(per_page).bind(offset)
+    .fetch_all(&state.pool).await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "total": total, "page": page, "per_page": per_page,
+        "photos": photos.into_iter().map(|(id, path, taken_at, camera)| {
+            serde_json::json!({ "id": id, "path": path, "taken_at": taken_at, "camera": camera })
+        }).collect::<Vec<_>>(),
+    })))
 }
 
 pub async fn get_geo_hierarchy(

@@ -224,6 +224,10 @@ export interface GeoCluster {
   gps_lon: number;
   photo_count: number;
   representative_photo_id: number;
+  west: number;
+  east: number;
+  south: number;
+  north: number;
 }
 
 export interface GeoClusterPage {

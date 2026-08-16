@@ -1175,6 +1175,60 @@ async fn geo_clusters_clamps_grid_dimensions_and_bounds_large_results() {
 }
 
 #[tokio::test]
+async fn geo_clusters_follow_the_visible_viewport_and_open_cluster_photos() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    for (path, hash, lat, lon) in [
+        ("/sf-a.jpg", "sf-a", 37.7749, -122.4194),
+        ("/sf-b.jpg", "sf-b", 37.7750, -122.4195),
+        ("/sydney.jpg", "sydney", -33.8688, 151.2093),
+    ] {
+        sqlx::query(
+            "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+             VALUES (?, ?, 'jpeg', 'imported', ?, ?)",
+        ).bind(path).bind(hash).bind(lat).bind(lon)
+            .execute(&pool).await.unwrap();
+    }
+
+    let response = app.clone().oneshot(
+        Request::builder().uri(
+            "/api/geo/clusters?columns=20&rows=10&west=-123&east=-122&south=37&north=38",
+        ).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total_photos"], 2);
+    let cluster = &json["clusters"][0];
+    assert!(cluster["west"].as_f64().unwrap() >= -123.0);
+    assert!(cluster["east"].as_f64().unwrap() <= -122.0);
+    assert!(cluster["south"].as_f64().unwrap() >= 37.0);
+    assert!(cluster["north"].as_f64().unwrap() <= 38.0);
+
+    let uri = format!(
+        "/api/geo/cluster-photos?west={}&east={}&south={}&north={}",
+        cluster["west"], cluster["east"], cluster["south"], cluster["north"],
+    );
+    let photos = app.oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await.unwrap();
+    assert_eq!(photos.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(photos.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["photos"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn geo_cluster_photos_reject_invalid_bounds() {
+    let app = test_app().await;
+    let response = app.oneshot(
+        Request::builder().uri(
+            "/api/geo/cluster-photos?west=10&east=5&south=0&north=1",
+        ).body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn geo_hierarchy_groups_by_country_state_city() {
     let (app, pool, _tmp) = test_app_with_pool().await;
 

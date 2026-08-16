@@ -19,7 +19,7 @@ use handlers::{
     animals::{list_species, list_species_photos, list_photo_animals},
     dedup::{list_dedup_groups, resolve_group},
     faces::{start_analyze, get_job_status, list_photo_faces},
-    geo::{get_geo_clusters, get_geo_hierarchy, get_geo_name_policy, get_geo_photos, start_geo_name_normalization, start_regeocode, get_regeocode_status},
+    geo::{get_geo_cluster_photos, get_geo_clusters, get_geo_hierarchy, get_geo_name_policy, get_geo_photos, start_geo_name_normalization, start_regeocode, get_regeocode_status},
     health::{get_diagnostics, get_health},
     people::{list_people, get_person_photos, get_people_tree, cluster_people, incremental_cluster_people, merge_people, reparent_person, get_face_thumb, patch_person, batch_update_people, create_person, transfer_faces, delete_person, lift_person, get_merge_suggestions, get_outlier_faces, eject_face, get_centroid_faces, get_embedding_map},
     import::{start_import, get_import_status},
@@ -100,6 +100,7 @@ fn router_with_application(
         .route("/api/collections/{id}/photos", get(list_collection_photos).post(add_photos).delete(remove_photos))
         .route("/api/geo/hierarchy", get(get_geo_hierarchy))
         .route("/api/geo/clusters", get(get_geo_clusters))
+        .route("/api/geo/cluster-photos", get(get_geo_cluster_photos))
         .route("/api/geo/photos", get(get_geo_photos))
         .route("/api/geo/regeocode", post(start_regeocode))
         .route("/api/geo/regeocode/status", get(get_regeocode_status))
