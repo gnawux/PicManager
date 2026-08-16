@@ -59,7 +59,9 @@ final class ServiceProcessController {
         let process = Process()
         process.executableURL = launchConfiguration.executableURL
         process.arguments = ["serve"]
-        var environment = ProcessInfo.processInfo.environment
+        var environment = SystemProxyEnvironment.applyingMacSystemProxy(
+            to: ProcessInfo.processInfo.environment
+        )
         environment["PICMANAGER_LIBRARY_PATH"] = launchConfiguration.libraryPath
         environment["PICMANAGER_HOST"] = launchConfiguration.host
         environment["PICMANAGER_PORT"] = String(launchConfiguration.port)

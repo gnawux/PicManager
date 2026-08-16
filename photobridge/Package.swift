@@ -15,7 +15,10 @@ let package = Package(
         .target(
             name: "PhotoBridgeLib",
             path: "Sources/PhotoBridgeLib",
-            linkerSettings: [.linkedFramework("Photos")]
+            linkerSettings: [
+                .linkedFramework("Photos"),
+                .linkedFramework("CFNetwork"),
+            ]
         ),
         // CLI executable
         .executableTarget(
