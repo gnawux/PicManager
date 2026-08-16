@@ -40,6 +40,16 @@ The place tree is sorted by photo count and initially folded at country level. E
 country or state, or choose its “view all” action, to load matching photos in the right
 pane. The navigation tree and results scroll independently.
 
+“统一已有地名”需要访问 Nominatim。PicManager.app 会在启动本地服务时继承 macOS
+中启用的手动 HTTP、HTTPS 和 SOCKS 代理；修改代理后请退出并重新打开应用。任务
+进度按唯一 GPS 坐标统计，因此总数通常明显小于待修正的照片数。网络不可用时任务
+会在连续三次失败后停止并允许重试，不会继续逐张照片超时。
+
+如果正在从旧版本替换应用，并且旧地名任务仍在运行：先在任务页点“取消”，再退出
+旧应用并替换 `.app`。即使旧界面暂时仍显示 running，取消标记也已经持久化；新版
+服务启动后会把过期 lease 恢复为 cancelled。确认代理可用后，再从地点页重新启动
+地名统一。现有照片和旧地名不会因取消而丢失。
+
 The Albums tab follows the same split-pane pattern. Collections, months, locations,
 cameras and other smart albums have separate collapsible sections on the left; choosing
 one keeps the navigation visible while its photos open on the right. Entries with more

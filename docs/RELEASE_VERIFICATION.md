@@ -44,6 +44,9 @@ port. Never use the default personal library for this check.
 - In Places, verify zooming refreshes the visible clusters at a finer precision, a
   cluster opens all represented photos, full-window mode enters and exits, and the
   folded place tree scrolls independently from results.
+- With a temporary library, verify a manual macOS HTTPS proxy reaches Nominatim, nearby
+  coordinates reuse one successful lookup, cancellation stops before the next
+  coordinate, and three consecutive provider failures stop the attempt for retry.
 - In Albums, verify collection/month/location/camera sections fold independently and a
   selection loads photos on the right without replacing the left navigation.
 - Confirm Apple Photos exposes unsynced/failed/excluded/missing filters and original

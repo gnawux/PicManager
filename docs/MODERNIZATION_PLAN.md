@@ -483,6 +483,19 @@ The OpenStreetMap map is an optional network-backed presentation layer. Catalog 
 coordinates and photo results remain local; tile requests contain ordinary map tile
 coordinates for the visible viewport and never upload media.
 
+### M21 - Geographic maintenance reliability
+
+Status: complete.
+
+- M21.1: propagate enabled macOS manual proxy settings to the bundled Rust service
+  while preserving explicit process overrides and local bypasses.
+- M21.2: normalize names by sorted unique coordinate, use cache revisions as restart
+  checkpoints and transactionally reconcile every photo sharing that coordinate.
+- M21.3: add provider circuit breaking, bounded cancellation, changed-only progress
+  publication and transient SQLite retry for progress and worker leases.
+- M21.4: cover system proxy mapping, 5,000-photo coordinate collapsing, provider
+  failure, cancellation, contention and real isolated proxy-backed normalization.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

@@ -81,6 +81,33 @@ English, then the provider default. Existing rows are repaired only by an explic
 durable, repeatable task. Failed provider calls preserve old names and leave them
 eligible for retry.
 
+### macOS system proxy settings are not process proxy variables
+
+A service launched by the Mac app does not automatically receive the manual proxies
+configured in System Settings. During the first name-normalization run, direct
+Nominatim requests timed out after ten seconds while the configured system HTTPS proxy
+answered in under one second. The Mac shell must translate enabled HTTP, HTTPS and
+SOCKS settings into standard child-process variables while preserving explicit
+overrides and localhost exclusions. Proxy settings are captured when the service
+starts; restart the app after changing them.
+
+### Remote maintenance must count durable work units, not consumers
+
+The first normalization job treated 56,340 photos as work even though they referenced
+far fewer coordinates. It scanned in photo order, made poor use of the 1 km cache and
+restarted from zero after a failed attempt. Geographic maintenance now groups by
+canonical coordinate, sorts spatially, updates all matching photos transactionally and
+uses successful cache-policy revisions as restart checkpoints. Apply the same pattern
+whenever many records consume one remotely derived value.
+
+### Progress telemetry must not be able to kill the work
+
+Writing unchanged progress four times per second increased SQLite contention until a
+progress update failed and restarted a multi-hour job. Publish only changed progress at
+a bounded interval, retry transient lock errors, and separately retry worker lease
+contention. Provider failures need a circuit breaker, and cancellation must be checked
+between bounded remote calls. Never report a timed-out lookup as successfully updated.
+
 ## Data and derived-state safety
 
 ### External IDs, filenames, labels, and paths are different concepts
@@ -134,3 +161,6 @@ Before merging related work, answer all of the following:
 7. Was the embedded frontend, Rust service, app bundle, and nested signature rebuilt?
 8. Were tests run only against isolated or copied libraries?
 9. Do enum-like test fixtures include the values stored by existing catalogs?
+10. Does a Mac child process receive required system proxy settings explicitly?
+11. Are remote work units deduplicated, checkpointed, cancellable and failure-aware?
+12. Can optional progress reporting fail without restarting completed work?
