@@ -67,6 +67,13 @@ the current bounded grid while paging, disable repeated navigation and reserve a
 scrollbar gutter. Tests should hold a later-page response in flight and assert that the
 current page remains mounted until the requested replacement arrives.
 
+### Fullscreen surfaces need an explicit overlay hierarchy
+
+`position: fixed` does not imply that the newest overlay is on top. The fullscreen map
+and photo viewer are siblings with independent `z-index` values, so a viewer can open
+successfully while remaining hidden behind the map. Keep their layer priorities explicit
+and test the complete fullscreen-map-to-photo interaction, including the relative layers.
+
 ### Product vocabulary is not automatically stored vocabulary
 
 The UI calls date-derived albums “month” albums, but existing databases and the Rust

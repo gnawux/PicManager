@@ -574,6 +574,15 @@ Status: complete.
 - M27.4: complete — verify frontend behavior, performance budgets, Rust and native suites,
   an isolated PNG/HEIC browser rehearsal, signed bundle integrity and installation safety.
 
+### M28 - Fullscreen map overlay ordering
+
+Status: complete.
+
+- M28.1: complete — define explicit overlay priorities so the shared photo viewer renders
+  above the fullscreen map while retaining the map above the normal application shell.
+- M28.2: complete — exercise the full interaction from fullscreen map cluster to photo dialog
+  and assert the viewer's declared layer remains higher than the map layer.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

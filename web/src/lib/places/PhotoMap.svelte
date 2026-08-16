@@ -16,6 +16,7 @@
   const TILE_SIZE = 256;
   const MIN_ZOOM = 2;
   const MAX_ZOOM = 18;
+  const FULLSCREEN_LAYER = 1000;
   const initialFocus = untrack(() => initialPage.clusters.reduce<GeoCluster | null>(
     (largest, cluster) => !largest || cluster.photo_count > largest.photo_count ? cluster : largest,
     null,
@@ -235,7 +236,7 @@
 
 <svelte:window onkeydown={(event) => { if (event.key === 'Escape' && fullscreen) fullscreen = false; }} />
 
-<div class="map-shell" class:fullscreen>
+<div class="map-shell" class:fullscreen style:z-index={fullscreen ? FULLSCREEN_LAYER : undefined}>
   <div class="map-toolbar">
     <div><strong>照片地图</strong><span>{visibleTotal} 张位于当前地图范围</span></div>
     <div class="map-actions">
@@ -314,7 +315,7 @@
 
 <style>
   .map-shell { overflow: hidden; border: 1px solid rgba(23,105,224,.18); border-radius: 22px; background: var(--surface-solid); box-shadow: 0 12px 36px rgba(25,55,90,.08); }
-  .map-shell.fullscreen { position: fixed; z-index: 1000; inset: 0; display: flex; flex-direction: column; padding: 14px; border: 0; border-radius: 0; background: var(--surface-solid); }
+  .map-shell.fullscreen { position: fixed; inset: 0; display: flex; flex-direction: column; padding: 14px; border: 0; border-radius: 0; background: var(--surface-solid); }
   .map-toolbar { display: flex; min-height: 58px; padding: 10px 14px; align-items: center; justify-content: space-between; gap: 14px; }
   .map-toolbar > div:first-child { display: flex; align-items: baseline; gap: 10px; }
   .map-toolbar span { color: var(--muted); font-size: 12px; }

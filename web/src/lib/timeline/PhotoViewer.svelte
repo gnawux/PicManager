@@ -29,6 +29,7 @@
   let drawerOpen = $state(true);
   let rendition = $state<'display' | 'current' | 'original'>('display');
   let requestVersion = 0;
+  const VIEWER_LAYER = 1100;
   let imageUrl = $derived(
     rendition === 'original'
       ? detail?.renditions.original
@@ -138,6 +139,7 @@
   aria-modal="true"
   aria-label={`照片 ${item.id}`}
   tabindex="-1"
+  style:z-index={VIEWER_LAYER}
 >
   <header>
     <button bind:this={closeButton} class="icon-button" type="button" aria-label="关闭查看器" onclick={onclose}>×</button>
@@ -199,7 +201,7 @@
 </div>
 
 <style>
-  .viewer { position: fixed; inset: 0; z-index: 100; display: grid; grid-template-rows: 64px 1fr; color: #f8f8fa; background: rgba(13, 14, 17, .98); }
+  .viewer { position: fixed; inset: 0; display: grid; grid-template-rows: 64px 1fr; color: #f8f8fa; background: rgba(13, 14, 17, .98); }
   header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 16px; padding: 0 18px; border-bottom: 1px solid rgba(255,255,255,.12); }
   .icon-button { display: grid; width: 40px; height: 40px; place-items: center; padding: 0; border: 0; border-radius: 50%; color: white; font-size: 30px; background: rgba(255,255,255,.1); cursor: pointer; }
   .icon-button:focus-visible, button:focus-visible { outline: 3px solid #75aaff; outline-offset: 2px; }

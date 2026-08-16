@@ -46,8 +46,15 @@ describe('PlacesView', () => {
     const { container } = render(PlacesView, { api });
 
     const cluster = await screen.findByRole('button', { name: '查看此区域的 1 张照片' });
+    await fireEvent.click(screen.getByRole('button', { name: '全屏显示地图' }));
     await fireEvent.click(cluster);
     expect(screen.getByAltText('地图照片 12')).toHaveAttribute('src', '/api/photos/12/thumb?size=256');
+    await fireEvent.click(screen.getByRole('button', { name: '打开地图照片 12' }));
+    const mapViewer = await screen.findByRole('dialog', { name: '照片 12' });
+    const fullscreenMap = container.querySelector('.map-shell.fullscreen') as HTMLElement;
+    expect(Number(getComputedStyle(mapViewer).zIndex)).toBeGreaterThan(Number(getComputedStyle(fullscreenMap).zIndex));
+    await fireEvent.click(screen.getByRole('button', { name: '关闭查看器' }));
+    await fireEvent.click(screen.getByRole('button', { name: '退出全屏地图' }));
     const country = container.querySelector('.country-group') as HTMLDetailsElement;
     expect(country.open).toBe(false);
     await fireEvent.click(country.querySelector(':scope > summary') as HTMLElement);
