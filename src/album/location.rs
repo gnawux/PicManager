@@ -1,5 +1,5 @@
 use reqwest::Client;
-use sqlx::SqlitePool;
+use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed};
@@ -617,8 +617,61 @@ async fn ensure_location_album_for_coordinate(
 ) -> Result<()> {
     let lat_key = coord_key(lat);
     let lon_key = coord_key(lon);
+    // Resolve the coordinate while no write transaction is open. PRINTF cannot use the
+    // GPS indexes and can take a while on a large library; holding SQLite's single writer
+    // lock during that scan starves job heartbeats and can make a healthy job lose its lease.
+    let photo_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM photos
+         WHERE import_status = 'imported'
+           AND PRINTF('%.4f', gps_lat) = ?
+           AND PRINTF('%.4f', gps_lon) = ?",
+    )
+    .bind(&lat_key)
+    .bind(&lon_key)
+    .fetch_all(pool)
+    .await?;
+    if photo_ids.is_empty() {
+        return Ok(());
+    }
+
+    let album_id = ensure_location_album_record(pool, city).await?;
+
+    // Keep each atomic relink batch small enough to fit SQLite's bind limit and, more
+    // importantly, release the writer lock frequently enough for worker heartbeats.
+    const RELINK_BATCH_SIZE: usize = 250;
+    for photo_ids in photo_ids.chunks(RELINK_BATCH_SIZE) {
+        let mut tx = pool.begin().await?;
+        let mut delete =
+            QueryBuilder::<Sqlite>::new("DELETE FROM photo_albums WHERE photo_id IN (");
+        {
+            let mut separated = delete.separated(", ");
+            for photo_id in photo_ids {
+                separated.push_bind(photo_id);
+            }
+        }
+        delete
+            .push(") AND album_id IN (SELECT id FROM albums WHERE kind = 'location' AND id != ")
+            .push_bind(album_id)
+            .push(")")
+            .build()
+            .execute(&mut *tx)
+            .await?;
+
+        let mut insert =
+            QueryBuilder::<Sqlite>::new("INSERT OR IGNORE INTO photo_albums (photo_id, album_id) ");
+        insert.push_values(photo_ids, |mut row, photo_id| {
+            row.push_bind(photo_id).push_bind(album_id);
+        });
+        insert.build().execute(&mut *tx).await?;
+        tx.commit().await?;
+        tokio::task::yield_now().await;
+    }
+    Ok(())
+}
+
+async fn ensure_location_album_record(pool: &SqlitePool, city: &str) -> Result<i64> {
     let mut tx = pool.begin().await?;
-    let album_id: i64 = if let Some(id) =
+    let album_id = if let Some(id) =
         sqlx::query_scalar("SELECT id FROM albums WHERE name = ? AND kind = 'location'")
             .bind(city)
             .fetch_optional(&mut *tx)
@@ -632,37 +685,8 @@ async fn ensure_location_album_for_coordinate(
             .await?
             .last_insert_rowid()
     };
-
-    sqlx::query(
-        "DELETE FROM photo_albums
-         WHERE album_id IN (SELECT id FROM albums WHERE kind = 'location' AND id != ?)
-           AND photo_id IN (
-             SELECT id FROM photos
-             WHERE import_status = 'imported'
-               AND PRINTF('%.4f', gps_lat) = ?
-               AND PRINTF('%.4f', gps_lon) = ?
-           )",
-    )
-    .bind(album_id)
-    .bind(&lat_key)
-    .bind(&lon_key)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        "INSERT OR IGNORE INTO photo_albums (photo_id, album_id)
-         SELECT id, ? FROM photos
-         WHERE import_status = 'imported'
-           AND PRINTF('%.4f', gps_lat) = ?
-           AND PRINTF('%.4f', gps_lon) = ?",
-    )
-    .bind(album_id)
-    .bind(&lat_key)
-    .bind(&lon_key)
-    .execute(&mut *tx)
-    .await?;
     tx.commit().await?;
-    Ok(())
+    Ok(album_id)
 }
 
 async fn ensure_location_album(pool: &SqlitePool, photo_id: i64, city: &str) -> Result<()> {
@@ -1098,7 +1122,14 @@ mod tests {
             Some("香港 Hong Kong"),
         )
         .await;
-        seed_geocache(&pool, 31.2304, 121.4737, Some("上海 Shanghai"), Some("上海市")).await;
+        seed_geocache(
+            &pool,
+            31.2304,
+            121.4737,
+            Some("上海 Shanghai"),
+            Some("上海市"),
+        )
+        .await;
         seed_geocache(&pool, 22.3193, 114.1744, Some("香港"), Some("香港")).await;
         seed_geocache(&pool, 31.2304, 121.4787, Some("上海"), Some("上海市")).await;
         sqlx::query(
@@ -1113,7 +1144,9 @@ mod tests {
         .unwrap();
         let progress = SharedGeoProgress::default();
 
-        normalize_geo_names_with_progress(&pool, progress.clone()).await.unwrap();
+        normalize_geo_names_with_progress(&pool, progress.clone())
+            .await
+            .unwrap();
 
         assert_eq!(progress.total.load(Relaxed), 2);
         assert_eq!(progress.processed.load(Relaxed), 2);
