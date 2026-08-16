@@ -48,7 +48,9 @@ does not exercise new code.
 The original Places map returned about 5.75 MB and created one button per GPS photo;
 56,000 photos blocked both entry and teardown for seconds. Map APIs must aggregate on
 the server for the requested viewport/zoom, and UI tests must assert a bounded marker
-count even when the represented photo total is much larger.
+count even when the represented photo total is much larger. A test that only proves a
+zoomed viewport is smaller can still miss every photo: initialize the map around real
+cluster data and assert the focused viewport retains the expected cluster.
 
 ### Navigation teardown is part of the performance budget
 
