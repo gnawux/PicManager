@@ -498,7 +498,7 @@ Status: complete.
 
 ### M22 - Paginated photo-set browsing
 
-Status: in progress.
+Status: complete.
 
 - M22.1: complete — paginate geographic hierarchy results and protect rapid selection changes
   from stale responses.
@@ -506,7 +506,8 @@ Status: in progress.
   preserving bounded initial rendering.
 - M22.3: complete — bound activity-photo responses and provide the same incremental browsing
   behavior for unusually photo-heavy activities.
-- M22.4: rebuild and verify the embedded frontend and macOS application bundle.
+- M22.4: complete — rebuild the embedded frontend and Rust service, ad-hoc sign the
+  macOS application, and verify bundle plus clean-install/upgrade/uninstall safety.
 
 ## 9. Testing and commit protocol
 
