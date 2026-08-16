@@ -168,8 +168,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
         for (const [key, value] of Object.entries(bounds)) query.set(key, String(value));
         return request<AlbumPhotoPage>(`/api/geo/cluster-photos?${query}`);
       },
-      photos: (filters: { country?: string; state?: string; city?: string }) => {
-        const query = new URLSearchParams({ page: '1', per_page: '200' });
+      photos: (filters: { country?: string; state?: string; city?: string }, page = 1, perPage = 200) => {
+        const query = new URLSearchParams({ page: String(page), per_page: String(perPage) });
         for (const [key, value] of Object.entries(filters)) if (value) query.set(key, value);
         return request<AlbumPhotoPage>(`/api/geo/photos?${query}`);
       },
@@ -189,7 +189,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       },
       get: (id: number) => request<ActivitySummary>(`/api/activities/${id}`),
       track: (id: number) => request<ActivityTrack>(`/api/activities/${id}/track`),
-      photos: (id: number) => request<ActivityPhotos>(`/api/activities/${id}/photos`),
+      photos: (id: number, page = 1, perPage = 100) =>
+        request<ActivityPhotos>(`/api/activities/${id}/photos?page=${page}&per_page=${perPage}`),
     },
     request,
   };

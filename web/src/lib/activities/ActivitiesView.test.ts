@@ -24,7 +24,10 @@ describe('ActivitiesView', () => {
           ],
           original_count: 2, downsampled: false,
         })),
-        photos: vi.fn(async () => ({ photos: [{ id: 17, path: '/x.jpg', format: 'jpeg', taken_at: null, gps_lat: 31.2, gps_lon: 121.4 }] })),
+        photos: vi.fn(async () => ({
+          photos: [{ id: 17, path: '/x.jpg', format: 'jpeg', taken_at: null, gps_lat: 31.2, gps_lon: 121.4 }],
+          total: 1, page: 1, per_page: 100,
+        })),
       },
     } as unknown as ApiClient;
     render(ActivitiesView, { api });
@@ -34,5 +37,30 @@ describe('ActivitiesView', () => {
     expect(screen.getByText('5.20 km')).toBeVisible();
     expect(screen.getByText('30 分钟')).toBeVisible();
     expect(screen.getByAltText('活动照片 17')).toHaveAttribute('src', '/api/photos/17/thumb?size=512');
+  });
+
+  it('loads additional matched activity photos', async () => {
+    const photos = vi.fn()
+      .mockResolvedValueOnce({
+        photos: [{ id: 17, path: '/x.jpg', format: 'jpeg', taken_at: null, gps_lat: 31.2, gps_lon: 121.4 }],
+        total: 2, page: 1, per_page: 100,
+      })
+      .mockResolvedValueOnce({
+        photos: [{ id: 18, path: '/y.jpg', format: 'jpeg', taken_at: null, gps_lat: 31.2, gps_lon: 121.4 }],
+        total: 2, page: 2, per_page: 100,
+      });
+    const api = {
+      activities: {
+        list: vi.fn(async () => ({ activities: [activity], total: 1, page: 1, per_page: 100 })),
+        get: vi.fn(async () => activity),
+        track: vi.fn(async () => ({ points: [], original_count: 0, downsampled: false })),
+        photos,
+      },
+    } as unknown as ApiClient;
+    render(ActivitiesView, { api });
+    await fireEvent.click(await screen.findByRole('button', { name: /滨江跑步/ }));
+    await fireEvent.click(await screen.findByRole('button', { name: '载入更多' }));
+    expect(await screen.findByAltText('活动照片 18')).toBeVisible();
+    expect(photos).toHaveBeenLastCalledWith(5, 2, 100);
   });
 });

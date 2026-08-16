@@ -17,6 +17,9 @@
   let selected = $state<Selection | null>(null);
   let photos = $state<AlbumPhotoPage | null>(null);
   let photosLoading = $state(false);
+  let loadingMore = $state(false);
+  let loadMoreError = $state<string | null>(null);
+  let photoRequest = 0;
   let newName = $state('');
   let creating = $state(false);
 
@@ -58,16 +61,40 @@
   }
 
   async function open(id: number, name: string, collection: boolean) {
+    const request = ++photoRequest;
     selected = { id, name, collection };
     photos = null;
     photosLoading = true;
+    loadingMore = false;
+    loadMoreError = null;
     error = null;
     try {
-      photos = collection ? await api.collections.photos(id) : await api.albums.photos(id);
+      const page = collection ? await api.collections.photos(id, 1, 100) : await api.albums.photos(id, 1, 100);
+      if (request === photoRequest) photos = page;
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : String(reason);
+      if (request === photoRequest) error = reason instanceof Error ? reason.message : String(reason);
     } finally {
-      photosLoading = false;
+      if (request === photoRequest) photosLoading = false;
+    }
+  }
+
+  async function loadMore() {
+    if (!selected || !photos || loadingMore || photos.photos.length >= photos.total) return;
+    const request = photoRequest;
+    const current = selected;
+    loadingMore = true;
+    loadMoreError = null;
+    try {
+      const next = current.collection
+        ? await api.collections.photos(current.id, photos.page + 1, photos.per_page)
+        : await api.albums.photos(current.id, photos.page + 1, photos.per_page);
+      if (request !== photoRequest) return;
+      const existing = new Set(photos.photos.map((photo) => photo.id));
+      photos = { ...next, photos: [...photos.photos, ...next.photos.filter((photo) => !existing.has(photo.id))] };
+    } catch (reason) {
+      if (request === photoRequest) loadMoreError = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      if (request === photoRequest) loadingMore = false;
     }
   }
 
@@ -148,8 +175,12 @@
         {:else if photos}
           <div class="result-heading">
             <div><small>{selected?.collection ? '我的精选集' : '智能相册'}</small><strong>{selected?.name}</strong></div>
-            <span>{photos.total} 张</span>
+            <span>已显示 {photos.photos.length} / {photos.total} 张</span>
           </div>
+          {#if loadMoreError}<p class="load-error" role="alert">载入下一页失败：{loadMoreError}</p>{/if}
+          {#if photos.photos.length < photos.total}
+            <div class="load-more"><Button disabled={loadingMore} onclick={loadMore}>{loadingMore ? '正在载入…' : '载入更多'}</Button></div>
+          {/if}
           <div class="photo-grid">
             {#each photos.photos as photo (photo.id)}
               <img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />
@@ -200,5 +231,7 @@
   .hint { display: grid; height: 300px; margin: 0; place-items: center; }
   .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px; }
   .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: var(--fill-subtle); }
+  .load-more { display: flex; justify-content: center; padding: 18px 0 6px; }
+  .load-error { margin: 14px 0 0; color: var(--danger); text-align: center; font-size: 13px; }
   @media (max-width: 760px) { .album-layout { grid-template-columns: 1fr; } .album-sidebar, .album-results { height: auto; max-height: 62vh; min-height: 300px; } }
 </style>

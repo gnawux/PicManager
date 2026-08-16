@@ -288,6 +288,9 @@ export interface ActivityPhotos {
     gps_lat: number | null;
     gps_lon: number | null;
   }>;
+  total: number;
+  page: number;
+  per_page: number;
 }
 
 export interface ApiErrorEnvelope {

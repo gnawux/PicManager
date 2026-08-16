@@ -83,6 +83,17 @@ pub struct PhotoItem {
 #[derive(Debug, Serialize)]
 pub struct PhotosResponse {
     pub photos: Vec<PhotoItem>,
+    pub total: usize,
+    pub page: u32,
+    pub per_page: u32,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActivityPhotosQuery {
+    #[serde(default = "default_page")]
+    page: u32,
+    #[serde(default = "default_per_page")]
+    per_page: u32,
 }
 
 pub async fn list_activities(
@@ -270,7 +281,10 @@ pub async fn get_activity_track(
 pub async fn get_activity_photos(
     State(state): State<AppState>,
     Path(id): Path<i64>,
+    Query(q): Query<ActivityPhotosQuery>,
 ) -> Result<Json<PhotosResponse>, StatusCode> {
+    let page = q.page.max(1);
+    let per_page = q.per_page.clamp(1, 200);
     let activity: Option<(Option<String>, Option<String>)> =
         sqlx::query_as("SELECT start_time, end_time FROM activities WHERE id=?")
             .bind(id)
@@ -282,7 +296,12 @@ pub async fn get_activity_photos(
 
     let (start_time, end_time) = match (start_time, end_time) {
         (Some(s), Some(e)) => (s, e),
-        _ => return Ok(Json(PhotosResponse { photos: vec![] })),
+        _ => return Ok(Json(PhotosResponse {
+            photos: vec![],
+            total: 0,
+            page,
+            per_page,
+        })),
     };
 
     // Fetch track points for distance filtering
@@ -316,7 +335,7 @@ pub async fn get_activity_photos(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let photos = candidate_photos
+    let matched = candidate_photos
         .into_iter()
         .filter(|(_, _, _, _, lat, lon)| {
             if let (Some(lat), Some(lon)) = (lat, lon) {
@@ -340,9 +359,22 @@ pub async fn get_activity_photos(
             gps_lat,
             gps_lon,
         })
+        .collect::<Vec<_>>();
+
+    let total = matched.len();
+    let offset = (page.saturating_sub(1) as usize).saturating_mul(per_page as usize);
+    let photos = matched
+        .into_iter()
+        .skip(offset)
+        .take(per_page as usize)
         .collect();
 
-    Ok(Json(PhotosResponse { photos }))
+    Ok(Json(PhotosResponse {
+        photos,
+        total,
+        page,
+        per_page,
+    }))
 }
 
 #[derive(Debug, Deserialize)]

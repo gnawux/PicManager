@@ -21,6 +21,10 @@
   let error = $state<string | null>(null);
   let selection = $state<PlaceSelection | null>(null);
   let photos = $state<AlbumPhotoPage | null>(null);
+  let photosLoading = $state(false);
+  let loadingMore = $state(false);
+  let loadMoreError = $state<string | null>(null);
+  let photoRequest = 0;
   let updating = $state(false);
   let updateMessage = $state<string | null>(null);
 
@@ -40,14 +44,39 @@
   }
 
   async function choose(nextSelection: PlaceSelection) {
+    const request = ++photoRequest;
     selection = nextSelection;
     photos = null;
+    photosLoading = true;
+    loadingMore = false;
+    loadMoreError = null;
     error = null;
     try {
       const { label: _label, ...filters } = nextSelection;
-      photos = await api.geo.photos(filters);
+      const page = await api.geo.photos(filters, 1, 200);
+      if (request === photoRequest) photos = page;
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : String(reason);
+      if (request === photoRequest) error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      if (request === photoRequest) photosLoading = false;
+    }
+  }
+
+  async function loadMore() {
+    if (!selection || !photos || loadingMore || photos.photos.length >= photos.total) return;
+    const request = photoRequest;
+    const { label: _label, ...filters } = selection;
+    loadingMore = true;
+    loadMoreError = null;
+    try {
+      const next = await api.geo.photos(filters, photos.page + 1, photos.per_page);
+      if (request !== photoRequest) return;
+      const existing = new Set(photos.photos.map((photo) => photo.id));
+      photos = { ...next, photos: [...photos.photos, ...next.photos.filter((photo) => !existing.has(photo.id))] };
+    } catch (reason) {
+      if (request === photoRequest) loadMoreError = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      if (request === photoRequest) loadingMore = false;
     }
   }
 
@@ -149,11 +178,15 @@
         </div>
         <div class="results" aria-live="polite">
           {#if error}<PageState kind="error" title="无法读取地点照片" message={error} />
-          {:else if selection && !photos}<PageState kind="loading" title="正在打开地点" />
+          {:else if photosLoading}<PageState kind="loading" title="正在打开地点" />
           {:else if photos?.photos.length === 0}<PageState kind="empty" title="这个地点没有照片" />
           {:else if photos}
-            <div class="result-heading"><strong>{selection?.label}</strong><span>{photos.total} 张</span></div>
+            <div class="result-heading"><strong>{selection?.label}</strong><span>已显示 {photos.photos.length} / {photos.total} 张</span></div>
             <div class="photo-grid">{#each photos.photos as photo (photo.id)}<img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />{/each}</div>
+            {#if loadMoreError}<p class="load-error" role="alert">载入下一页失败：{loadMoreError}</p>{/if}
+            {#if photos.photos.length < photos.total}
+              <div class="load-more"><Button disabled={loadingMore} onclick={loadMore}>{loadingMore ? '正在载入…' : '载入更多'}</Button></div>
+            {/if}
           {:else}<p class="hint">选择国家、地区或城市查看照片。</p>{/if}
         </div>
       </div>
@@ -193,5 +226,7 @@
   .hint { display: grid; height: 260px; margin: 0; place-items: center; }
   .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px; }
   .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
+  .load-more { display: flex; justify-content: center; padding: 18px 0 6px; }
+  .load-error { margin: 14px 0 0; color: var(--danger); text-align: center; font-size: 13px; }
   @media (max-width: 760px) { .place-layout { grid-template-columns: 1fr; } .view-heading { align-items: start; } }
 </style>

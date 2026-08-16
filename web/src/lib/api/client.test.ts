@@ -118,10 +118,19 @@ describe('API client', () => {
       }),
     );
     const client = createApiClient({ fetch: fetcher as typeof fetch });
-    await client.geo.photos({ country: '中国', state: '上海市', city: '上海' });
+    await client.geo.photos({ country: '中国', state: '上海市', city: '上海' }, 2, 75);
     expect(fetcher.mock.calls[0][0]).toBe(
-      '/api/geo/photos?page=1&per_page=200&country=%E4%B8%AD%E5%9B%BD&state=%E4%B8%8A%E6%B5%B7%E5%B8%82&city=%E4%B8%8A%E6%B5%B7',
+      '/api/geo/photos?page=2&per_page=75&country=%E4%B8%AD%E5%9B%BD&state=%E4%B8%8A%E6%B5%B7%E5%B8%82&city=%E4%B8%8A%E6%B5%B7',
     );
+  });
+
+  it('requests bounded activity photo pages', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({
+      photos: [], total: 0, page: 3, per_page: 40,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.activities.photos(9, 3, 40);
+    expect(fetcher.mock.calls[0][0]).toBe('/api/activities/9/photos?page=3&per_page=40');
   });
 
   it('requests a bounded geographic cluster grid', async () => {

@@ -45,6 +45,24 @@ describe('PeopleView', () => {
     render(PeopleView, { api });
     await fireEvent.click(await screen.findByRole('button', { name: '打开未命名人物 4' }));
     expect(await screen.findByAltText('照片 21')).toHaveAttribute('src', '/api/photos/21/thumb?size=512');
-    expect(photos).toHaveBeenCalledWith(4);
+    expect(photos).toHaveBeenCalledWith(4, 1, 100);
+  });
+
+  it('loads additional person photo pages', async () => {
+    const { api, photos } = mockApi();
+    photos
+      .mockResolvedValueOnce({
+        photos: [{ id: 21, path: '/p.jpg', format: 'jpeg', taken_at: null, camera: null, import_status: 'imported' }],
+        total: 2, page: 1, per_page: 100,
+      })
+      .mockResolvedValueOnce({
+        photos: [{ id: 22, path: '/q.jpg', format: 'jpeg', taken_at: null, camera: null, import_status: 'imported' }],
+        total: 2, page: 2, per_page: 100,
+      });
+    render(PeopleView, { api });
+    await fireEvent.click(await screen.findByRole('button', { name: '打开未命名人物 4' }));
+    await fireEvent.click(await screen.findByRole('button', { name: '载入更多' }));
+    expect(await screen.findByAltText('照片 22')).toBeVisible();
+    expect(photos).toHaveBeenLastCalledWith(4, 2, 100);
   });
 });

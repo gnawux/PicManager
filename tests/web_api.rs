@@ -1016,6 +1016,62 @@ async fn get_activity_photos_empty_when_no_photos() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json["photos"].as_array().unwrap().is_empty());
+    assert_eq!(json["total"], 0);
+    assert_eq!(json["page"], 1);
+    assert_eq!(json["per_page"], 50);
+}
+
+#[tokio::test]
+async fn get_activity_photos_returns_a_bounded_page() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+
+    sqlx::query(
+        "INSERT INTO activities (id, sha256, source_path, file_format, activity_type, \
+         start_time, end_time, import_status) \
+         VALUES (1,'abc','/tmp/a.gpx','gpx','running','2024-06-15T10:00:00Z','2024-06-15T11:00:00Z','imported')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO activity_track_points (activity_id, ts, lat, lon) \
+         VALUES (1,'2024-06-15T10:00:00Z',39.9,116.4)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    for (id, minute) in [(1, 10), (2, 20)] {
+        sqlx::query(
+            "INSERT INTO photos \
+             (id, path, sha256, format, import_status, taken_at, timezone_offset, gps_lat, gps_lon) \
+             VALUES (?, ?, ?, 'jpeg', 'imported', ?, 0, 39.9, 116.4)",
+        )
+        .bind(id)
+        .bind(format!("/tmp/{id}.jpg"))
+        .bind(format!("sha{id}"))
+        .bind(format!("2024-06-15 10:{minute}:00"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/activities/1/photos?page=2&per_page=1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["total"], 2);
+    assert_eq!(json["page"], 2);
+    assert_eq!(json["per_page"], 1);
+    assert_eq!(json["photos"].as_array().unwrap().len(), 1);
+    assert_eq!(json["photos"][0]["id"], 2);
 }
 
 #[tokio::test]

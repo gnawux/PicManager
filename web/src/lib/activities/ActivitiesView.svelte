@@ -16,6 +16,9 @@
   let track = $state<ActivityTrack | null>(null);
   let photos = $state<ActivityPhotos | null>(null);
   let detailLoading = $state(false);
+  let loadingMore = $state(false);
+  let loadMoreError = $state<string | null>(null);
+  let detailRequest = 0;
 
   onMount(() => { void reload(); });
 
@@ -34,19 +37,40 @@
   }
 
   async function open(activity: ActivitySummary) {
+    const request = ++detailRequest;
     detailLoading = true;
     error = null;
     selected = activity;
     track = null;
     photos = null;
+    loadingMore = false;
+    loadMoreError = null;
     try {
-      [selected, track, photos] = await Promise.all([
-        api.activities.get(activity.id), api.activities.track(activity.id), api.activities.photos(activity.id),
+      const [detail, activityTrack, photoPage] = await Promise.all([
+        api.activities.get(activity.id), api.activities.track(activity.id), api.activities.photos(activity.id, 1, 100),
       ]);
+      if (request === detailRequest) [selected, track, photos] = [detail, activityTrack, photoPage];
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : String(reason);
+      if (request === detailRequest) error = reason instanceof Error ? reason.message : String(reason);
     } finally {
-      detailLoading = false;
+      if (request === detailRequest) detailLoading = false;
+    }
+  }
+
+  async function loadMorePhotos() {
+    if (!selected || !photos || loadingMore || photos.photos.length >= photos.total) return;
+    const request = detailRequest;
+    loadingMore = true;
+    loadMoreError = null;
+    try {
+      const next = await api.activities.photos(selected.id, photos.page + 1, photos.per_page);
+      if (request !== detailRequest) return;
+      const existing = new Set(photos.photos.map((photo) => photo.id));
+      photos = { ...next, photos: [...photos.photos, ...next.photos.filter((photo) => !existing.has(photo.id))] };
+    } catch (reason) {
+      if (request === detailRequest) loadMoreError = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      if (request === detailRequest) loadingMore = false;
     }
   }
 
@@ -83,7 +107,7 @@
 {#if selected}
   <section class="activity-detail" aria-labelledby="activity-title">
     <div class="detail-heading">
-      <Button variant="ghost" onclick={() => { selected = null; track = null; photos = null; }}>← 返回活动</Button>
+      <Button variant="ghost" onclick={() => { detailRequest += 1; selected = null; track = null; photos = null; }}>← 返回活动</Button>
       <div><p>{typeName(selected.activity_type)}</p><h2 id="activity-title">{selected.title ?? `${typeName(selected.activity_type)} · ${date(selected.start_time)}`}</h2></div>
     </div>
     {#if detailLoading}
@@ -111,9 +135,13 @@
         </dl>
       </div>
       <div class="activity-photos">
-        <h3>活动中的照片 <span>{photos?.photos.length ?? 0}</span></h3>
+        <h3>活动中的照片 <span>{photos ? `已显示 ${photos.photos.length} / ${photos.total}` : '0'}</span></h3>
         {#if photos?.photos.length}
           <div class="photo-grid">{#each photos.photos as photo (photo.id)}<img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`活动照片 ${photo.id}`} loading="lazy" />{/each}</div>
+          {#if loadMoreError}<p class="load-error" role="alert">载入下一页失败：{loadMoreError}</p>{/if}
+          {#if photos.photos.length < photos.total}
+            <div class="load-more"><Button disabled={loadingMore} onclick={loadMorePhotos}>{loadingMore ? '正在载入…' : '载入更多'}</Button></div>
+          {/if}
         {:else}<p>活动时间和路线附近没有匹配的照片。</p>{/if}
       </div>
     {/if}
@@ -164,5 +192,7 @@
   dt { color: var(--muted); font-size: 12px; } dd { margin: 0; text-align: right; }
   .activity-photos { margin-top: 30px; } .activity-photos h3 { font-size: 18px; } .activity-photos h3 span, .activity-photos p { color: var(--muted); }
   .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 5px; } .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; }
+  .load-more { display: flex; justify-content: center; padding: 18px 0 6px; }
+  .load-error { margin: 14px 0 0; color: var(--danger); text-align: center; font-size: 13px; }
   @media (max-width: 800px) { .activity-card { grid-template-columns: auto 1fr auto; } .stat.optional { display: none; } .stat { grid-row: 2; } .arrow { grid-column: 3; grid-row: 1 / 3; } .detail-layout { grid-template-columns: 1fr; } .route-card { min-height: 260px; } }
 </style>

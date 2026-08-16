@@ -47,7 +47,7 @@ describe('PlacesView', () => {
     await fireEvent.click(state.querySelector(':scope > summary') as HTMLElement);
     await fireEvent.click(screen.getByRole('button', { name: /上海 1/ }));
     expect(await screen.findByAltText('照片 12')).toBeVisible();
-    expect(photos).toHaveBeenCalledWith({ country: '中国', state: '上海市', city: '上海' });
+    expect(photos).toHaveBeenCalledWith({ country: '中国', state: '上海市', city: '上海' }, 1, 200);
   });
 
   it('uses null sentinels when browsing unknown hierarchy entries', async () => {
@@ -82,7 +82,43 @@ describe('PlacesView', () => {
     expect(await screen.findByAltText('照片 21')).toBeVisible();
     expect(photos).toHaveBeenCalledWith({
       country: '__null__', state: '__null__', city: '__null__',
-    });
+    }, 1, 200);
+  });
+
+  it('loads later place pages without duplicating photos', async () => {
+    const photos = vi.fn()
+      .mockResolvedValueOnce({
+        photos: [{ id: 1, path: '/1.jpg', taken_at: null, camera: null }],
+        total: 2, page: 1, per_page: 200,
+      })
+      .mockResolvedValueOnce({
+        photos: [
+          { id: 1, path: '/1.jpg', taken_at: null, camera: null },
+          { id: 2, path: '/2.jpg', taken_at: null, camera: null },
+        ],
+        total: 2, page: 2, per_page: 200,
+      });
+    const api = {
+      geo: {
+        hierarchy: vi.fn(async () => ({ countries: [{
+          name: '中国', query_value: '中国', photo_count: 2, states: [],
+        }] })),
+        clusters: vi.fn(async () => ({ clusters: [], total_photos: 0 })),
+        photos,
+        clusterPhotos: vi.fn(), regeocode: vi.fn(), normalizeNames: vi.fn(),
+        namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
+      },
+    } as unknown as ApiClient;
+    const { container } = render(PlacesView, { api });
+
+    await screen.findByRole('heading', { name: '按地点浏览' });
+    await fireEvent.click(container.querySelector('.country-group > summary') as HTMLElement);
+    await fireEvent.click(screen.getByRole('button', { name: '查看 中国 的全部照片' }));
+    expect(await screen.findByText('已显示 1 / 2 张')).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', { name: '载入更多' }));
+    expect(await screen.findByAltText('照片 2')).toBeVisible();
+    expect(screen.getAllByAltText('照片 1')).toHaveLength(1);
+    expect(photos).toHaveBeenLastCalledWith({ country: '中国' }, 2, 200);
   });
 
   it('offers a safe background repair for legacy place names', async () => {

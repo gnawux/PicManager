@@ -496,6 +496,18 @@ Status: complete.
 - M21.4: cover system proxy mapping, 5,000-photo coordinate collapsing, provider
   failure, cancellation, contention and real isolated proxy-backed normalization.
 
+### M22 - Paginated photo-set browsing
+
+Status: in progress.
+
+- M22.1: complete — paginate geographic hierarchy results and protect rapid selection changes
+  from stale responses.
+- M22.2: complete — paginate smart albums, curated collections and person photo sets while
+  preserving bounded initial rendering.
+- M22.3: complete — bound activity-photo responses and provide the same incremental browsing
+  behavior for unusually photo-heavy activities.
+- M22.4: rebuild and verify the embedded frontend and macOS application bundle.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

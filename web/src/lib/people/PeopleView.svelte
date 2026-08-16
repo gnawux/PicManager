@@ -13,6 +13,10 @@
   let error = $state<string | null>(null);
   let selected = $state<PersonSummary | null>(null);
   let photos = $state<PhotoPage | null>(null);
+  let photosLoading = $state(false);
+  let loadingMore = $state(false);
+  let loadMoreError = $state<string | null>(null);
+  let photoRequest = 0;
   let editingId = $state<number | null>(null);
   let editName = $state('');
   let busyId = $state<number | null>(null);
@@ -34,13 +38,37 @@
   }
 
   async function open(person: PersonSummary) {
+    const request = ++photoRequest;
     selected = person;
     photos = null;
+    photosLoading = true;
+    loadingMore = false;
+    loadMoreError = null;
     error = null;
     try {
-      photos = await api.people.photos(person.id);
+      const page = await api.people.photos(person.id, 1, 100);
+      if (request === photoRequest) photos = page;
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : String(reason);
+      if (request === photoRequest) error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      if (request === photoRequest) photosLoading = false;
+    }
+  }
+
+  async function loadMore() {
+    if (!selected || !photos || loadingMore || photos.photos.length >= photos.total) return;
+    const request = photoRequest;
+    loadingMore = true;
+    loadMoreError = null;
+    try {
+      const next = await api.people.photos(selected.id, photos.page + 1, photos.per_page);
+      if (request !== photoRequest) return;
+      const existing = new Set(photos.photos.map((photo) => photo.id));
+      photos = { ...next, photos: [...photos.photos, ...next.photos.filter((photo) => !existing.has(photo.id))] };
+    } catch (reason) {
+      if (request === photoRequest) loadMoreError = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      if (request === photoRequest) loadingMore = false;
     }
   }
 
@@ -98,13 +126,13 @@
 {#if selected}
   <section class="person-detail" aria-labelledby="person-title">
     <div class="detail-heading">
-      <Button variant="ghost" onclick={() => { selected = null; photos = null; }}>← 返回人物</Button>
+      <Button variant="ghost" onclick={() => { photoRequest += 1; selected = null; photos = null; }}>← 返回人物</Button>
       <div><p>Person</p><h2 id="person-title">{selected.name ?? `未命名人物 ${selected.id}`}</h2></div>
-      <span>{photos?.total ?? selected.photo_count} 张</span>
+      <span>{photos ? `已显示 ${photos.photos.length} / ${photos.total} 张` : `${selected.photo_count} 张`}</span>
     </div>
     {#if error}
       <PageState kind="error" title="无法读取人物照片" message={error} />
-    {:else if !photos}
+    {:else if photosLoading || !photos}
       <PageState kind="loading" title="正在整理人物照片" />
     {:else if photos.photos.length === 0}
       <PageState kind="empty" title="没有关联照片" />
@@ -114,6 +142,10 @@
           <img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />
         {/each}
       </div>
+      {#if loadMoreError}<p class="load-error" role="alert">载入下一页失败：{loadMoreError}</p>{/if}
+      {#if photos.photos.length < photos.total}
+        <div class="load-more"><Button disabled={loadingMore} onclick={loadMore}>{loadingMore ? '正在载入…' : '载入更多'}</Button></div>
+      {/if}
     {/if}
   </section>
 {:else}
@@ -185,5 +217,7 @@
   form input { min-width: 0; }
   .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 5px; }
   .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: var(--fill-subtle); }
+  .load-more { display: flex; justify-content: center; padding: 18px 0 6px; }
+  .load-error { margin: 14px 0 0; color: var(--danger); text-align: center; font-size: 13px; }
   @media (max-width: 680px) { .view-heading { align-items: stretch; flex-direction: column; } .controls { justify-content: space-between; } .people-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } .detail-heading { flex-wrap: wrap; } }
 </style>
