@@ -40,6 +40,10 @@ describe('PhotoMap', () => {
     await waitFor(() => expect(clusters).toHaveBeenCalled());
     const bounds = clusters.mock.calls.at(-1)?.[2];
     expect(bounds && bounds.east - bounds.west).toBeLessThan(200);
+    expect(bounds?.west).toBeLessThan(cluster.gps_lon);
+    expect(bounds?.east).toBeGreaterThan(cluster.gps_lon);
+    expect(bounds?.south).toBeLessThan(cluster.gps_lat);
+    expect(bounds?.north).toBeGreaterThan(cluster.gps_lat);
 
     await fireEvent.click(screen.getByRole('button', { name: '查看此区域的 2 张照片' }));
     expect(await screen.findByAltText('地图照片 7')).toBeVisible();

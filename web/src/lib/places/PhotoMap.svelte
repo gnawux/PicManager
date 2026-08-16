@@ -11,12 +11,16 @@
   const TILE_SIZE = 256;
   const MIN_ZOOM = 2;
   const MAX_ZOOM = 18;
+  const initialFocus = untrack(() => initialPage.clusters.reduce<GeoCluster | null>(
+    (largest, cluster) => !largest || cluster.photo_count > largest.photo_count ? cluster : largest,
+    null,
+  ));
   let mapElement = $state<HTMLDivElement>();
   let width = $state(960);
   let height = $state(480);
   let zoom = $state(2);
-  let centerLat = $state(20);
-  let centerLon = $state(0);
+  let centerLat = $state(initialFocus?.gps_lat ?? 20);
+  let centerLon = $state(initialFocus?.gps_lon ?? 0);
   let clusters = $state<GeoCluster[]>(untrack(() => initialPage.clusters));
   let visibleTotal = $state(untrack(() => initialPage.total_photos));
   let loading = $state(false);
