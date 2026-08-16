@@ -86,7 +86,7 @@ async fn health_api_returns_structured_service_and_job_state() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "healthy");
-    assert_eq!(json["sqlite_quick_check"], "ok");
+    assert_eq!(json["sqlite_quick_check"], "deferred");
     assert!(json["schema_version"].as_i64().unwrap() >= 26);
     assert!(json["reconciliation"].is_object());
 }

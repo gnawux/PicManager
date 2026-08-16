@@ -47,9 +47,17 @@ pub async fn recover_startup(pool: &SqlitePool, _config: &Config) -> Result<Star
 }
 
 pub async fn health_report(pool: &SqlitePool, config: &Config, deep: bool) -> Result<HealthReport> {
-    let sqlite_quick_check: String = sqlx::query_scalar("PRAGMA quick_check")
-        .fetch_one(pool)
-        .await?;
+    // Routine readiness polling must stay constant-time. A full quick_check scans the
+    // catalog and made the native shell consume multiple CPU cores every five seconds.
+    // Keep it for explicit diagnostics only; the lightweight queries below still prove
+    // that SQLite is reachable and the expected schema can be read.
+    let sqlite_quick_check = if deep {
+        sqlx::query_scalar("PRAGMA quick_check")
+            .fetch_one(pool)
+            .await?
+    } else {
+        "deferred".to_owned()
+    };
     let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
         .fetch_one(pool)
         .await?;
@@ -77,7 +85,8 @@ pub async fn health_report(pool: &SqlitePool, config: &Config, deep: bool) -> Re
             && report.invalid_display_pointers == 0
             && report.incomplete_filesystem_intents == 0
     });
-    let status = if sqlite_quick_check == "ok" && reconciliation_healthy {
+    let sqlite_healthy = !deep || sqlite_quick_check == "ok";
+    let status = if sqlite_healthy && reconciliation_healthy {
         "healthy"
     } else {
         "degraded"
@@ -119,10 +128,9 @@ mod tests {
             .unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         let config = Config::default();
-        assert_eq!(
-            health_report(&pool, &config, false).await.unwrap().status,
-            "healthy"
-        );
+        let lightweight = health_report(&pool, &config, false).await.unwrap();
+        assert_eq!(lightweight.status, "healthy");
+        assert_eq!(lightweight.sqlite_quick_check, "deferred");
         sqlx::query(
             "INSERT INTO photos (path, sha256, format, import_status) \
              VALUES ('/missing/health.jpg', 'health-missing', 'jpeg', 'imported')",
@@ -132,6 +140,7 @@ mod tests {
         .unwrap();
         let report = health_report(&pool, &config, true).await.unwrap();
         assert_eq!(report.status, "degraded");
+        assert_eq!(report.sqlite_quick_check, "ok");
         assert_eq!(report.reconciliation.unwrap().missing_photo_files, 1);
     }
 }
