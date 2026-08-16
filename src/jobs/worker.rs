@@ -179,7 +179,7 @@ async fn worker_loop(
         if *shutdown.borrow() {
             return;
         }
-        match lease_next(&pool, &worker_id, config.lease_duration.as_secs()).await {
+        match lease_next_with_retry(&pool, &worker_id, config.lease_duration.as_secs()).await {
             Ok(Some(lease)) => execute_leased(&pool, &registry, &config, lease).await,
             Ok(None) => {
                 tokio::select! {
@@ -197,6 +197,25 @@ async fn worker_loop(
             }
         }
     }
+}
+
+async fn lease_next_with_retry(
+    pool: &SqlitePool,
+    worker_id: &str,
+    lease_seconds: u64,
+) -> crate::error::Result<Option<JobLease>> {
+    let mut last_error = None;
+    for attempt in 1..=5 {
+        match lease_next(pool, worker_id, lease_seconds).await {
+            Ok(lease) => return Ok(lease),
+            Err(error) if attempt < 5 => {
+                last_error = Some(error);
+                tokio::time::sleep(Duration::from_millis(25 * attempt)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.expect("lease retry records an error"))
 }
 
 async fn execute_leased(
@@ -422,6 +441,32 @@ mod tests {
         assert!(handle.shutdown().await);
         assert_eq!(active.load(Ordering::SeqCst), 0);
         assert_eq!(peak.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn lease_retries_transient_writer_contention() {
+        let (pool, _directory) = pool().await;
+        enqueue(
+            &pool,
+            &NewJob::new("test_work", serde_json::json!({"index": 1})),
+        )
+        .await
+        .unwrap();
+        let mut writer = pool.acquire().await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let retry_pool = pool.clone();
+        let lease = tokio::spawn(async move {
+            lease_next_with_retry(&retry_pool, "retry-worker", 60).await
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        sqlx::query("COMMIT").execute(&mut *writer).await.unwrap();
+
+        let lease = lease.await.unwrap().unwrap().expect("queued job is leased");
+        assert_eq!(lease.worker_id, "retry-worker");
+        assert_eq!(lease.job.kind, "test_work");
     }
 
     #[tokio::test]
