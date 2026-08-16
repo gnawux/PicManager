@@ -1263,6 +1263,62 @@ async fn geo_hierarchy_preserves_nulls_as_queryable_unknown_entries() {
 }
 
 #[tokio::test]
+async fn geo_name_policy_reports_and_normalizes_legacy_cache_entries() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let lat = 22.3193;
+    let lon = 114.1694;
+    seed_geo_photo(&pool, "/hong-kong.jpg", "hong-kong", lat, lon).await;
+    seed_geocache(
+        &pool, lat, lon, Some("中国 China"), Some("香港 Hong Kong"), Some("香港 Hong Kong"),
+    ).await;
+    seed_geocache(
+        &pool, lat, lon + 0.005, Some("中国"), Some("香港"), Some("香港"),
+    ).await;
+    sqlx::query(
+        "UPDATE geocache SET name_policy_revision = 1 WHERE lon_key = ?",
+    )
+    .bind(format!("{:.4}", lon + 0.005))
+    .execute(&pool).await.unwrap();
+
+    let policy = app.clone().oneshot(
+        Request::builder().uri("/api/geo/name-policy").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(policy.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(policy.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["revision"], 1);
+    assert_eq!(json["outdated_photos"], 1);
+    assert!(json["language_preference"].as_str().unwrap().starts_with("zh-CN,zh-Hans"));
+
+    let started = app.clone().oneshot(
+        Request::builder().uri("/api/geo/normalize-names").method("POST")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(started.status(), StatusCode::OK);
+    let bytes = axum::body::to_bytes(started.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["status"], "started");
+    assert_eq!(json["count"], 1);
+
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let row: (Option<String>, i64) = sqlx::query_as(
+                "SELECT city, name_policy_revision FROM geocache
+                 WHERE lat_key = ? AND lon_key = ?",
+            )
+            .bind(format!("{lat:.4}"))
+            .bind(format!("{lon:.4}"))
+            .fetch_one(&pool).await.unwrap();
+            if row.1 == 1 {
+                assert_eq!(row.0.as_deref(), Some("香港"));
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }).await.unwrap();
+}
+
+#[tokio::test]
 async fn get_people_empty() {
     let app = test_app().await;
     let response = app

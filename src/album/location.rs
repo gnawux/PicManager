@@ -9,6 +9,9 @@ use crate::error::Result;
 
 const GEO_COORD_PRECISION: usize = 4; // ≈11 m precision at equator
 const PROXIMITY_DEG: f64 = 0.01;      // ≈1 km; used to reuse nearby geocache entries
+pub const GEO_NAME_POLICY_REVISION: i64 = 1;
+pub const GEO_LANGUAGE_PREFERENCE: &str =
+    "zh-CN,zh-Hans,zh-SG,zh-HK,zh-TW,zh-Hant,zh,en-US,en-GB,en";
 
 fn coord_key(v: f64) -> String {
     format!("{:.prec$}", v, prec = GEO_COORD_PRECISION)
@@ -44,6 +47,22 @@ pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64> {
     Ok(n)
 }
 
+/// Count imported GPS photos whose cached names predate the current language policy.
+pub async fn count_outdated_geo_names(pool: &SqlitePool) -> Result<i64> {
+    let n = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM photos ph
+         JOIN geocache gc
+           ON PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+          AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+         WHERE ph.import_status = 'imported'
+           AND gc.name_policy_revision < ?",
+    )
+    .bind(GEO_NAME_POLICY_REVISION)
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
+}
+
 /// Group all imported photos with GPS coordinates into per-city location albums.
 /// Uses OSM Nominatim for reverse geocoding, with a local geocache to avoid
 /// redundant requests and to respect the 1 req/s rate limit.
@@ -63,12 +82,38 @@ pub async fn group_by_location_with_progress(
     pool: &SqlitePool,
     progress: SharedGeoProgress,
 ) -> Result<()> {
-    let photos: Vec<(i64, f64, f64)> = sqlx::query_as(
+    group_by_location_with_policy(pool, progress, false).await
+}
+
+pub async fn normalize_geo_names_with_progress(
+    pool: &SqlitePool,
+    progress: SharedGeoProgress,
+) -> Result<()> {
+    group_by_location_with_policy(pool, progress, true).await
+}
+
+async fn group_by_location_with_policy(
+    pool: &SqlitePool,
+    progress: SharedGeoProgress,
+    refresh_names: bool,
+) -> Result<()> {
+    let sql = if refresh_names {
+        "SELECT ph.id, ph.gps_lat, ph.gps_lon FROM photos ph
+         JOIN geocache gc
+           ON PRINTF('%.4f', ph.gps_lat) = gc.lat_key
+          AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
+         WHERE ph.import_status = 'imported'
+           AND ph.gps_lat IS NOT NULL AND ph.gps_lon IS NOT NULL
+           AND gc.name_policy_revision < ?"
+    } else {
         "SELECT id, gps_lat, gps_lon FROM photos
-         WHERE import_status = 'imported' AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL",
-    )
-    .fetch_all(pool)
-    .await?;
+         WHERE import_status = 'imported' AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL"
+    };
+    let mut query = sqlx::query_as::<_, (i64, f64, f64)>(sql);
+    if refresh_names {
+        query = query.bind(GEO_NAME_POLICY_REVISION);
+    }
+    let photos = query.fetch_all(pool).await?;
     progress.total.store(photos.len(), Relaxed);
 
     if photos.is_empty() {
@@ -84,15 +129,21 @@ pub async fn group_by_location_with_progress(
     let mut need_rate_limit = false;
     let mut session_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for (photo_id, lat, lon) in photos {
-        let (city, _) = cached_or_fetch(pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache).await;
+        let minimum_revision = if refresh_names { GEO_NAME_POLICY_REVISION } else { 0 };
+        let (city, _) = cached_or_fetch(
+            pool, &client, lat, lon, minimum_revision,
+            &mut need_rate_limit, &mut session_cache,
+        ).await;
         if let Some(city) = city {
             ensure_location_album(pool, photo_id, &city).await?;
         }
         progress.processed.fetch_add(1, Relaxed);
     }
+    prune_empty_location_albums(pool).await?;
     Ok(())
 }
 
+#[derive(Clone)]
 struct GeoInfo {
     city: Option<String>,
     state: Option<String>,
@@ -113,6 +164,7 @@ async fn cached_or_fetch(
     client: &Client,
     lat: f64,
     lon: f64,
+    minimum_revision: i64,
     need_rate_limit: &mut bool,
     session_cache: &mut HashMap<(String, String), Option<String>>,
 ) -> (Option<String>, bool) {
@@ -125,8 +177,9 @@ async fn cached_or_fetch(
     }
 
     // Read city, state, and country to distinguish permanent failures from transient ones.
-    let row: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT city, state, country FROM geocache WHERE lat_key = ? AND lon_key = ?",
+    let row: Option<(Option<String>, Option<String>, Option<String>, Option<String>, i64)> = sqlx::query_as(
+        "SELECT city, state, county, country, name_policy_revision
+         FROM geocache WHERE lat_key = ? AND lon_key = ?",
     )
     .bind(&lat_key)
     .bind(&lon_key)
@@ -135,31 +188,41 @@ async fn cached_or_fetch(
     .ok()
     .flatten();
 
-    if let Some((city, state, country)) = row {
-        // All three NULL means Nominatim returned an error or no data during a previous
-        // attempt (transient failure) — treat as a cache miss and retry.
-        let truly_empty = city.is_none() && state.is_none() && country.is_none();
-        if !truly_empty {
-            // Complete entry (state set), or a partial result (only country known) — use as-is.
-            if state.is_some() || city.is_none() {
-                session_cache.insert((lat_key, lon_key), city.clone());
-                return (city, true);
+    let mut stale_fallback = None;
+    if let Some((city, state, county, country, revision)) = row {
+        if revision < minimum_revision {
+            if city.is_some() || state.is_some() || county.is_some() || country.is_some() {
+                stale_fallback = Some(GeoInfo {
+                    city: city.clone(), state: state.clone(), county, country: country.clone(),
+                });
             }
-            // city is set but state is NULL → stale entry written before municipality fix.
-            // Fall through to re-geocode and update.
+        } else {
+            // All three NULL means Nominatim returned an error or no data during a previous
+            // attempt (transient failure) — treat as a cache miss and retry.
+            let truly_empty = city.is_none() && state.is_none() && country.is_none();
+            if !truly_empty {
+                // Complete entry (state set), or a partial result (only country known) — use as-is.
+                if state.is_some() || city.is_none() {
+                    session_cache.insert((lat_key, lon_key), city.clone());
+                    return (city, true);
+                }
+                // city is set but state is NULL → stale entry written before municipality fix.
+                // Fall through to re-geocode and update.
+            }
+            // truly_empty → fall through to re-geocode
         }
-        // truly_empty → fall through to re-geocode
     }
 
     // Proximity lookup: reuse the nearest valid geocache entry within ±PROXIMITY_DEG.
     // Excludes the exact key itself (which may be stale) and all-NULL entries.
     // Avoids a Nominatim API call when a nearby coordinate has already been resolved.
-    let nearby: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> =
+    let nearby: Option<(Option<String>, Option<String>, Option<String>, Option<String>, i64)> =
         sqlx::query_as(
-            "SELECT city, state, county, country FROM geocache
+            "SELECT city, state, county, country, name_policy_revision FROM geocache
              WHERE CAST(lat_key AS REAL) BETWEEN ? AND ?
                AND CAST(lon_key AS REAL) BETWEEN ? AND ?
                AND NOT (lat_key = ? AND lon_key = ?)
+               AND name_policy_revision >= ?
                AND (city IS NOT NULL OR state IS NOT NULL OR country IS NOT NULL)
              ORDER BY
                (CAST(lat_key AS REAL) - ?) * (CAST(lat_key AS REAL) - ?) +
@@ -169,20 +232,23 @@ async fn cached_or_fetch(
         .bind(lat - PROXIMITY_DEG).bind(lat + PROXIMITY_DEG)
         .bind(lon - PROXIMITY_DEG).bind(lon + PROXIMITY_DEG)
         .bind(&lat_key).bind(&lon_key)
+        .bind(minimum_revision)
         .bind(lat).bind(lat).bind(lon).bind(lon)
         .fetch_optional(pool)
         .await
         .ok()
         .flatten();
 
-    if let Some((city, state, county, country)) = nearby {
+    if let Some((city, state, county, country, source_revision)) = nearby {
         // Write back to exact key so future lookups skip this proximity scan.
         let _ = sqlx::query(
-            "INSERT OR REPLACE INTO geocache (lat_key, lon_key, city, state, county, country)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO geocache
+             (lat_key, lon_key, city, state, county, country, name_policy_revision)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&lat_key).bind(&lon_key)
         .bind(&city).bind(&state).bind(&county).bind(&country)
+        .bind(source_revision)
         .execute(pool)
         .await;
         session_cache.insert((lat_key, lon_key), city.clone());
@@ -196,6 +262,14 @@ async fn cached_or_fetch(
     let info = nominatim_lookup(client, lat, lon).await;
     *need_rate_limit = true;
 
+    if info.is_none() {
+        if let Some(fallback) = stale_fallback {
+            let city = fallback.city;
+            session_cache.insert((lat_key, lon_key), city.clone());
+            return (city, true);
+        }
+    }
+
     let city = info.as_ref().and_then(|i| i.city.clone());
     let state = info.as_ref().and_then(|i| i.state.clone());
     let county = info.as_ref().and_then(|i| i.county.clone());
@@ -203,8 +277,9 @@ async fn cached_or_fetch(
 
     // INSERT OR REPLACE so that stale entries (state was NULL) are updated.
     let _ = sqlx::query(
-        "INSERT OR REPLACE INTO geocache (lat_key, lon_key, city, state, county, country)
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT OR REPLACE INTO geocache
+         (lat_key, lon_key, city, state, county, country, name_policy_revision)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&lat_key)
     .bind(&lon_key)
@@ -212,6 +287,7 @@ async fn cached_or_fetch(
     .bind(&state)
     .bind(&county)
     .bind(&country)
+    .bind(GEO_NAME_POLICY_REVISION)
     .execute(pool)
     .await;
 
@@ -232,10 +308,8 @@ fn first_name(s: String) -> String {
 }
 
 async fn nominatim_lookup(client: &Client, lat: f64, lon: f64) -> Option<GeoInfo> {
-    // zh-CN,zh,en: prefer Simplified Chinese; avoid zh-CN+zh-TW concatenation that
-    // bare "zh" can trigger when both script variants exist in OSM (e.g. "美国;美國").
     let url = format!(
-        "https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=json&zoom=10&accept-language=zh-CN,zh,en"
+        "https://nominatim.openstreetmap.org/reverse?lat={lat}&lon={lon}&format=jsonv2&zoom=10&addressdetails=1&accept-language={GEO_LANGUAGE_PREFERENCE}"
     );
     let resp: serde_json::Value = client.get(&url).send().await.ok()?.json().await.ok()?;
     let addr = resp.get("address")?;
@@ -328,7 +402,7 @@ pub async fn group_by_location_scoped(
     let mut session_cache: HashMap<(String, String), Option<String>> = HashMap::new();
     for (photo_id, lat, lon) in photos {
         let (city, is_cache_hit) = cached_or_fetch(
-            pool, &client, lat, lon, &mut need_rate_limit, &mut session_cache,
+            pool, &client, lat, lon, 0, &mut need_rate_limit, &mut session_cache,
         ).await;
         if is_cache_hit {
             geo_cache_hits.fetch_add(1, Relaxed);
@@ -340,34 +414,59 @@ pub async fn group_by_location_scoped(
         }
         geo_done.fetch_add(1, Relaxed);
     }
+    prune_empty_location_albums(pool).await?;
     Ok(())
 }
 
 async fn ensure_location_album(pool: &SqlitePool, photo_id: i64, city: &str) -> Result<()> {
+    let mut tx = pool.begin().await?;
     let album_id: i64 = {
         let existing: Option<(i64,)> = sqlx::query_as(
             "SELECT id FROM albums WHERE name = ? AND kind = 'location'",
         )
         .bind(city)
-        .fetch_optional(pool)
+        .fetch_optional(&mut *tx)
         .await?;
 
         match existing {
             Some((id,)) => id,
             None => sqlx::query("INSERT INTO albums (name, kind) VALUES (?, 'location')")
                 .bind(city)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await?
                 .last_insert_rowid(),
         }
     };
 
+    sqlx::query(
+        "DELETE FROM photo_albums
+         WHERE photo_id = ? AND album_id IN (
+             SELECT id FROM albums WHERE kind = 'location' AND id != ?
+         )",
+    )
+    .bind(photo_id)
+    .bind(album_id)
+    .execute(&mut *tx)
+    .await?;
+
     sqlx::query("INSERT OR IGNORE INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
         .bind(photo_id)
         .bind(album_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn prune_empty_location_albums(pool: &SqlitePool) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM albums
+         WHERE kind = 'location'
+           AND NOT EXISTS (SELECT 1 FROM photo_albums pa WHERE pa.album_id = albums.id)",
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -499,6 +598,83 @@ mod tests {
         .unwrap();
 
         assert_eq!(count_missing_geo(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn counts_only_names_from_older_language_policies() {
+        let pool = test_pool().await;
+        let lat = 22.3193;
+        let lon = 114.1694;
+        insert_photo(&pool, "/hong-kong.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon, Some("香港 Hong Kong"), Some("香港 Hong Kong")).await;
+        assert_eq!(count_outdated_geo_names(&pool).await.unwrap(), 1);
+
+        sqlx::query("UPDATE geocache SET name_policy_revision = ?")
+            .bind(GEO_NAME_POLICY_REVISION)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count_outdated_geo_names(&pool).await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn name_normalization_reuses_current_nearby_names_and_reconciles_albums() {
+        let pool = test_pool().await;
+        let lat = 22.3193;
+        let lon = 114.1694;
+        let photo_id = insert_photo(&pool, "/hong-kong.jpg", Some(lat), Some(lon)).await;
+        seed_geocache(&pool, lat, lon, Some("香港 Hong Kong"), Some("香港 Hong Kong")).await;
+        seed_geocache(&pool, lat, lon + 0.005, Some("香港"), Some("香港")).await;
+        sqlx::query(
+            "UPDATE geocache SET country = '中国', name_policy_revision = ?
+             WHERE lon_key = ?",
+        )
+        .bind(GEO_NAME_POLICY_REVISION)
+        .bind(coord_key(lon + 0.005))
+        .execute(&pool)
+        .await
+        .unwrap();
+        ensure_location_album(&pool, photo_id, "香港 Hong Kong").await.unwrap();
+
+        normalize_geo_names_with_progress(&pool, SharedGeoProgress::default())
+            .await
+            .unwrap();
+
+        let cached: (Option<String>, i64) = sqlx::query_as(
+            "SELECT city, name_policy_revision FROM geocache
+             WHERE lat_key = ? AND lon_key = ?",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(lon))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cached, (Some("香港".to_owned()), GEO_NAME_POLICY_REVISION));
+
+        let albums: Vec<String> = sqlx::query_scalar(
+            "SELECT a.name FROM albums a JOIN photo_albums pa ON pa.album_id = a.id
+             WHERE pa.photo_id = ? AND a.kind = 'location'",
+        )
+        .bind(photo_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(albums, vec!["香港"]);
+        let old_album_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM albums WHERE kind = 'location' AND name = '香港 Hong Kong'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(old_album_count, 0);
+    }
+
+    #[test]
+    fn language_policy_prefers_simplified_chinese_then_chinese_then_english() {
+        assert_eq!(
+            GEO_LANGUAGE_PREFERENCE.split(',').collect::<Vec<_>>(),
+            vec!["zh-CN", "zh-Hans", "zh-SG", "zh-HK", "zh-TW", "zh-Hant", "zh", "en-US", "en-GB", "en"],
+        );
     }
 
     #[tokio::test]
@@ -762,6 +938,15 @@ mod tests {
         .unwrap()
         .flatten();
         assert_eq!(city.as_deref(), Some("Tokyo"), "proximity hit should be written to exact key");
+        let revision: i64 = sqlx::query_scalar(
+            "SELECT name_policy_revision FROM geocache WHERE lat_key = ? AND lon_key = ?",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(lon))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(revision, 0, "copying a legacy nearby name must not mark it normalized");
     }
 
     #[tokio::test]

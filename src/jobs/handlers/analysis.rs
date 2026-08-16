@@ -12,6 +12,12 @@ pub struct PhotoAnalysisPayload {
     pub photo_ids: Option<Vec<i64>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct GeocodePayload {
+    #[serde(default)]
+    pub refresh_names: bool,
+}
+
 #[derive(Clone)]
 pub struct FaceAnalysisJobHandler(pub Application);
 
@@ -59,7 +65,26 @@ pub async fn enqueue_geocode(
     application: &Application,
     context: &RequestContext,
 ) -> ServiceResult<EnqueueResult> {
-    let mut job = NewJob::new("geocode", serde_json::json!({}));
+    enqueue_geocode_with_policy(application, context, false).await
+}
+
+pub async fn enqueue_geo_name_normalization(
+    application: &Application,
+    context: &RequestContext,
+) -> ServiceResult<EnqueueResult> {
+    enqueue_geocode_with_policy(application, context, true).await
+}
+
+async fn enqueue_geocode_with_policy(
+    application: &Application,
+    context: &RequestContext,
+    refresh_names: bool,
+) -> ServiceResult<EnqueueResult> {
+    let mut job = NewJob::new(
+        "geocode",
+        serde_json::to_value(GeocodePayload { refresh_names })
+            .expect("geocode payload is serializable"),
+    );
     job.correlation_id = Some(context.request_id.to_string());
     job.idempotency_key = context.idempotency_key.as_deref().map(str::to_owned);
     crate::jobs::enqueue(application.pool(), &job)
@@ -155,14 +180,23 @@ impl JobHandler for AnimalAnalysisJobHandler {
 }
 
 impl JobHandler for GeocodeJobHandler {
-    fn execute(&self, _job: Job, control: JobControl) -> HandlerFuture {
+    fn execute(&self, job: Job, control: JobControl) -> HandlerFuture {
         let application = self.0.clone();
         Box::pin(async move {
+            let payload: GeocodePayload = serde_json::from_str(&job.payload_json)
+                .map_err(|error| JobFailure::terminal("invalid_payload", error.to_string()))?;
             let progress = SharedGeoProgress::default();
-            let execution = crate::album::location::group_by_location_with_progress(
-                application.pool(),
-                progress.clone(),
-            );
+            let execution = async {
+                if payload.refresh_names {
+                    crate::album::location::normalize_geo_names_with_progress(
+                        application.pool(), progress.clone(),
+                    ).await
+                } else {
+                    crate::album::location::group_by_location_with_progress(
+                        application.pool(), progress.clone(),
+                    ).await
+                }
+            };
             tokio::pin!(execution);
             loop {
                 tokio::select! {

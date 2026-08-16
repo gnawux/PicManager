@@ -307,6 +307,48 @@ pub async fn start_regeocode(
     Ok(Json(serde_json::json!({"status": "started", "count": count, "job_id": queued.job.id})))
 }
 
+pub async fn get_geo_name_policy(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let outdated_photos = crate::album::location::count_outdated_geo_names(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({
+        "revision": crate::album::location::GEO_NAME_POLICY_REVISION,
+        "language_preference": crate::album::location::GEO_LANGUAGE_PREFERENCE,
+        "outdated_photos": outdated_photos,
+    })))
+}
+
+pub async fn start_geo_name_normalization(
+    State(state): State<AppState>,
+    Extension(context): Extension<RequestContext>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    let active = crate::jobs::list(&state.pool, None, Some("geocode"), None, 100)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+        .into_iter()
+        .any(|job| matches!(job.status.as_str(), "queued" | "running" | "retry_wait"));
+    if active {
+        return Ok(Json(serde_json::json!({"status": "already_running"})));
+    }
+
+    let count = crate::album::location::count_outdated_geo_names(&state.pool)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if count == 0 {
+        return Ok(Json(serde_json::json!({"status": "up_to_date", "count": 0})));
+    }
+    let queued = crate::jobs::handlers::enqueue_geo_name_normalization(
+        &state.application, &context,
+    )
+    .await
+    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(serde_json::json!({
+        "status": "started", "count": count, "job_id": queued.job.id,
+    })))
+}
+
 pub async fn get_regeocode_status(
     State(state): State<AppState>,
 ) -> Json<serde_json::Value> {

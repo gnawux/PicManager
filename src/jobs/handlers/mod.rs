@@ -35,5 +35,5 @@ pub fn registry(application: Application) -> WorkerRegistry {
 }
 pub use analysis::{
     AnimalAnalysisJobHandler, FaceAnalysisJobHandler, GeocodeJobHandler, enqueue_animal_analysis,
-    enqueue_face_analysis, enqueue_geocode,
+    enqueue_face_analysis, enqueue_geocode, enqueue_geo_name_normalization,
 };
