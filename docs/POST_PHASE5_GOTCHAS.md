@@ -56,6 +56,14 @@ A view can be slow not only while loading but also while destroying a large comp
 tree. Measure entering and leaving heavy tabs. Keep the Places view proportional to
 visible clusters and hierarchy nodes, not total library size.
 
+### Product vocabulary is not automatically stored vocabulary
+
+The UI calls date-derived albums “month” albums, but existing databases and the Rust
+API store their kind as `time`. A refactor that grouped only `month` passed synthetic
+component tests while sending real date albums to the fallback section. Before changing
+an enum-like field, inspect migrated data, SQL producers and API fixtures; accept legacy
+values at compatibility boundaries and make tests use at least one production value.
+
 ### Display labels are not query identities
 
 Converting SQL `NULL` to the label `Unknown` destroyed the information needed to query
@@ -123,4 +131,4 @@ Before merging related work, answer all of the following:
 6. Are derived relationships updated transactionally and narrowly?
 7. Was the embedded frontend, Rust service, app bundle, and nested signature rebuilt?
 8. Were tests run only against isolated or copied libraries?
-
+9. Do enum-like test fixtures include the values stored by existing catalogs?
