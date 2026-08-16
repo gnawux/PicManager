@@ -21,20 +21,30 @@ describe('PlacesView', () => {
           clusters: [{
             x_bin: 40, y_bin: 7, gps_lat: 31.2, gps_lon: 121.5,
             photo_count: 1, representative_photo_id: 12,
+            west: 121, east: 122, south: 31, north: 32,
           }],
           total_photos: 1,
         })),
         photos,
+        clusterPhotos: vi.fn(async () => ({
+          photos: [{ id: 12, path: '/x.jpg', taken_at: null, camera: null }],
+          total: 1, page: 1, per_page: 200,
+        })),
         regeocode: vi.fn(async () => ({ status: 'started', count: 0 })),
         namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
         normalizeNames: vi.fn(),
       },
     } as unknown as ApiClient;
-    render(PlacesView, { api });
+    const { container } = render(PlacesView, { api });
 
     const cluster = await screen.findByRole('button', { name: '查看此区域的 1 张照片' });
     await fireEvent.click(cluster);
-    expect(screen.getByAltText('地图照片 12')).toHaveAttribute('src', '/api/photos/12/thumb?size=512');
+    expect(screen.getByAltText('地图照片 12')).toHaveAttribute('src', '/api/photos/12/thumb?size=256');
+    const country = container.querySelector('.country-group') as HTMLDetailsElement;
+    expect(country.open).toBe(false);
+    await fireEvent.click(country.querySelector(':scope > summary') as HTMLElement);
+    const state = country.querySelector('.state-group') as HTMLDetailsElement;
+    await fireEvent.click(state.querySelector(':scope > summary') as HTMLElement);
     await fireEvent.click(screen.getByRole('button', { name: /上海 1/ }));
     expect(await screen.findByAltText('照片 12')).toBeVisible();
     expect(photos).toHaveBeenCalledWith({ country: '中国', state: '上海市', city: '上海' });
@@ -55,6 +65,7 @@ describe('PlacesView', () => {
         }] })),
         clusters: vi.fn(async () => ({ clusters: [], total_photos: 0 })),
         photos,
+        clusterPhotos: vi.fn(),
         regeocode: vi.fn(),
         namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
         normalizeNames: vi.fn(),
@@ -62,7 +73,11 @@ describe('PlacesView', () => {
     } as unknown as ApiClient;
     const { container } = render(PlacesView, { api });
 
-    await screen.findAllByRole('button', { name: /Unknown 1/ });
+    await screen.findByRole('heading', { name: '按地点浏览' });
+    const country = container.querySelector('.country-group') as HTMLDetailsElement;
+    await fireEvent.click(country.querySelector(':scope > summary') as HTMLElement);
+    const state = country.querySelector('.state-group') as HTMLDetailsElement;
+    await fireEvent.click(state.querySelector(':scope > summary') as HTMLElement);
     await fireEvent.click(container.querySelector('.cities button') as HTMLButtonElement);
     expect(await screen.findByAltText('照片 21')).toBeVisible();
     expect(photos).toHaveBeenCalledWith({
@@ -77,6 +92,7 @@ describe('PlacesView', () => {
         hierarchy: vi.fn(async () => ({ countries: [] })),
         clusters: vi.fn(async () => ({ clusters: [], total_photos: 0 })),
         photos: vi.fn(),
+        clusterPhotos: vi.fn(),
         regeocode: vi.fn(),
         namePolicy: vi.fn(async () => ({
           revision: 1,
@@ -102,12 +118,17 @@ describe('PlacesView', () => {
       gps_lon: -176 + (index % 48) * 7.5,
       photo_count: 87,
       representative_photo_id: index + 1,
+      west: -180 + (index % 48) * 7.5,
+      east: -172.5 + (index % 48) * 7.5,
+      south: 82.5 - Math.floor(index / 48) * 7.5,
+      north: 90 - Math.floor(index / 48) * 7.5,
     }));
     const api = {
       geo: {
         hierarchy: vi.fn(async () => ({ countries: [] })),
         clusters: vi.fn(async () => ({ clusters, total_photos: 100_000 })),
         photos: vi.fn(),
+        clusterPhotos: vi.fn(),
         regeocode: vi.fn(),
         namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
         normalizeNames: vi.fn(),

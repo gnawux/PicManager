@@ -257,6 +257,20 @@ pub async fn get_geo_hierarchy(
         });
     }
 
+    for country in &mut countries {
+        for state in &mut country.states {
+            state.cities.sort_by(|left, right| {
+                right.photo_count.cmp(&left.photo_count).then_with(|| left.name.cmp(&right.name))
+            });
+        }
+        country.states.sort_by(|left, right| {
+            right.photo_count.cmp(&left.photo_count).then_with(|| left.name.cmp(&right.name))
+        });
+    }
+    countries.sort_by(|left, right| {
+        right.photo_count.cmp(&left.photo_count).then_with(|| left.name.cmp(&right.name))
+    });
+
     Ok(Json(GeoHierarchy { countries }))
 }
 

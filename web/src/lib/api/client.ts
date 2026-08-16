@@ -163,8 +163,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
         if (bounds) for (const [key, value] of Object.entries(bounds)) query.set(key, String(value));
         return request<GeoClusterPage>(`/api/geo/clusters?${query}`);
       },
-      clusterPhotos: (bounds: { west: number; east: number; south: number; north: number }) => {
-        const query = new URLSearchParams({ page: '1', per_page: '200' });
+      clusterPhotos: (bounds: { west: number; east: number; south: number; north: number }, page = 1) => {
+        const query = new URLSearchParams({ page: String(page), per_page: '200' });
         for (const [key, value] of Object.entries(bounds)) query.set(key, String(value));
         return request<AlbumPhotoPage>(`/api/geo/cluster-photos?${query}`);
       },

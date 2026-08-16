@@ -1237,7 +1237,11 @@ async fn geo_hierarchy_groups_by_country_state_city() {
     let lon1 = -122.4194f64;
     let lat2 = 34.0522f64;
     let lon2 = -118.2437f64;
-    for (p, lat, lon) in [("/sf.jpg", lat1, lon1), ("/la.jpg", lat2, lon2)] {
+    for (p, lat, lon) in [
+        ("/sf.jpg", lat1, lon1),
+        ("/sf-2.jpg", lat1, lon1),
+        ("/la.jpg", lat2, lon2),
+    ] {
         sqlx::query(
             "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
              VALUES (?, ?, 'jpeg', 'imported', ?, ?)",
@@ -1273,16 +1277,19 @@ async fn geo_hierarchy_groups_by_country_state_city() {
     assert_eq!(countries.len(), 1);
     assert_eq!(countries[0]["name"], "United States");
     assert_eq!(countries[0]["query_value"], "United States");
-    assert_eq!(countries[0]["photo_count"], 2);
+    assert_eq!(countries[0]["photo_count"], 3);
 
     let states = countries[0]["states"].as_array().unwrap();
     assert_eq!(states.len(), 1);
     assert_eq!(states[0]["name"], "California");
     assert_eq!(states[0]["query_value"], "California");
-    assert_eq!(states[0]["photo_count"], 2);
+    assert_eq!(states[0]["photo_count"], 3);
 
     let cities = states[0]["cities"].as_array().unwrap();
     assert_eq!(cities.len(), 2);
+    assert_eq!(cities[0]["name"], "San Francisco");
+    assert_eq!(cities[0]["photo_count"], 2);
+    assert_eq!(cities[1]["name"], "Los Angeles");
     assert_eq!(cities[0]["query_value"], cities[0]["name"]);
 }
 

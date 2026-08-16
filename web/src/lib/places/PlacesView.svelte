@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { ApiClient } from '../api/client';
-  import type { AlbumPhotoPage, GeoCluster, GeoClusterPage, GeoHierarchy, GeoNamePolicy } from '../api/types';
+  import type { AlbumPhotoPage, GeoClusterPage, GeoHierarchy, GeoNamePolicy } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
+  import PhotoMap from './PhotoMap.svelte';
 
   interface Props { api: ApiClient }
   interface PlaceSelection {
@@ -20,7 +21,6 @@
   let error = $state<string | null>(null);
   let selection = $state<PlaceSelection | null>(null);
   let photos = $state<AlbumPhotoPage | null>(null);
-  let mapPhoto = $state<number | null>(null);
   let updating = $state(false);
   let updateMessage = $state<string | null>(null);
 
@@ -86,11 +86,6 @@
     }
   }
 
-  function x(cluster: GeoCluster) { return ((cluster.gps_lon + 180) / 360) * 100; }
-  function y(cluster: GeoCluster) { return ((90 - cluster.gps_lat) / 180) * 100; }
-  function clusterSize(cluster: GeoCluster) {
-    return Math.min(42, 16 + Math.log10(Math.max(1, cluster.photo_count)) * 7);
-  }
 </script>
 
 {#if status === 'loading'}
@@ -117,29 +112,7 @@
     {#if clusterPage.total_photos === 0}
       <PageState kind="empty" title="没有带位置的照片" message="保留 GPS 信息的照片会显示在这里。" />
     {:else}
-      <div class="map" role="img" aria-label={`包含 ${clusterPage.total_photos} 张照片的位置概览`}>
-        <div class="grid" aria-hidden="true"></div>
-        {#each clusterPage.clusters as cluster (`${cluster.x_bin}:${cluster.y_bin}`)}
-          <button
-            class="map-cluster"
-            class:active={mapPhoto === cluster.representative_photo_id}
-            type="button"
-            aria-label={`查看此区域的 ${cluster.photo_count} 张照片`}
-            style:left={`${x(cluster)}%`}
-            style:top={`${y(cluster)}%`}
-            style:width={`${clusterSize(cluster)}px`}
-            style:height={`${clusterSize(cluster)}px`}
-            onclick={() => {
-              mapPhoto = mapPhoto === cluster.representative_photo_id
-                ? null
-                : cluster.representative_photo_id;
-            }}
-          >{cluster.photo_count > 1 ? cluster.photo_count : ''}</button>
-        {/each}
-        {#if mapPhoto}
-          <div class="map-preview"><img src={`/api/photos/${mapPhoto}/thumb?size=512`} alt={`地图照片 ${mapPhoto}`} /></div>
-        {/if}
-      </div>
+      <PhotoMap {api} initialPage={clusterPage} />
     {/if}
   </section>
 
@@ -151,11 +124,14 @@
       <div class="place-layout">
         <div class="place-list">
           {#each hierarchy?.countries ?? [] as country}
-            <details open>
-              <summary><button type="button" onclick={() => choose({ label: country.name, country: country.query_value })}>{country.name}<span>{country.photo_count}</span></button></summary>
+            <details class="country-group">
+              <summary><strong>{country.name}</strong><span>{country.photo_count}</span></summary>
+              <button class="browse-all" type="button" onclick={() => choose({ label: country.name, country: country.query_value })}>查看 {country.name} 的全部照片</button>
+              <div class="states">
               {#each country.states as state}
-                <div class="state-row">
-                  <button type="button" onclick={() => choose({ label: state.name, country: country.query_value, state: state.query_value })}>{state.name}<span>{state.photo_count}</span></button>
+                <details class="state-group">
+                  <summary><strong>{state.name}</strong><span>{state.photo_count}</span></summary>
+                  <button class="browse-all state-all" type="button" onclick={() => choose({ label: state.name, country: country.query_value, state: state.query_value })}>查看 {state.name} 的全部照片</button>
                   <div class="cities">
                     {#each state.cities as city}
                       <button
@@ -165,8 +141,9 @@
                       >{city.name} <span>{city.photo_count}</span></button>
                     {/each}
                   </div>
-                </div>
+                </details>
               {/each}
+              </div>
             </details>
           {/each}
         </div>
@@ -192,21 +169,21 @@
   h2 { margin: 0 0 4px; font-size: 28px; } .view-heading span { color: var(--muted); font-size: 13px; }
   .notice { padding: 10px 14px; border-radius: 10px; color: #126137; background: #e8f7ee; }
   .normalization-note { margin: -8px 0 18px; color: var(--muted); font-size: 13px; }
-  .map { position: relative; height: min(46vw, 500px); min-height: 300px; overflow: hidden; border: 1px solid rgba(23,105,224,.14); border-radius: 22px; background: linear-gradient(145deg, #dceaf5, #eef2e8 54%, #dce5ee); }
-  .grid { position: absolute; inset: 0; opacity: .28; background-image: linear-gradient(rgba(42,83,116,.25) 1px, transparent 1px), linear-gradient(90deg, rgba(42,83,116,.25) 1px, transparent 1px); background-size: 12.5% 25%; }
-  .map-cluster { position: absolute; display: grid; min-width: 16px; min-height: 16px; padding: 0; place-items: center; border: 2px solid white; border-radius: 50%; color: white; background: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.28); transform: translate(-50%,-50%); cursor: pointer; font-size: 9px; font-weight: 750; line-height: 1; }
-  .map-cluster.active { z-index: 2; background: #e5484d; transform: translate(-50%,-50%) scale(1.15); }
-  .map-preview { position: absolute; right: 18px; bottom: 18px; width: 150px; padding: 7px; border-radius: 14px; background: white; box-shadow: 0 14px 40px rgba(0,0,0,.2); }
-  .map-preview img { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; border-radius: 9px; }
   .browse { padding-top: 28px; border-top: 1px solid var(--line); }
   .place-layout { display: grid; grid-template-columns: minmax(230px, 340px) 1fr; gap: 24px; }
-  .place-list, .results { min-height: 320px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-solid); }
-  .place-list { padding: 10px; }
-  details + details { border-top: 1px solid var(--line); }
-  summary { list-style: none; } summary::-webkit-details-marker { display: none; }
-  summary button, .state-row > button { display: flex; justify-content: space-between; width: 100%; padding: 11px 10px; border: 0; color: var(--text); font-weight: 700; text-align: left; background: transparent; cursor: pointer; }
-  .state-row { padding: 0 0 10px 10px; }
-  .state-row > button { color: var(--muted); font-weight: 600; }
+  .place-list, .results { height: min(64vh, 620px); min-height: 360px; overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-solid); }
+  .place-list { padding: 8px; overscroll-behavior: contain; }
+  .country-group + .country-group { border-top: 1px solid var(--line); }
+  summary { display: flex; justify-content: space-between; align-items: center; padding: 12px 10px; list-style: none; border-radius: 10px; cursor: pointer; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { width: 16px; content: '›'; color: var(--muted); font-size: 20px; transform-origin: center; transition: transform 120ms ease; }
+  details[open] > summary::before { transform: rotate(90deg); }
+  summary strong { flex: 1; }
+  summary span { color: var(--muted); font-size: 11px; }
+  .states { padding: 0 0 8px 12px; }
+  .state-group > summary { padding-block: 9px; color: var(--muted); font-size: 13px; }
+  .browse-all { width: calc(100% - 20px); margin: 0 10px 5px; padding: 7px 9px; border: 0; border-radius: 8px; color: var(--accent); text-align: left; background: var(--fill-subtle); cursor: pointer; font-size: 12px; }
+  .state-all { width: calc(100% - 12px); margin-inline: 6px; }
   .cities { display: flex; flex-wrap: wrap; gap: 5px; padding: 0 8px; }
   .cities button { padding: 6px 9px; border: 0; border-radius: 999px; color: var(--muted); background: var(--fill-subtle); cursor: pointer; }
   .cities button.active { color: white; background: var(--accent); }
@@ -216,5 +193,5 @@
   .hint { display: grid; height: 260px; margin: 0; place-items: center; }
   .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px; }
   .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
-  @media (max-width: 760px) { .place-layout { grid-template-columns: 1fr; } .map { height: 360px; } .view-heading { align-items: start; } }
+  @media (max-width: 760px) { .place-layout { grid-template-columns: 1fr; } .view-heading { align-items: start; } }
 </style>
