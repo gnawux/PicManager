@@ -33,25 +33,34 @@ pub async fn list_albums(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<AlbumRow>>, StatusCode> {
     let rows: Vec<(i64, String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT a.id, a.name, a.kind,
-                COUNT(p.id) as photo_count,
-                MAX(p.taken_at) as latest_photo_at,
-                CASE WHEN a.kind = 'location' THEN (
-                    SELECT CASE WHEN COUNT(DISTINCT gc.state) = 1
-                                THEN MAX(gc.state) ELSE NULL END
-                    FROM photo_albums pa2
-                    JOIN photos p2 ON p2.id = pa2.photo_id
-                                   AND p2.import_status = 'imported'
-                    JOIN geocache gc
-                      ON PRINTF('%.4f', p2.gps_lat) = gc.lat_key
-                     AND PRINTF('%.4f', p2.gps_lon) = gc.lon_key
-                    WHERE pa2.album_id = a.id
-                      AND gc.state IS NOT NULL AND TRIM(gc.state) != ''
-                ) END as parent_name
-         FROM albums a
-         LEFT JOIN photo_albums pa ON pa.album_id = a.id
-         LEFT JOIN photos p ON p.id = pa.photo_id AND p.import_status = 'imported'
-         GROUP BY a.id ORDER BY a.kind, a.name",
+        "WITH album_stats AS (
+             SELECT a.id, a.name, a.kind,
+                    COUNT(p.id) AS photo_count,
+                    MAX(p.taken_at) AS latest_photo_at
+             FROM albums a
+             LEFT JOIN photo_albums pa ON pa.album_id = a.id
+             LEFT JOIN photos p ON p.id = pa.photo_id AND p.import_status = 'imported'
+             GROUP BY a.id
+         ),
+         location_parents AS (
+             SELECT pa.album_id,
+                    CASE WHEN COUNT(DISTINCT gc.state) = 1
+                         THEN MAX(gc.state) ELSE NULL END AS parent_name
+             FROM albums a
+             JOIN photo_albums pa ON pa.album_id = a.id
+             JOIN photos p ON p.id = pa.photo_id AND p.import_status = 'imported'
+             JOIN geocache gc
+               ON PRINTF('%.4f', p.gps_lat) = gc.lat_key
+              AND PRINTF('%.4f', p.gps_lon) = gc.lon_key
+             WHERE a.kind = 'location'
+               AND gc.state IS NOT NULL AND TRIM(gc.state) != ''
+             GROUP BY pa.album_id
+         )
+         SELECT stats.id, stats.name, stats.kind, stats.photo_count,
+                stats.latest_photo_at, parents.parent_name
+         FROM album_stats stats
+         LEFT JOIN location_parents parents ON parents.album_id = stats.id
+         ORDER BY stats.kind, stats.name",
     )
     .fetch_all(&state.pool)
     .await

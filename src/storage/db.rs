@@ -58,6 +58,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn album_memberships_have_an_album_first_lookup_index() {
+        let pool = test_pool().await;
+        let columns: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM pragma_index_info('idx_photo_albums_album_photo') \
+             ORDER BY seqno",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(columns, vec!["album_id", "photo_id"]);
+    }
+
+    #[tokio::test]
     async fn configured_connections_enable_wal_foreign_keys_and_busy_timeout() {
         let directory = tempfile::tempdir().unwrap();
         let url = format!("sqlite:{}", directory.path().join("catalog.db").display());
