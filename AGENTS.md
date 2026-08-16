@@ -49,3 +49,5 @@ These repository-wide instructions apply to every automated coding session.
 - Use `docs/README.md` as the current documentation index. Treat `PLAN.md` and
   `DESIGN.md` as historical records when they conflict with current documents.
 - Run the full release gates before merging release work to `main`.
+- Read `docs/POST_PHASE5_GOTCHAS.md` before refactoring startup, macOS presentation,
+  embedded assets, background jobs, geographic data or high-volume browser views.

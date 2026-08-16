@@ -9,6 +9,7 @@ Use these documents as the current entry points:
 | Operators | [OPERATIONS.md](OPERATIONS.md) | Service health, jobs, backups, logs, ownership, troubleshooting |
 | Upgraders | [MIGRATION_AND_RECOVERY.md](MIGRATION_AND_RECOVERY.md) | Existing libraries, additive migration, rehearsal, restore, rollback |
 | Developers | [ARCHITECTURE.md](ARCHITECTURE.md) | Rust/Web/Swift boundaries and data flow |
+| Refactorers | [POST_PHASE5_GOTCHAS.md](POST_PHASE5_GOTCHAS.md) | Stabilization failures and constraints that must not regress |
 | Releasers | [RELEASE.md](RELEASE.md) | Build, sign, notarize, metadata, and release gates |
 
 Latest evidence: [PHASE45_RELEASE_GATE.md](PHASE45_RELEASE_GATE.md).
