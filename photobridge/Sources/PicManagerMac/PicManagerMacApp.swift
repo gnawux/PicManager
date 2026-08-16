@@ -106,7 +106,7 @@ private struct LibraryPresentationView: View {
             switch libraryPresentationTarget(for: model.configuration) {
             case let .embedded(url):
                 ZStack {
-                    WebLibraryView(serviceURL: url, serviceAvailable: model.dashboard != nil)
+                    WebLibraryView(serviceURL: url, serviceAvailable: model.dashboard != nil, model: model)
                     if model.dashboard == nil {
                         ContentUnavailableView(
                             "Starting PicManager",

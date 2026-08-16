@@ -102,12 +102,14 @@
       : value === 'failed' || value === 'missing' ? 'danger'
       : ['queued', 'downloading', 'downloaded', 'importing', 'discovered'].includes(value) ? 'warning' : 'neutral';
   }
+  function syncApple() { (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager?.postMessage({ action: 'syncApple' }); }
 </script>
 
 <section aria-labelledby="apple-title">
   <div class="view-heading">
     <div><p>Apple Photos</p><h2 id="apple-title">同步清单</h2><span>逐项核对 Apple 照片图库与本地归档。</span></div>
     <form onsubmit={(event) => { event.preventDefault(); void loadWorkspace(); }}>
+      <Button type="button" onclick={syncApple}>同步 iCloud 照片</Button>
       <input aria-label="搜索 Apple 照片" placeholder="文件名或 Apple 标识" bind:value={search} />
       <Button type="submit">搜索</Button>
     </form>

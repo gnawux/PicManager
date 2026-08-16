@@ -46,6 +46,7 @@
     catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
     finally { syncing = false; }
   }
+  function configureGarmin() { (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager?.postMessage({ action: 'configureGarmin' }); }
 
   async function open(activity: ActivitySummary) {
     const request = ++detailRequest;
@@ -172,7 +173,7 @@
   <section aria-labelledby="activities-title">
     <div class="view-heading">
       <div><p>Motion</p><h2 id="activities-title">运动与活动</h2><span>{total} 条记录</span></div>
-      <div class="activity-actions"><input aria-label="Garmin MFA 验证码" placeholder="MFA 验证码（如需要）" bind:value={mfaCode} /><Button disabled={syncing} onclick={() => void syncGarmin()}>{syncing ? '正在同步 Garmin…' : '同步 Garmin 数据'}</Button><label>类型<select bind:value={typeFilter} onchange={() => { void reload(); }}><option value="">全部</option><option value="running">跑步</option><option value="cycling">骑行</option><option value="walking">步行</option><option value="hiking">徒步</option><option value="swimming">游泳</option></select></label></div>
+      <div class="activity-actions"><Button onclick={configureGarmin}>登录 Garmin</Button><input aria-label="Garmin MFA 验证码" placeholder="MFA 验证码（按需填写）" bind:value={mfaCode} /><Button disabled={syncing} onclick={() => void syncGarmin()}>{syncing ? '正在同步 Garmin…' : '同步 Garmin 数据'}</Button><label>类型<select bind:value={typeFilter} onchange={() => { void reload(); }}><option value="">全部</option><option value="running">跑步</option><option value="cycling">骑行</option><option value="walking">步行</option><option value="hiking">徒步</option><option value="swimming">游泳</option></select></label></div>
     </div>
     {#if status === 'loading'}<PageState kind="loading" title="正在载入活动" />
     {:else if status === 'error'}<PageState kind="error" title="无法读取活动" message={error ?? undefined} />

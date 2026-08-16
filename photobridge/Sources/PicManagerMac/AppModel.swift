@@ -104,6 +104,18 @@ final class AppModel: ObservableObject {
         photoAccess = Self.photoAccessReadiness()
     }
 
+    func presentGarminCredentials() {
+        let alert = NSAlert(); alert.messageText = "Connect Garmin China"; alert.informativeText = "Credentials are saved only in macOS Keychain."
+        let stack = NSStackView(); stack.orientation = .vertical
+        let email = NSTextField(string: configuration.garminEmail ?? ""); email.placeholderString = "Garmin account"
+        let password = NSSecureTextField(); password.placeholderString = "Garmin password"
+        stack.addArrangedSubview(email); stack.addArrangedSubview(password); alert.accessoryView = stack
+        alert.addButton(withTitle: "Save and sync"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        do { configuration.garminEmail = email.stringValue; try GarminKeychain.save(password: password.stringValue); saveConfiguration() }
+        catch { lastError = error.localizedDescription }
+    }
+
     func finishOnboarding() {
         guard onboardingReadiness.canFinish else { return }
         do {

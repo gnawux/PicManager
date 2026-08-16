@@ -5,13 +5,15 @@ import WebKit
 struct WebLibraryView: NSViewRepresentable {
     let serviceURL: URL
     let serviceAvailable: Bool
+    let model: AppModel
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(serviceURL: serviceURL)
+        Coordinator(serviceURL: serviceURL, model: model)
     }
 
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
+        configuration.userContentController.add(context.coordinator, name: "picmanager")
         configuration.websiteDataStore = .default()
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.navigationDelegate = context.coordinator
@@ -28,12 +30,20 @@ struct WebLibraryView: NSViewRepresentable {
         context.coordinator.wasAvailable = serviceAvailable
     }
 
-    final class Coordinator: NSObject, WKNavigationDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var serviceURL: URL
+        let model: AppModel
         var wasAvailable = false
 
-        init(serviceURL: URL) {
+        init(serviceURL: URL, model: AppModel) {
             self.serviceURL = serviceURL
+            self.model = model
+        }
+
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "picmanager", let body = message.body as? [String: String] else { return }
+            if body["action"] == "syncApple" { Task { await model.synchronizeAppleInventory() } }
+            if body["action"] == "configureGarmin" { model.presentGarminCredentials() }
         }
 
         func webView(
