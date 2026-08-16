@@ -58,6 +58,15 @@ A view can be slow not only while loading but also while destroying a large comp
 tree. Measure entering and leaving heavy tabs. Keep the Places view proportional to
 visible clusters and hierarchy nodes, not total library size.
 
+### Responsive measurement must not reset pagination
+
+Replacing a scrollable photo grid with a loading placeholder can remove its scrollbar.
+That width change may trigger a responsive `ResizeObserver`, recalculate the page size
+and issue a new page-one request that supersedes the user's next-page request. Preserve
+the current bounded grid while paging, disable repeated navigation and reserve a stable
+scrollbar gutter. Tests should hold a later-page response in flight and assert that the
+current page remains mounted until the requested replacement arrives.
+
 ### Product vocabulary is not automatically stored vocabulary
 
 The UI calls date-derived albums “month” albums, but existing databases and the Rust

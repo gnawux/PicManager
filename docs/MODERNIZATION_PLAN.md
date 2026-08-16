@@ -561,6 +561,19 @@ Status: complete.
 - M26.4: complete — record the day's pagination, telemetry, polling and SQL performance lessons
   in `POST_PHASE5_GOTCHAS.md` for future refactors.
 
+### M27 - Shared photo viewer and stable place paging
+
+Status: complete.
+
+- M27.1: complete — isolate the immersive viewer from application-shell layout rules and
+  constrain tall PNG and orientation-corrected HEIC content to the available viewport.
+- M27.2: complete — open the shared viewer from smart albums, collections, geographic
+  hierarchy results and map-cluster thumbnails with bounded current-page navigation.
+- M27.3: complete — preserve the current grid while another page loads and reserve stable
+  scrollbar space so responsive measurement cannot replace a requested place page with page one.
+- M27.4: complete — verify frontend behavior, performance budgets, Rust and native suites,
+  an isolated PNG/HEIC browser rehearsal, signed bundle integrity and installation safety.
+
 ## 9. Testing and commit protocol
 
 For every milestone:
