@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../api/client';
 import AlbumsView from './AlbumsView.svelte';
 
+const photoDetail = (id: number) => ({
+  id, path: `/${id}.jpg`, format: 'jpeg', taken_at: null, timezone_offset: null,
+  camera: null, gps_lat: null, gps_lon: null, import_status: 'imported',
+  width: 1200, height: 800, sources: [],
+  renditions: { display: `/api/photos/${id}/file`, original: null, current: null },
+});
+
 describe('AlbumsView', () => {
   it('groups albums in a split view, browses photos, and creates collections', async () => {
     const listCollections = vi.fn()
@@ -30,6 +37,7 @@ describe('AlbumsView', () => {
         create,
         photos: vi.fn(),
       },
+      photos: { get: vi.fn(async (id: number) => photoDetail(id)) },
     } as unknown as ApiClient;
     render(AlbumsView, { api });
 
@@ -41,6 +49,9 @@ describe('AlbumsView', () => {
     expect(screen.getByRole('button', { name: /家人/ })).toBeVisible();
     await fireEvent.click(screen.getByRole('button', { name: /2024年1月/ }));
     expect(await screen.findByAltText('照片 42')).toHaveAttribute('src', '/api/photos/42/thumb?size=512');
+    await fireEvent.click(screen.getByRole('button', { name: '打开照片 42' }));
+    expect(await screen.findByRole('dialog', { name: '照片 42' })).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', { name: '关闭查看器' }));
     expect(albumPhotos).toHaveBeenCalledWith(2, 1, 16);
     expect(screen.getByRole('button', { name: /2024年1月/ })).toBeVisible();
 

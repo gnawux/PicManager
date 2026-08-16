@@ -5,6 +5,7 @@
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
   import { photoGridLayout, photoPageCount } from '../photos/pagination';
+  import PhotoViewer from '../timeline/PhotoViewer.svelte';
   import PhotoMap from './PhotoMap.svelte';
 
   interface Props { api: ApiClient }
@@ -29,6 +30,9 @@
   let resultsElement = $state<HTMLElement | null>(null);
   let updating = $state(false);
   let updateMessage = $state<string | null>(null);
+  let viewerPhotos = $state<AlbumPhotoPage['photos']>([]);
+  let viewerIndex = $state<number | null>(null);
+  let activeViewerItem = $derived(viewerItem(viewerIndex));
 
   onMount(() => { void reload(); });
 
@@ -88,6 +92,16 @@
   function previousPage() { if (photos && photos.page > 1) void loadPage(photos.page - 1); }
   function nextPage() {
     if (photos && photos.page < photoPageCount(photos.total, photos.per_page)) void loadPage(photos.page + 1);
+  }
+
+  function openViewer(nextPhotos: AlbumPhotoPage['photos'], index: number) {
+    viewerPhotos = nextPhotos;
+    viewerIndex = index;
+  }
+
+  function viewerItem(index: number | null) {
+    const photo = index === null ? undefined : viewerPhotos[index];
+    return photo ? { id: photo.id, taken_at: photo.taken_at, file_url: `/api/photos/${photo.id}/file` } : undefined;
   }
 
   async function regeocode() {
@@ -151,7 +165,7 @@
     {#if clusterPage.total_photos === 0}
       <PageState kind="empty" title="没有带位置的照片" message="保留 GPS 信息的照片会显示在这里。" />
     {:else}
-      <PhotoMap {api} initialPage={clusterPage} />
+      <PhotoMap {api} initialPage={clusterPage} onopen={openViewer} />
     {/if}
   </section>
 
@@ -186,18 +200,18 @@
             </details>
           {/each}
         </div>
-        <div class="results" aria-live="polite" bind:this={resultsElement} use:measureResults>
+        <div class="results" aria-live="polite" aria-busy={photosLoading} bind:this={resultsElement} use:measureResults>
           {#if error}<PageState kind="error" title="无法读取地点照片" message={error} />
-          {:else if photosLoading}<PageState kind="loading" title="正在打开地点" />
+          {:else if photosLoading && !photos}<PageState kind="loading" title="正在打开地点" />
           {:else if photos?.photos.length === 0}<PageState kind="empty" title="这个地点没有照片" />
           {:else if photos}
             <div class="result-heading"><strong>{selection?.label}</strong><span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页 · 共 {photos.total} 张</span></div>
-            <div class="photo-grid" style={`--photo-columns: ${photoColumns}`}>{#each photos.photos as photo (photo.id)}<img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />{/each}</div>
+            <div class="photo-grid" style={`--photo-columns: ${photoColumns}`}>{#each photos.photos as photo, index (photo.id)}<button type="button" aria-label={`打开照片 ${photo.id}`} onclick={() => openViewer(photos?.photos ?? [], index)}><img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" /></button>{/each}</div>
             {#if photoPageCount(photos.total, photos.per_page) > 1}
               <nav class="pager" aria-label="地点照片分页">
-                <Button variant="ghost" disabled={photos.page <= 1} onclick={previousPage}>上一页</Button>
+                <Button variant="ghost" disabled={photosLoading || photos.page <= 1} onclick={previousPage}>上一页</Button>
                 <span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页</span>
-                <Button variant="ghost" disabled={photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPage}>下一页</Button>
+                <Button variant="ghost" disabled={photosLoading || photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPage}>下一页</Button>
               </nav>
             {/if}
           {:else}<p class="hint">选择国家、地区或城市查看照片。</p>{/if}
@@ -205,6 +219,17 @@
       </div>
     {/if}
   </section>
+{/if}
+
+{#if activeViewerItem}
+  <PhotoViewer
+    {api}
+    item={activeViewerItem}
+    previous={viewerItem((viewerIndex ?? 0) - 1)}
+    next={viewerItem((viewerIndex ?? -1) + 1)}
+    onclose={() => { viewerIndex = null; }}
+    onnavigate={(direction) => { viewerIndex = (viewerIndex ?? 0) + direction; }}
+  />
 {/if}
 
 <style>
@@ -234,11 +259,12 @@
   .cities button { padding: 6px 9px; border: 0; border-radius: 999px; color: var(--muted); background: var(--fill-subtle); cursor: pointer; }
   .cities button.active { color: white; background: var(--accent); }
   button span { color: var(--muted); font-size: 11px; }
-  .results { padding: 14px; }
+  .results { padding: 14px; scrollbar-gutter: stable; }
   .result-heading { display: flex; justify-content: space-between; padding: 4px 2px 14px; } .result-heading span, .hint { color: var(--muted); }
   .hint { display: grid; height: 260px; margin: 0; place-items: center; }
   .photo-grid { display: grid; grid-template-columns: repeat(var(--photo-columns), minmax(0, 1fr)); gap: 4px; }
-  .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
+  .photo-grid button { display: block; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+  .photo-grid img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; }
   .pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 18px 0 6px; }
   .pager span { color: var(--muted); font-size: 12px; }
   @media (max-width: 760px) { .place-layout { grid-template-columns: 1fr; } .view-heading { align-items: start; } }

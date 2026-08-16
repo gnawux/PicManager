@@ -34,7 +34,8 @@ describe('PhotoMap', () => {
     }));
     const api = { geo: { clusters, clusterPhotos } } as unknown as ApiClient;
     const initialPage: GeoClusterPage = { clusters: [cluster], total_photos: 2 };
-    const { container } = render(PhotoMap, { api, initialPage });
+    const onopen = vi.fn();
+    const { container } = render(PhotoMap, { api, initialPage, onopen });
 
     await fireEvent.click(screen.getByRole('button', { name: '放大地图' }));
     await waitFor(() => expect(clusters).toHaveBeenCalled());
@@ -51,6 +52,8 @@ describe('PhotoMap', () => {
     expect(clusterPhotos).toHaveBeenCalledWith(
       { west: 114, east: 114.5, south: 22, north: 22.5 }, 1, 20,
     );
+    await fireEvent.click(screen.getByRole('button', { name: '打开地图照片 7' }));
+    expect(onopen).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ id: 7 })]), 0);
 
     await fireEvent.click(screen.getByRole('button', { name: '全屏显示地图' }));
     expect(container.querySelector('.map-shell')).toHaveClass('fullscreen');

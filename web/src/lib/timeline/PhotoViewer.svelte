@@ -1,14 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { ApiClient } from '../api/client';
-  import type { PhotoDetail, TimelineItem } from '../api/types';
+  import type { PhotoDetail } from '../api/types';
   import PageState from '../components/PageState.svelte';
+
+  interface ViewerItem {
+    id: number;
+    taken_at: string | null;
+    file_url: string;
+    has_current?: boolean;
+  }
 
   interface Props {
     api: ApiClient;
-    item: TimelineItem;
-    previous?: TimelineItem;
-    next?: TimelineItem;
+    item: ViewerItem;
+    previous?: ViewerItem;
+    next?: ViewerItem;
     onclose: () => void;
     onnavigate: (direction: -1 | 1) => void;
   }

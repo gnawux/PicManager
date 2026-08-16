@@ -5,6 +5,7 @@
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
   import { photoGridLayout, photoPageCount } from '../photos/pagination';
+  import PhotoViewer from '../timeline/PhotoViewer.svelte';
 
   interface Props { api: ApiClient }
   interface Selection { id: number; name: string; collection: boolean }
@@ -26,6 +27,8 @@
   let resultsElement = $state<HTMLElement | null>(null);
   let newName = $state('');
   let creating = $state(false);
+  let viewerIndex = $state<number | null>(null);
+  let activeViewerItem = $derived(viewerItem(viewerIndex));
 
   const sortedCollections = $derived([...collections].sort(compareAlbums));
   const albumSections = $derived(buildSections(albums));
@@ -98,6 +101,7 @@
         : await api.albums.photos(current.id, page, perPage);
       if (request === photoRequest) {
         photos = result;
+        viewerIndex = null;
         if (typeof resultsElement?.scrollTo === 'function') {
           resultsElement.scrollTo({ top: 0, behavior: 'smooth' });
         }
@@ -130,6 +134,11 @@
     if (photos && photos.page < photoPageCount(photos.total, photos.per_page)) {
       void loadPage(photos.page + 1);
     }
+  }
+
+  function viewerItem(index: number | null) {
+    const photo = index === null ? undefined : photos?.photos[index];
+    return photo ? { id: photo.id, taken_at: photo.taken_at, file_url: `/api/photos/${photo.id}/file` } : undefined;
   }
 
   async function createCollection(event: SubmitEvent) {
@@ -206,10 +215,10 @@
         {/if}
       </aside>
 
-      <div class="album-results" aria-live="polite" bind:this={resultsElement} use:measureResults>
+      <div class="album-results" aria-live="polite" aria-busy={photosLoading} bind:this={resultsElement} use:measureResults>
         {#if error}
           <PageState kind="error" title="无法打开相册" message={error} />
-        {:else if photosLoading}
+        {:else if photosLoading && !photos}
           <PageState kind="loading" title="正在打开相册" />
         {:else if photos?.photos.length === 0}
           <PageState kind="empty" title="这个相册还是空的" />
@@ -220,14 +229,16 @@
           </div>
           <div class="photo-grid" style={`--photo-columns: ${photoColumns}`}>
             {#each photos.photos as photo (photo.id)}
-              <img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />
+              <button type="button" aria-label={`打开照片 ${photo.id}`} onclick={() => { viewerIndex = photos?.photos.indexOf(photo) ?? null; }}>
+                <img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />
+              </button>
             {/each}
           </div>
           {#if photoPageCount(photos.total, photos.per_page) > 1}
             <nav class="pager" aria-label="照片分页">
-              <Button variant="ghost" disabled={photos.page <= 1} onclick={previousPage}>上一页</Button>
+              <Button variant="ghost" disabled={photosLoading || photos.page <= 1} onclick={previousPage}>上一页</Button>
               <span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页</span>
-              <Button variant="ghost" disabled={photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPage}>下一页</Button>
+              <Button variant="ghost" disabled={photosLoading || photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPage}>下一页</Button>
             </nav>
           {/if}
         {:else}
@@ -236,6 +247,17 @@
       </div>
     </div>
   </section>
+{/if}
+
+{#if activeViewerItem}
+  <PhotoViewer
+    {api}
+    item={activeViewerItem}
+    previous={viewerItem((viewerIndex ?? 0) - 1)}
+    next={viewerItem((viewerIndex ?? -1) + 1)}
+    onclose={() => { viewerIndex = null; }}
+    onnavigate={(direction) => { viewerIndex = (viewerIndex ?? 0) + direction; }}
+  />
 {/if}
 
 <style>
@@ -269,14 +291,15 @@
   .collection-icon { color: #db5c89; }
   .album-list button.active .row-icon { color: white; }
   .empty-copy { margin: 0 8px 10px 29px; padding: 10px; border-radius: 9px; color: var(--muted); background: var(--fill-subtle); font-size: 12px; }
-  .album-results { padding: 14px; }
+  .album-results { padding: 14px; scrollbar-gutter: stable; }
   .result-heading { display: flex; justify-content: space-between; align-items: end; padding: 3px 2px 14px; }
   .result-heading div { display: grid; gap: 3px; }
   .result-heading strong { font-size: 18px; }
   .result-heading small, .result-heading span, .hint { color: var(--muted); }
   .hint { display: grid; height: 300px; margin: 0; place-items: center; }
   .photo-grid { display: grid; grid-template-columns: repeat(var(--photo-columns), minmax(0, 1fr)); gap: 4px; }
-  .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: var(--fill-subtle); }
+  .photo-grid button { display: block; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+  .photo-grid img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: var(--fill-subtle); }
   .pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 18px 0 6px; }
   .pager span { color: var(--muted); font-size: 12px; }
   @media (max-width: 760px) { .view-heading { align-items: stretch; flex-direction: column; } .sort-control { justify-content: flex-end; } .album-layout { grid-template-columns: 1fr; } .album-sidebar, .album-results { height: auto; max-height: 62vh; min-height: 300px; } }

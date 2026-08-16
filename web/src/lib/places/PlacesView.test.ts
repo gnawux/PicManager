@@ -3,6 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../api/client';
 import PlacesView from './PlacesView.svelte';
 
+const photoDetail = (id: number) => ({
+  id, path: `/${id}.jpg`, format: 'jpeg', taken_at: null, timezone_offset: null,
+  camera: null, gps_lat: null, gps_lon: null, import_status: 'imported',
+  width: 1200, height: 800, sources: [],
+  renditions: { display: `/api/photos/${id}/file`, original: null, current: null },
+});
+
 describe('PlacesView', () => {
   it('shows GPS clusters and browses photos by city', async () => {
     const photos = vi.fn(async () => ({
@@ -34,6 +41,7 @@ describe('PlacesView', () => {
         namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
         normalizeNames: vi.fn(),
       },
+      photos: { get: vi.fn(async (id: number) => photoDetail(id)) },
     } as unknown as ApiClient;
     const { container } = render(PlacesView, { api });
 
@@ -47,6 +55,9 @@ describe('PlacesView', () => {
     await fireEvent.click(state.querySelector(':scope > summary') as HTMLElement);
     await fireEvent.click(screen.getByRole('button', { name: /上海 1/ }));
     expect(await screen.findByAltText('照片 12')).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', { name: '打开照片 12' }));
+    expect(await screen.findByRole('dialog', { name: '照片 12' })).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', { name: '关闭查看器' }));
     expect(photos).toHaveBeenCalledWith({ country: '中国', state: '上海市', city: '上海' }, 1, 16);
   });
 
@@ -86,15 +97,14 @@ describe('PlacesView', () => {
   });
 
   it('loads later place pages without duplicating photos', async () => {
+    let finishSecondPage: ((value: unknown) => void) | undefined;
+    const secondPage = new Promise((resolve) => { finishSecondPage = resolve; });
     const photos = vi.fn()
       .mockResolvedValueOnce({
         photos: [{ id: 1, path: '/1.jpg', taken_at: null, camera: null }],
         total: 17, page: 1, per_page: 16,
       })
-      .mockResolvedValueOnce({
-        photos: [{ id: 2, path: '/2.jpg', taken_at: null, camera: null }],
-        total: 17, page: 2, per_page: 16,
-      });
+      .mockReturnValueOnce(secondPage);
     const api = {
       geo: {
         hierarchy: vi.fn(async () => ({ countries: [{
@@ -113,6 +123,12 @@ describe('PlacesView', () => {
     await fireEvent.click(screen.getByRole('button', { name: '查看 中国 的全部照片' }));
     expect(await screen.findByText('第 1 / 2 页 · 共 17 张')).toBeVisible();
     await fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(screen.getByAltText('照片 1')).toBeVisible();
+    expect(screen.getByRole('button', { name: '下一页' })).toBeDisabled();
+    finishSecondPage?.({
+      photos: [{ id: 2, path: '/2.jpg', taken_at: null, camera: null }],
+      total: 17, page: 2, per_page: 16,
+    });
     expect(await screen.findByAltText('照片 2')).toBeVisible();
     expect(screen.queryByAltText('照片 1')).not.toBeInTheDocument();
     expect(photos).toHaveBeenLastCalledWith({ country: '中国' }, 2, 16);

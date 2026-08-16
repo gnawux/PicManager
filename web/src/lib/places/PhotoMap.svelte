@@ -6,8 +6,12 @@
   import PageState from '../components/PageState.svelte';
   import { photoPageCount } from '../photos/pagination';
 
-  interface Props { api: ApiClient; initialPage: GeoClusterPage }
-  let { api, initialPage }: Props = $props();
+  interface Props {
+    api: ApiClient;
+    initialPage: GeoClusterPage;
+    onopen?: (photos: AlbumPhotoPage['photos'], index: number) => void;
+  }
+  let { api, initialPage, onopen = () => {} }: Props = $props();
 
   const TILE_SIZE = 256;
   const MIN_ZOOM = 2;
@@ -284,19 +288,21 @@
             <button class="close-panel" type="button" aria-label="关闭地图照片" onclick={() => { selectedCluster = null; selectedPhotos = null; }}>×</button>
           </div>
         </div>
-        {#if selectedLoading}
+        {#if selectedLoading && !selectedPhotos}
           <PageState kind="loading" title="正在读取照片" />
         {:else if selectedPhotos}
           <div class="cluster-photos">
-            {#each selectedPhotos.photos as photo (photo.id)}
-              <img src={`/api/photos/${photo.id}/thumb?size=256`} alt={`地图照片 ${photo.id}`} loading="lazy" />
+            {#each selectedPhotos.photos as photo, index (photo.id)}
+              <button type="button" aria-label={`打开地图照片 ${photo.id}`} onclick={() => onopen(selectedPhotos?.photos ?? [], index)}>
+                <img src={`/api/photos/${photo.id}/thumb?size=256`} alt={`地图照片 ${photo.id}`} loading="lazy" />
+              </button>
             {/each}
           </div>
           {#if photoPageCount(selectedPhotos.total, selectedPhotos.per_page) > 1}
             <nav class="cluster-pager" aria-label="地图照片分页">
-              <Button variant="ghost" disabled={selectedPhotos.page <= 1} onclick={previousPhotoPage}>上一页</Button>
+              <Button variant="ghost" disabled={selectedLoading || selectedPhotos.page <= 1} onclick={previousPhotoPage}>上一页</Button>
               <span>第 {selectedPhotos.page} / {photoPageCount(selectedPhotos.total, selectedPhotos.per_page)} 页</span>
-              <Button variant="ghost" disabled={selectedPhotos.page >= photoPageCount(selectedPhotos.total, selectedPhotos.per_page)} onclick={nextPhotoPage}>下一页</Button>
+              <Button variant="ghost" disabled={selectedLoading || selectedPhotos.page >= photoPageCount(selectedPhotos.total, selectedPhotos.per_page)} onclick={nextPhotoPage}>下一页</Button>
             </nav>
           {/if}
         {/if}
@@ -330,7 +336,8 @@
   .cluster-heading span { color: var(--muted); font-size: 12px; }
   .close-panel { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: var(--fill-subtle); cursor: pointer; font-size: 20px; }
   .cluster-photos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px; }
-  .cluster-photos img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: var(--fill-subtle); }
+  .cluster-photos button { display: block; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+  .cluster-photos img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: var(--fill-subtle); }
   .cluster-pager { display: flex; justify-content: center; align-items: center; gap: 6px; }
   .cluster-pager span { color: var(--muted); font-size: 11px; }
   .map-error { margin: 0; padding: 9px 14px; color: #9f2d2d; background: #fff0f0; font-size: 13px; }
