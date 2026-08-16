@@ -387,7 +387,14 @@ final class AppModel: ObservableObject {
                 }
             }
             do {
-                try await exportAppleRenditionPackage(identifier: claim.source.externalID, destination: package)
+                // PhotoKit's synchronous asset lookup must not inherit the app
+                // main actor. The command-line exporter runs off the main actor;
+                // keeping the same execution context here avoids a stalled
+                // lookup while the WebKit UI continues to repaint.
+                let identifier = claim.source.externalID
+                try await Task.detached(priority: .utility) {
+                    try await exportAppleRenditionPackage(identifier: identifier, destination: package)
+                }.value
                 try await client.commitAppleExport(sourceID: claim.source.id, workerID: workerID, packageURL: package)
                 try? FileManager.default.removeItem(at: package)
             } catch {

@@ -27,6 +27,16 @@ until every operation finishes. Long operations must use durable jobs, checkpoin
 retry-safe handlers, cancellation states, and startup lease recovery. Never depend on
 an in-memory task surviving app exit.
 
+### PhotoKit exports must not inherit the UI actor
+
+The command-line exporter and the Mac shell use the same `PHAssetResourceManager`
+write API, but the shell's synchronization coordinator is `@MainActor`. Running the
+PhotoKit asset lookup directly from that coordinator left a claimed cloud resource in
+`downloading` without even creating its staging directory, while the WebKit page kept
+refreshing normally. Run PhotoKit export work in a detached utility task, preserve the
+durable lease heartbeat, and surface a retryable failure rather than treating a
+repainting web page as evidence of progress.
+
 ### A menu-bar app still needs normal window semantics
 
 `LSUIElement` accessory applications do not appear in Dock or Command-Tab. PicManager
