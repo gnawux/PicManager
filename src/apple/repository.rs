@@ -351,6 +351,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn export_claim_leases_item_and_marks_source_downloading() {
+        let pool = test_pool().await;
+        let source_id = source(&pool, "export-one", "IMG_0001.HEIC", "queued").await;
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, total_items) \
+             VALUES ('apple_full_inventory', 'apple_photos', 1) RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation) \
+             VALUES (?, ?, 'export-one', 'export_original')",
+        ).bind(job_id).bind(source_id).execute(&pool).await.unwrap();
+        let claim = claim_next_export(&pool, "native-test", 300).await.unwrap().unwrap();
+        assert_eq!(claim.source.id, source_id);
+        assert_eq!(claim.source.sync_status, "downloading");
+        assert!(claim_next_export(&pool, "another-native-test", 300).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn candidate_review_links_existing_photo_or_queues_after_rejection() {
         let pool = test_pool().await;
         sqlx::query(
