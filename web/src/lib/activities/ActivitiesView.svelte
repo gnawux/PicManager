@@ -24,6 +24,7 @@
   let pageSize = $state(16);
   let syncing = $state(false);
   let mfaCode = $state('');
+  let loginNotice = $state<string | null>(null);
 
   onMount(() => { void reload(); });
 
@@ -46,7 +47,11 @@
     catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
     finally { syncing = false; }
   }
-  function configureGarmin() { (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager?.postMessage({ action: 'configureGarmin' }); }
+  function configureGarmin() {
+    const bridge = (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager;
+    if (!bridge) { loginNotice = 'Garmin 登录需要从 PicManager Mac 应用的内嵌窗口运行。'; return; }
+    bridge.postMessage({ action: 'configureGarmin' }); loginNotice = '正在打开 Mac 原生 Garmin 登录窗口…';
+  }
 
   async function open(activity: ActivitySummary) {
     const request = ++detailRequest;
@@ -175,6 +180,7 @@
       <div><p>Motion</p><h2 id="activities-title">运动与活动</h2><span>{total} 条记录</span></div>
       <div class="activity-actions"><Button onclick={configureGarmin}>登录 Garmin</Button><input aria-label="Garmin MFA 验证码" placeholder="MFA 验证码（按需填写）" bind:value={mfaCode} /><Button disabled={syncing} onclick={() => void syncGarmin()}>{syncing ? '正在同步 Garmin…' : '同步 Garmin 数据'}</Button><label>类型<select bind:value={typeFilter} onchange={() => { void reload(); }}><option value="">全部</option><option value="running">跑步</option><option value="cycling">骑行</option><option value="walking">步行</option><option value="hiking">徒步</option><option value="swimming">游泳</option></select></label></div>
     </div>
+    {#if loginNotice}<p class="login-notice" role="status">{loginNotice}</p>{/if}
     {#if status === 'loading'}<PageState kind="loading" title="正在载入活动" />
     {:else if status === 'error'}<PageState kind="error" title="无法读取活动" message={error ?? undefined} />
     {:else if activities.length === 0}<PageState kind="empty" title="还没有活动记录" message="可通过命令行导入 GPX 或 FIT 文件。" />
@@ -198,6 +204,7 @@
 <style>
   section { margin-top: 34px; }
   .view-heading, .detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 22px; }
+  .login-notice { margin: -10px 0 16px; padding: 10px 14px; border-radius: 10px; color: var(--muted); background: var(--fill-subtle); }
   .view-heading p, .detail-heading p { margin: 0 0 7px; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
   h2 { margin: 0 0 5px; font-size: 28px; } .view-heading span { color: var(--muted); }
   label,.activity-actions { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; } select,.activity-actions input { min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: white; }
