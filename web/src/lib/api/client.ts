@@ -16,6 +16,7 @@ import type {
   CollectionSummary,
   GeoClusterPage,
   GeoHierarchy,
+  GeoNamePolicy,
   DedupGroup,
   TaskDetail,
   TaskPage,
@@ -165,6 +166,10 @@ export function createApiClient(options: ApiClientOptions = {}) {
         return request<AlbumPhotoPage>(`/api/geo/photos?${query}`);
       },
       regeocode: () => request<{ status: string; count?: number }>('/api/geo/regeocode', {
+        method: 'POST',
+      }),
+      namePolicy: () => request<GeoNamePolicy>('/api/geo/name-policy'),
+      normalizeNames: () => request<{ status: string; count?: number }>('/api/geo/normalize-names', {
         method: 'POST',
       }),
     },

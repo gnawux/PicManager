@@ -118,9 +118,24 @@ fn cn_municipality_state(iso: &str) -> Option<&'static str> {
 ### 请求参数
 
 ```
-zoom=10            返回城市级别（不是街道）
-accept-language=zh,en  优先中文名称，回退英文
+zoom=10
+format=jsonv2
+addressdetails=1
+accept-language=zh-CN,zh-Hans,zh-SG,zh-HK,zh-TW,zh-Hant,zh,en-US,en-GB,en
 ```
+
+名称选择优先级为：简体中文（`zh-CN` / `zh-Hans`）→ 其他中文地区或字形
+→ 英文地区或通用英文 → OSM 默认名称。Nominatim 会对国家、省州、城市等每个
+地址字段独立应用该优先级；PicManager 再清理提供方返回的并列分隔格式。
+
+`geocache.name_policy_revision` 记录生成缓存时使用的规则版本。升级不会自动联网
+重写旧缓存；地点页会显示“统一已有地名”，由用户显式启动后台任务。任务具有以下
+安全约束：
+
+- 只把当前规则生成的缓存作为邻近复用来源；
+- Nominatim 请求失败时保留旧名称和旧版本，以便稍后重试；
+- 成功后事务化更新派生地点相册关系，只清理已经为空的旧地点相册；
+- 可重复执行，已符合当前规则的数据会被跳过。
 
 ---
 

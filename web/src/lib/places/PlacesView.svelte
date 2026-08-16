@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { ApiClient } from '../api/client';
-  import type { AlbumPhotoPage, GeoCluster, GeoClusterPage, GeoHierarchy } from '../api/types';
+  import type { AlbumPhotoPage, GeoCluster, GeoClusterPage, GeoHierarchy, GeoNamePolicy } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
 
@@ -15,6 +15,7 @@
   let { api }: Props = $props();
   let hierarchy = $state<GeoHierarchy | null>(null);
   let clusterPage = $state<GeoClusterPage>({ clusters: [], total_photos: 0 });
+  let namePolicy = $state<GeoNamePolicy | null>(null);
   let status = $state<'loading' | 'ready' | 'error'>('loading');
   let error = $state<string | null>(null);
   let selection = $state<PlaceSelection | null>(null);
@@ -28,7 +29,9 @@
   async function reload() {
     status = 'loading';
     try {
-      [hierarchy, clusterPage] = await Promise.all([api.geo.hierarchy(), api.geo.clusters()]);
+      [hierarchy, clusterPage, namePolicy] = await Promise.all([
+        api.geo.hierarchy(), api.geo.clusters(), api.geo.namePolicy(),
+      ]);
       status = 'ready';
     } catch (reason) {
       error = reason instanceof Error ? reason.message : String(reason);
@@ -63,6 +66,26 @@
     }
   }
 
+  async function normalizeNames() {
+    updating = true;
+    updateMessage = null;
+    try {
+      const result = await api.geo.normalizeNames();
+      if (result.status === 'already_running') {
+        updateMessage = '地点信息正在后台更新';
+      } else if (result.status === 'up_to_date') {
+        updateMessage = '已有地名已经符合当前规则';
+        if (namePolicy) namePolicy.outdated_photos = 0;
+      } else {
+        updateMessage = `已开始统一 ${result.count ?? namePolicy?.outdated_photos ?? 0} 张照片的地名`;
+      }
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      updating = false;
+    }
+  }
+
   function x(cluster: GeoCluster) { return ((cluster.gps_lon + 180) / 360) * 100; }
   function y(cluster: GeoCluster) { return ((90 - cluster.gps_lat) / 180) * 100; }
   function clusterSize(cluster: GeoCluster) {
@@ -78,8 +101,18 @@
   <section class="map-section" aria-labelledby="map-title">
     <div class="view-heading">
       <div><p>Map</p><h2 id="map-title">照片地图</h2><span>{clusterPage.total_photos} 张照片带有位置信息</span></div>
-      <Button disabled={updating} onclick={regeocode}>{updating ? '启动中…' : '更新地点信息'}</Button>
+      <div class="actions">
+        {#if (namePolicy?.outdated_photos ?? 0) > 0}
+          <Button disabled={updating} onclick={normalizeNames}>
+            {updating ? '启动中…' : `统一已有地名（${namePolicy?.outdated_photos}）`}
+          </Button>
+        {/if}
+        <Button disabled={updating} onclick={regeocode}>{updating ? '启动中…' : '更新地点信息'}</Button>
+      </div>
     </div>
+    {#if (namePolicy?.outdated_photos ?? 0) > 0}
+      <p class="normalization-note">旧地名可按简体中文、其他中文、英文、当地名称的顺序在后台重新整理；网络失败不会覆盖现有名称。</p>
+    {/if}
     {#if updateMessage}<p class="notice" role="status">{updateMessage}</p>{/if}
     {#if clusterPage.total_photos === 0}
       <PageState kind="empty" title="没有带位置的照片" message="保留 GPS 信息的照片会显示在这里。" />
@@ -154,9 +187,11 @@
 <style>
   section { margin-top: 34px; }
   .view-heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; margin-bottom: 18px; }
+  .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
   .view-heading p { margin: 0 0 7px; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
   h2 { margin: 0 0 4px; font-size: 28px; } .view-heading span { color: var(--muted); font-size: 13px; }
   .notice { padding: 10px 14px; border-radius: 10px; color: #126137; background: #e8f7ee; }
+  .normalization-note { margin: -8px 0 18px; color: var(--muted); font-size: 13px; }
   .map { position: relative; height: min(46vw, 500px); min-height: 300px; overflow: hidden; border: 1px solid rgba(23,105,224,.14); border-radius: 22px; background: linear-gradient(145deg, #dceaf5, #eef2e8 54%, #dce5ee); }
   .grid { position: absolute; inset: 0; opacity: .28; background-image: linear-gradient(rgba(42,83,116,.25) 1px, transparent 1px), linear-gradient(90deg, rgba(42,83,116,.25) 1px, transparent 1px); background-size: 12.5% 25%; }
   .map-cluster { position: absolute; display: grid; min-width: 16px; min-height: 16px; padding: 0; place-items: center; border: 2px solid white; border-radius: 50%; color: white; background: var(--accent); box-shadow: 0 2px 8px rgba(0,0,0,.28); transform: translate(-50%,-50%); cursor: pointer; font-size: 9px; font-weight: 750; line-height: 1; }

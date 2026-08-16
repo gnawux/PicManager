@@ -136,6 +136,20 @@ describe('API client', () => {
     expect(fetcher.mock.calls[0][0]).toBe('/api/geo/clusters?columns=48&rows=24');
   });
 
+  it('starts explicit geographic name normalization', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify({ status: 'started', count: 42 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.geo.normalizeNames();
+    expect(fetcher).toHaveBeenCalledWith('/api/geo/normalize-names', expect.objectContaining({
+      method: 'POST',
+    }));
+  });
+
   it('queries Apple inventory by status and original filename', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify({ sources: [], status_counts: {}, next_before_id: null }), {

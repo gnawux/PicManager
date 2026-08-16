@@ -231,6 +231,12 @@ export interface GeoClusterPage {
   total_photos: number;
 }
 
+export interface GeoNamePolicy {
+  revision: number;
+  language_preference: string;
+  outdated_photos: number;
+}
+
 export interface ActivitySummary {
   id: number;
   title: string | null;

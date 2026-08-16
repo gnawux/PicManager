@@ -26,6 +26,8 @@ describe('PlacesView', () => {
         })),
         photos,
         regeocode: vi.fn(async () => ({ status: 'started', count: 0 })),
+        namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
+        normalizeNames: vi.fn(),
       },
     } as unknown as ApiClient;
     render(PlacesView, { api });
@@ -54,6 +56,8 @@ describe('PlacesView', () => {
         clusters: vi.fn(async () => ({ clusters: [], total_photos: 0 })),
         photos,
         regeocode: vi.fn(),
+        namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
+        normalizeNames: vi.fn(),
       },
     } as unknown as ApiClient;
     const { container } = render(PlacesView, { api });
@@ -64,6 +68,30 @@ describe('PlacesView', () => {
     expect(photos).toHaveBeenCalledWith({
       country: '__null__', state: '__null__', city: '__null__',
     });
+  });
+
+  it('offers a safe background repair for legacy place names', async () => {
+    const normalizeNames = vi.fn(async () => ({ status: 'started', count: 42 }));
+    const api = {
+      geo: {
+        hierarchy: vi.fn(async () => ({ countries: [] })),
+        clusters: vi.fn(async () => ({ clusters: [], total_photos: 0 })),
+        photos: vi.fn(),
+        regeocode: vi.fn(),
+        namePolicy: vi.fn(async () => ({
+          revision: 1,
+          language_preference: 'zh-CN,zh-Hans,zh,en-US,en',
+          outdated_photos: 42,
+        })),
+        normalizeNames,
+      },
+    } as unknown as ApiClient;
+    render(PlacesView, { api });
+
+    await fireEvent.click(await screen.findByRole('button', { name: '统一已有地名（42）' }));
+    expect(normalizeNames).toHaveBeenCalledOnce();
+    expect(await screen.findByText('已开始统一 42 张照片的地名')).toBeVisible();
+    expect(screen.getByText(/网络失败不会覆盖现有名称/)).toBeVisible();
   });
 
   it('keeps map DOM work bounded for a large photo library', async () => {
@@ -81,6 +109,8 @@ describe('PlacesView', () => {
         clusters: vi.fn(async () => ({ clusters, total_photos: 100_000 })),
         photos: vi.fn(),
         regeocode: vi.fn(),
+        namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
+        normalizeNames: vi.fn(),
       },
     } as unknown as ApiClient;
 

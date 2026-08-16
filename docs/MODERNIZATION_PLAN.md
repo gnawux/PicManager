@@ -456,6 +456,14 @@ Status: complete. External signing credentials and publication remain release-op
 - M18.3: complete — Rust, Swift, frontend, migration, performance, bundle, installation and browser gates passed locally; external signing and manual PhotoKit checks remain operator actions.
 - M18.4: complete — merged the Phase 4/5 branch into `main` with signed-off merge commit `414e35d`.
 
+### M19 - Geographic naming consistency
+
+Status: complete.
+
+- M19.1: version the geographic naming policy and prefer Simplified Chinese, other Chinese variants, English variants, then the provider default.
+- M19.2: provide explicit, retryable background normalization for legacy caches without startup network work or destructive fallback.
+- M19.3: reconcile derived location albums and expose normalization status and controls in the Places view.
+
 ## 9. Testing and commit protocol
 
 For every milestone:
