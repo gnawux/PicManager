@@ -49,7 +49,8 @@ final class AppModel: ObservableObject {
             lastError = nil
             if previous?.libraryPath != configuration.libraryPath
                 || previous?.host != configuration.host
-                || previous?.port != configuration.port {
+                || previous?.port != configuration.port
+                || previous?.garminEmail != configuration.garminEmail {
                 stopService()
                 libraryOwnership = nil
                 dashboard = nil
