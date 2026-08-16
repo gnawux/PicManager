@@ -86,7 +86,7 @@ async fn health_api_returns_structured_service_and_job_state() {
         .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["status"], "healthy");
-    assert_eq!(json["sqlite_quick_check"], "deferred");
+    assert_eq!(json["sqlite_quick_check"], "ok");
     assert!(json["schema_version"].as_i64().unwrap() >= 26);
     assert!(json["reconciliation"].is_object());
 }
@@ -111,6 +111,10 @@ async fn versioned_service_health_diagnostics_and_tasks_contracts_are_available(
         if uri == "/api/v1/service" {
             assert_eq!(json["api_version"], "v1");
             assert_eq!(json["local_trusted_only"], true);
+        } else if uri == "/api/v1/health" {
+            assert_eq!(json["sqlite_quick_check"], "deferred");
+        } else if uri == "/api/v1/diagnostics" {
+            assert_eq!(json["sqlite_quick_check"], "ok");
         }
     }
 }
