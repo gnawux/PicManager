@@ -41,6 +41,11 @@ port. Never use the default personal library for this check.
   controls. Escape must close it and restore focus to the originating photo.
 - Confirm albums/collections, people, places and activities load their empty or seeded
   states without console errors.
+- In Places, verify zooming refreshes the visible clusters at a finer precision, a
+  cluster opens all represented photos, full-window mode enters and exits, and the
+  folded place tree scrolls independently from results.
+- In Albums, verify collection/month/location/camera sections fold independently and a
+  selection loads photos on the right without replacing the left navigation.
 - Confirm Apple Photos exposes unsynced/failed/excluded/missing filters and original
   filenames, and retry actions reach the task center.
 - Confirm duplicate resolution requires two steps and states that original files are

@@ -6,6 +6,11 @@ PicManager 使用 OSM Nominatim 对照片的 GPS 坐标进行反向地理编码�
 
 核心实现位于 `src/album/location.rs`。
 
+地点页的地图底图使用 OpenStreetMap 标准瓦片。拖动或缩放后，前端只查询当前
+可见范围内的聚合点；缩放级别越高，聚合网格越细。点击聚合点会通过分页 API
+读取该网格内的全部照片。瓦片请求会把可见地图的瓦片坐标发送给 OSM，但不会
+上传照片、照片元数据或 PicManager 目录信息。
+
 ---
 
 ## 数据流
@@ -159,6 +164,19 @@ GROUP BY gc.country, gc.state, gc.city
 `GET /api/geo/photos` 支持 `country` / `state` / `city` 过滤参数：
 - 普通字符串：`gc.field = ?`
 - 特殊值 `__null__`：`gc.field IS NULL`（用于筛选 Unknown 层级下的照片）
+
+层级返回结果按照片数量降序排列，同数量时按名称排列。前端默认折叠到国家层级，
+国家和州省可分别展开，导航与照片结果拥有独立滚动区域。
+
+## 地图视口与聚合照片查询
+
+`GET /api/geo/clusters` 接受可选的 `west`、`east`、`south`、`north` 参数，并按
+当前缩放对应的网格精度返回可见范围内的聚合点、照片数和网格边界。不传视口时
+保留全世界概览的兼容行为。
+
+`GET /api/geo/cluster-photos` 使用聚合点边界读取该区域内的照片，结果分页返回，
+每页最多 200 张。这样地图 marker 数量和单次 DOM/HTTP 工作量都有上限，同时
+点击一个聚合点仍能逐页浏览它代表的全部照片。
 
 ---
 

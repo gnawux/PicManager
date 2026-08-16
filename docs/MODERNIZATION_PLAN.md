@@ -464,6 +464,25 @@ Status: complete.
 - M19.2: provide explicit, retryable background normalization for legacy caches without startup network work or destructive fallback.
 - M19.3: reconcile derived location albums and expose normalization status and controls in the Places view.
 
+### M20 - Post-Phase-5 browsing stabilization
+
+Status: complete.
+
+- M20.1: record startup, shutdown, packaging, high-volume UI, geographic NULL handling,
+  localization and test-isolation lessons in `POST_PHASE5_GOTCHAS.md` and make them
+  required reading for related refactors.
+- M20.2: add bounded viewport geographic queries and paginated cluster-photo lookup.
+- M20.3: replace the static geographic overview with a pannable OpenStreetMap tile map,
+  zoom-dependent clusters, cluster photo browsing and a full-window mode.
+- M20.4: sort the geographic hierarchy by photo count, fold it at country and state
+  boundaries, and isolate navigation and result scrolling.
+- M20.5: reorganize collections and smart albums into collapsible month, location,
+  camera and fallback categories with persistent split-pane photo browsing.
+
+The OpenStreetMap map is an optional network-backed presentation layer. Catalog GPS
+coordinates and photo results remain local; tile requests contain ordinary map tile
+coordinates for the visible viewport and never upload media.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

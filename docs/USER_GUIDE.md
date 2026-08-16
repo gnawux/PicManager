@@ -26,6 +26,25 @@ Large libraries perform only safety-critical recovery before the local service b
 available. Media-presence and derived-cache checks continue as a low-priority
 **Library reconciliation** task visible in the task center.
 
+## Browsing places and albums
+
+The Places tab uses OpenStreetMap tiles when the Mac is online. Drag to move the map,
+use the zoom buttons or trackpad/wheel to reveal finer photo clusters, and click a
+numbered cluster to browse every represented photo. **全屏** gives the map the entire
+app window; press Escape or **收起** to leave that mode. Tile requests
+describe only the visible map area—PicManager does not send photos to OpenStreetMap.
+Without a network connection, cached tiles may remain visible and the local place tree
+and photo results continue to work.
+
+The place tree is sorted by photo count and initially folded at country level. Expand a
+country or state, or choose its “view all” action, to load matching photos in the right
+pane. The navigation tree and results scroll independently.
+
+The Albums tab follows the same split-pane pattern. Collections, months, locations,
+cameras and other smart albums have separate collapsible sections on the left; choosing
+one keeps the navigation visible while its photos open on the right. Entries with more
+photos appear first.
+
 ## Existing files and catalogs
 
 Upgrades keep photo IDs, metadata, relationships, source identities, and media paths.
