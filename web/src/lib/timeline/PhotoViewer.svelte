@@ -149,14 +149,14 @@
     </div>
   </header>
 
-  <main class:with-drawer={drawerOpen}>
+  <div class="viewer-content" class:with-drawer={drawerOpen}>
     <section class="stage" aria-live="polite">
       {#if loading}
         <PageState kind="loading" title="正在载入照片" />
       {:else if error}
         <PageState kind="error" title="无法载入照片" message={error} />
       {:else if imageUrl}
-        <img src={imageUrl} alt={detail?.sources[0]?.original_filename ?? `照片 ${item.id}`} />
+        <img class="viewer-photo" src={imageUrl} alt={detail?.sources[0]?.original_filename ?? `照片 ${item.id}`} />
       {/if}
       <button class="nav previous" type="button" aria-label="上一张照片" disabled={!previous} onclick={() => onnavigate(-1)}>‹</button>
       <button class="nav next" type="button" aria-label="下一张照片" disabled={!next} onclick={() => onnavigate(1)}>›</button>
@@ -188,7 +188,7 @@
         {/if}
       </aside>
     {/if}
-  </main>
+  </div>
 </div>
 
 <style>
@@ -205,10 +205,10 @@
   .rendition-switch { display: flex; padding: 3px; border-radius: 10px; background: rgba(255,255,255,.1); }
   .rendition-switch button { padding: 7px 11px; border: 0; border-radius: 8px; color: #c7cad1; font-size: 12px; background: transparent; cursor: pointer; }
   .rendition-switch button.active { color: #111318; background: white; }
-  main { display: grid; min-height: 0; }
-  main.with-drawer { grid-template-columns: minmax(0, 1fr) 320px; }
-  .stage { position: relative; display: grid; min-width: 0; min-height: 0; place-items: center; padding: 32px 72px; overflow: hidden; }
-  .stage img { max-width: 100%; max-height: 100%; object-fit: contain; filter: drop-shadow(0 24px 70px rgba(0,0,0,.34)); }
+  .viewer-content { display: grid; min-height: 0; }
+  .viewer-content.with-drawer { grid-template-columns: minmax(0, 1fr) 320px; }
+  .stage { position: relative; display: grid; min-width: 0; min-height: 0; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; padding: 32px 72px; overflow: hidden; }
+  .viewer-photo { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 24px 70px rgba(0,0,0,.34)); }
   .nav { position: absolute; top: 50%; display: grid; width: 48px; height: 64px; place-items: center; border: 0; border-radius: 14px; color: white; font-size: 44px; line-height: 1; background: rgba(255,255,255,.1); transform: translateY(-50%); cursor: pointer; }
   .nav:disabled { opacity: 0; pointer-events: none; }
   .previous { left: 16px; } .next { right: 16px; }
@@ -225,7 +225,7 @@
     header { grid-template-columns: auto 1fr auto; padding: 0 10px; }
     .title { text-align: left; } .title strong { max-width: 30vw; }
     .rendition-switch button { padding-inline: 8px; }
-    main.with-drawer { grid-template: minmax(0, 1fr) minmax(180px, 38vh) / 1fr; }
+    .viewer-content.with-drawer { grid-template: minmax(0, 1fr) minmax(180px, 38vh) / 1fr; }
     .stage { padding: 16px 42px; }
     aside { padding: 18px 20px; }
     aside h2 { margin-bottom: 14px; }
