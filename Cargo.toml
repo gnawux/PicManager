@@ -34,7 +34,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
 toml = "0.8"
 kamadak-exif = "0.5"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "socks"] }
 rust-embed = "8"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 image_hasher = "3"
