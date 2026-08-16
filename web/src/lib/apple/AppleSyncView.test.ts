@@ -11,6 +11,30 @@ const failed: AppleSourceSummary = {
 };
 
 describe('AppleSyncView', () => {
+  it('hands native iCloud sync to the embedded Mac bridge and refreshes its status', async () => {
+    vi.useFakeTimers();
+    const sources = vi.fn(async () => ({
+      sources: [], status_counts: { synced: 8, queued: 2 }, next_before_id: null,
+    }));
+    const postMessage = vi.fn();
+    Object.defineProperty(window, 'webkit', {
+      configurable: true,
+      value: { messageHandlers: { picmanager: { postMessage } } },
+    });
+    const api = {
+      apple: { sources, retry: vi.fn(), candidates: vi.fn(async () => []), reviewCandidate: vi.fn() },
+    } as unknown as ApiClient;
+    render(AppleSyncView, { api });
+
+    await screen.findByText('此筛选条件下没有照片');
+    await fireEvent.click(screen.getByRole('button', { name: '同步 iCloud 照片' }));
+    expect(postMessage).toHaveBeenCalledWith({ action: 'syncApple' });
+    expect(await screen.findByText(/当前有 2 张等待同步/)).toBeVisible();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(sources).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
   it('shows unsynced inventory, retries failures, and reviews matches', async () => {
     const sources = vi.fn(async () => ({
       sources: [failed], status_counts: { synced: 8, discovered: 2, failed: 1, excluded: 1 }, next_before_id: null,

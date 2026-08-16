@@ -247,7 +247,12 @@ public struct ServiceDashboardClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+        let encoder = JSONEncoder()
+        // The Rust service exposes a snake_case JSON contract. Keep this at the
+        // client boundary so native-only request models cannot silently diverge
+        // from the web API (for example, workerID -> worker_id).
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        request.httpBody = try encoder.encode(body)
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ServiceDashboardError.response((response as? HTTPURLResponse)?.statusCode ?? 0)
@@ -262,7 +267,9 @@ public struct ServiceDashboardClient: Sendable {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        request.httpBody = try encoder.encode(body)
         let (_, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ServiceDashboardError.response((response as? HTTPURLResponse)?.statusCode ?? 0)

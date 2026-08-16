@@ -17,8 +17,13 @@
   let busyId = $state<number | null>(null);
   let reviewingId = $state<number | null>(null);
   let nativeSyncRequested = $state(false);
+  let nativeSyncRefreshes = $state(0);
+  let nativeSyncTimer: number | null = null;
 
-  onMount(() => { void loadWorkspace(); });
+  onMount(() => {
+    void loadWorkspace();
+    return () => { if (nativeSyncTimer !== null) window.clearInterval(nativeSyncTimer); };
+  });
 
   async function loadSources() {
     const result = await api.apple.sources(filter === 'pending' ? 'all' : filter, search.trim() || undefined);
@@ -106,7 +111,21 @@
   function syncApple() {
     const bridge = (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager;
     if (!bridge) { error = 'iCloud 同步需要从 PicManager Mac 应用的嵌入式窗口运行。'; return; }
-    bridge.postMessage({ action: 'syncApple' }); nativeSyncRequested = true;
+    bridge.postMessage({ action: 'syncApple' });
+    nativeSyncRequested = true;
+    nativeSyncRefreshes = 0;
+    // The PhotoKit work runs in the native shell. Poll the durable service
+    // inventory so a page refresh does not erase the user's only indication
+    // that queued imports are being consumed.
+    nativeSyncTimer = window.setInterval(() => {
+      nativeSyncRefreshes += 1;
+      void loadWorkspace();
+      if (nativeSyncRefreshes >= 72 && nativeSyncTimer !== null) {
+        window.clearInterval(nativeSyncTimer);
+        nativeSyncTimer = null;
+        nativeSyncRequested = false;
+      }
+    }, 5_000);
   }
 </script>
 
@@ -121,7 +140,7 @@
   </div>
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
-  {#if nativeSyncRequested}<p class="sync-note" role="status">PicManager 正在读取 Apple Photos；完成后可刷新此页查看同步结果。</p>{/if}
+  {#if nativeSyncRequested}<p class="sync-note" role="status">PicManager 正在核对 Apple Photos；此页会自动刷新。当前有 {pendingCount()} 张等待同步，关闭应用会暂停，下一次同步可继续处理。</p>{/if}
   <div class="summary" aria-label="Apple 照片同步概览">
     <button type="button" class:active={filter === 'all'} onclick={() => applyFilter('all')}><small>全部</small><strong>{Object.values(page?.status_counts ?? {}).reduce((a, b) => a + b, 0)}</strong></button>
     <button type="button" class:active={filter === 'synced'} onclick={() => applyFilter('synced')}><small>已同步</small><strong>{count('synced')}</strong></button>
