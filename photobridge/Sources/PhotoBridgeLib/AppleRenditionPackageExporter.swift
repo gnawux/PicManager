@@ -23,6 +23,11 @@ public enum AppleRenditionPackageError: Error, LocalizedError {
 /// catalog. The Rust service verifies and commits this package atomically afterwards.
 @available(macOS 13, *)
 public func exportAppleRenditionPackage(identifier: String, destination: URL) async throws {
+    // Keep the native path on the same full-access contract as `photobridge
+    // export-asset`. Inventory metadata can be read with limited access, while
+    // original-resource export cannot reliably do so.
+    let authorization = try await requestPhotoLibraryAccess()
+    if case .limited = authorization { throw AuthError.limited }
     let manifestURL = destination.appendingPathComponent("manifest.json")
     if FileManager.default.fileExists(atPath: destination.path) {
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {
@@ -30,6 +35,10 @@ public func exportAppleRenditionPackage(identifier: String, destination: URL) as
         }
         return
     }
+    // Make the managed staging root observable before contacting PhotoKit. This
+    // distinguishes filesystem access failures from cloud/resource failures.
+    let parent = destination.deletingLastPathComponent()
+    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
     let fetch = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil)
     guard let asset = fetch.firstObject else { throw AppleRenditionPackageError.assetNotFound(identifier) }
     let resources = PHAssetResource.assetResources(for: asset)
@@ -37,8 +46,6 @@ public func exportAppleRenditionPackage(identifier: String, destination: URL) as
         throw AppleRenditionPackageError.noOriginalResource
     }
     let adjusted = resources.contains { $0.type == .adjustmentData || $0.type == .fullSizePhoto }
-    let parent = destination.deletingLastPathComponent()
-    try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
     let temporary = parent.appendingPathComponent(".\(destination.lastPathComponent).partial-\(UUID().uuidString)")
     try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
     do {
