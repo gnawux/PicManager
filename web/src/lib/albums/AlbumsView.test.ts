@@ -19,7 +19,7 @@ describe('AlbumsView', () => {
     const api = {
       albums: {
         list: vi.fn(async () => [
-          { id: 2, name: '2024年1月', kind: 'month', photo_count: 1, latest_photo_at: '2024-01-01' },
+          { id: 2, name: '2024年1月', kind: 'time', photo_count: 1, latest_photo_at: '2024-01-01' },
           { id: 3, name: '上海', kind: 'location', photo_count: 12, latest_photo_at: '2024-01-02' },
           { id: 4, name: 'Leica Q', kind: 'camera', photo_count: 5, latest_photo_at: '2024-01-03' },
         ]),

@@ -7,7 +7,7 @@
 
   interface Props { api: ApiClient }
   interface Selection { id: number; name: string; collection: boolean }
-  interface AlbumSection { kind: string; label: string; icon: string; albums: AlbumSummary[] }
+  interface AlbumSection { kind: string; kinds: string[]; label: string; icon: string; albums: AlbumSummary[] }
 
   let { api }: Props = $props();
   let albums = $state<AlbumSummary[]>([]);
@@ -31,17 +31,17 @@
 
   function buildSections(source: AlbumSummary[]): AlbumSection[] {
     const definitions = [
-      { kind: 'month', label: '按月份', icon: '▦' },
-      { kind: 'location', label: '按地点', icon: '⌖' },
-      { kind: 'camera', label: '按相机', icon: '◉' },
+      { kind: 'month', kinds: ['time', 'month'], label: '按月份', icon: '▦' },
+      { kind: 'location', kinds: ['location'], label: '按地点', icon: '⌖' },
+      { kind: 'camera', kinds: ['camera'], label: '按相机', icon: '◉' },
     ];
-    const known = new Set([...definitions.map((item) => item.kind), 'curated']);
+    const known = new Set([...definitions.flatMap((item) => item.kinds), 'curated']);
     const sections = definitions.map((definition) => ({
       ...definition,
-      albums: source.filter((album) => album.kind === definition.kind).sort(compareByCountAndName),
+      albums: source.filter((album) => definition.kinds.includes(album.kind)).sort(compareByCountAndName),
     }));
     const other = source.filter((album) => !known.has(album.kind)).sort(compareByCountAndName);
-    if (other.length > 0) sections.push({ kind: 'other', label: '其他智能相册', icon: '✦', albums: other });
+    if (other.length > 0) sections.push({ kind: 'other', kinds: [], label: '其他智能相册', icon: '✦', albums: other });
     return sections.filter((section) => section.albums.length > 0);
   }
 
