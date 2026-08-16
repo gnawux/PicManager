@@ -64,6 +64,18 @@ public struct AppleSourceStatusPage: Decodable, Equatable, Sendable {
     public let statusCounts: [String: Int]
 }
 
+public struct AppleSource: Decodable, Equatable, Sendable, Identifiable {
+    public let id: Int
+    public let externalID: String
+    public let originalFilename: String?
+    public let syncStatus: String
+}
+
+public struct AppleSourcePage: Decodable, Equatable, Sendable {
+    public let sources: [AppleSource]
+    public let nextBeforeID: Int?
+}
+
 public struct ApplePhotoInventory: Equatable, Sendable {
     public let imageCount: Int
     public let videoCount: Int
@@ -180,6 +192,10 @@ public struct ServiceDashboardClient: Sendable {
 
     public func cancel(taskID: Int) async throws -> ServiceTask {
         try await request("api/v1/tasks/\(taskID)/cancel", method: "POST")
+    }
+
+    public func appleSources(status: String, limit: Int = 50) async throws -> AppleSourcePage {
+        try await get("api/apple/sources?status=\(status)&limit=\(min(max(limit, 1), 100))")
     }
 
     private func get<Response: Decodable & Sendable>(_ path: String) async throws -> Response {

@@ -583,6 +583,17 @@ Status: complete.
 - M28.2: complete — exercise the full interaction from fullscreen map cluster to photo dialog
   and assert the viewer's declared layer remains higher than the map layer.
 
+### M29 - Apple Photos automatic synchronization
+
+Status: in progress.
+
+- M29.1: add an explicit persisted Apple Photos policy and bounded foreground scheduler.
+  Existing installations discover inventory only by default; downloading remains opt-in.
+- M29.2: lease queued Apple export work through the owned service, export PhotoKit rendition
+  packages into recoverable staging, and atomically commit package plus durable work state.
+- M29.3: expose policy, progress and recovery behavior in the Mac application; rehearse
+  interrupted transfers and a subsequent application restart against an isolated library.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

@@ -74,6 +74,7 @@ private struct LibraryShellView: View {
                         if await model.ensureServiceRunning() {
                             await model.refreshDashboard()
                             model.startHealthMonitoring()
+                            model.startAppleSyncMonitoring()
                         }
                     }
                     .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
@@ -315,6 +316,14 @@ private struct ConfigurationView: View {
                 Text("System browser").tag(PhotoPresentationMode.systemBrowser)
             }
             Toggle("Launch PicManager at login", isOn: $model.configuration.launchAtLogin)
+            Picker("Apple Photos sync", selection: $model.configuration.applePhotosSyncPolicy) {
+                Text("Off").tag(ApplePhotosSyncPolicy.disabled)
+                Text("Discover new photos").tag(ApplePhotosSyncPolicy.inventoryOnly)
+                Text("Discover and import new photos").tag(ApplePhotosSyncPolicy.importNew)
+            }
+            Text("Discovery compares Apple Photos metadata every 15 minutes while PicManager is open. Importing downloads only newly queued photos and can be interrupted safely.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text(model.launchAtLoginStatus)
                 .font(.caption)
                 .foregroundStyle(.secondary)

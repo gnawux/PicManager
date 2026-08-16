@@ -22,6 +22,7 @@ final class AppModel: ObservableObject {
     private let serviceProcess = ServiceProcessController()
     private let notifications = NativeNotifications()
     private var healthMonitorTask: Task<Void, Never>?
+    private var appleSyncMonitorTask: Task<Void, Never>?
     private var alertPolicy = ServiceFailureAlertPolicy()
     private let readinessPolicy = ServiceReadinessPolicy()
     private var libraryOwnership: LibraryOwnershipLock?
@@ -56,6 +57,7 @@ final class AppModel: ObservableObject {
                     if await ensureServiceRunning() {
                         await refreshDashboard()
                         startHealthMonitoring()
+                        startAppleSyncMonitoring()
                     }
                 }
             }
@@ -153,6 +155,26 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(for: .seconds(5))
             }
         }
+    }
+
+    /// PhotoKit is only available while the foreground app is running. Keep discovery
+    /// deliberately infrequent and serialize it with the manual refresh control.
+    func startAppleSyncMonitoring() {
+        guard appleSyncMonitorTask == nil else { return }
+        appleSyncMonitorTask = Task { [weak self] in
+            guard let self else { return }
+            await synchronizeAppleInventoryIfEnabled()
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(900))
+                await synchronizeAppleInventoryIfEnabled()
+            }
+        }
+    }
+
+    private func synchronizeAppleInventoryIfEnabled() async {
+        guard configuration.applePhotosSyncPolicy != .disabled,
+              photoAccess == .authorized else { return }
+        await synchronizeAppleInventory()
     }
 
     private func pollServiceHealth() async -> Bool {
@@ -259,6 +281,8 @@ final class AppModel: ObservableObject {
     func stopService() {
         healthMonitorTask?.cancel()
         healthMonitorTask = nil
+        appleSyncMonitorTask?.cancel()
+        appleSyncMonitorTask = nil
         serviceProcess.stop()
     }
 

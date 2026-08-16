@@ -13,7 +13,8 @@ func runMacAppConfigurationTests() {
                 serviceExecutablePath: "/Applications/PicManager.app/Contents/MacOS/picmanager",
                 port: 18080,
                 presentationMode: .systemBrowser,
-                launchAtLogin: true
+                launchAtLogin: true,
+                applePhotosSyncPolicy: .importNew
             )
             try expected.save(to: url)
             try expect(try MacAppConfiguration.load(from: url), equals: expected)
@@ -22,6 +23,10 @@ func runMacAppConfigurationTests() {
         test("service URL remains loopback by default") {
             let configuration = MacAppConfiguration.default
             try expect(configuration.serviceURL?.host, equals: "127.0.0.1")
+        }
+
+        test("Apple Photos discovery is enabled without enabling downloads") {
+            try expect(MacAppConfiguration.default.applePhotosSyncPolicy, equals: .inventoryOnly)
         }
     }
 }

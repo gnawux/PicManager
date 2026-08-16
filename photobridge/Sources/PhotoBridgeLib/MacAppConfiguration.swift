@@ -5,6 +5,12 @@ public enum PhotoPresentationMode: String, Codable, CaseIterable, Sendable {
     case systemBrowser
 }
 
+public enum ApplePhotosSyncPolicy: String, Codable, CaseIterable, Sendable {
+    case disabled
+    case inventoryOnly
+    case importNew
+}
+
 public struct MacAppConfiguration: Codable, Equatable, Sendable {
     public var libraryPath: String
     public var libraryBookmark: Data?
@@ -13,6 +19,8 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
     public var port: UInt16
     public var presentationMode: PhotoPresentationMode
     public var launchAtLogin: Bool
+    /// Metadata discovery is safe for existing libraries; downloading is always explicit.
+    public var applePhotosSyncPolicy: ApplePhotosSyncPolicy
 
     public init(
         libraryPath: String,
@@ -21,7 +29,8 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
         host: String = "127.0.0.1",
         port: UInt16 = 8080,
         presentationMode: PhotoPresentationMode = .embedded,
-        launchAtLogin: Bool = false
+        launchAtLogin: Bool = false,
+        applePhotosSyncPolicy: ApplePhotosSyncPolicy = .inventoryOnly
     ) {
         self.libraryPath = libraryPath
         self.libraryBookmark = libraryBookmark
@@ -30,6 +39,24 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
         self.port = port
         self.presentationMode = presentationMode
         self.launchAtLogin = launchAtLogin
+        self.applePhotosSyncPolicy = applePhotosSyncPolicy
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case libraryPath, libraryBookmark, serviceExecutablePath, host, port
+        case presentationMode, launchAtLogin, applePhotosSyncPolicy
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        libraryPath = try values.decode(String.self, forKey: .libraryPath)
+        libraryBookmark = try values.decodeIfPresent(Data.self, forKey: .libraryBookmark)
+        serviceExecutablePath = try values.decodeIfPresent(String.self, forKey: .serviceExecutablePath)
+        host = try values.decodeIfPresent(String.self, forKey: .host) ?? "127.0.0.1"
+        port = try values.decodeIfPresent(UInt16.self, forKey: .port) ?? 8080
+        presentationMode = try values.decodeIfPresent(PhotoPresentationMode.self, forKey: .presentationMode) ?? .embedded
+        launchAtLogin = try values.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
+        applePhotosSyncPolicy = try values.decodeIfPresent(ApplePhotosSyncPolicy.self, forKey: .applePhotosSyncPolicy) ?? .inventoryOnly
     }
 
     public static var `default`: MacAppConfiguration {
