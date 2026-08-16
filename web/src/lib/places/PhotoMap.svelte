@@ -4,6 +4,7 @@
   import type { AlbumPhotoPage, GeoCluster, GeoClusterPage } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
+  import { photoPageCount } from '../photos/pagination';
 
   interface Props { api: ApiClient; initialPage: GeoClusterPage }
   let { api, initialPage }: Props = $props();
@@ -187,7 +188,7 @@
     selectedLoading = true;
     mapError = null;
     try {
-      selectedPhotos = await api.geo.clusterPhotos(clusterBounds(cluster));
+      selectedPhotos = await api.geo.clusterPhotos(clusterBounds(cluster), 1, 20);
     } catch (reason) {
       mapError = reason instanceof Error ? reason.message : String(reason);
     } finally {
@@ -195,11 +196,29 @@
     }
   }
 
-  async function loadMorePhotos() {
+  async function loadPhotoPage(page: number) {
     if (!selectedCluster || !selectedPhotos) return;
-    const nextPage = selectedPhotos.page + 1;
-    const next = await api.geo.clusterPhotos(clusterBounds(selectedCluster), nextPage);
-    selectedPhotos = { ...next, photos: [...selectedPhotos.photos, ...next.photos] };
+    selectedLoading = true;
+    mapError = null;
+    try {
+      selectedPhotos = await api.geo.clusterPhotos(
+        clusterBounds(selectedCluster), page, selectedPhotos.per_page,
+      );
+    } catch (reason) {
+      mapError = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      selectedLoading = false;
+    }
+  }
+
+  function previousPhotoPage() {
+    if (selectedPhotos && selectedPhotos.page > 1) void loadPhotoPage(selectedPhotos.page - 1);
+  }
+
+  function nextPhotoPage() {
+    if (selectedPhotos && selectedPhotos.page < photoPageCount(selectedPhotos.total, selectedPhotos.per_page)) {
+      void loadPhotoPage(selectedPhotos.page + 1);
+    }
   }
 
   function zoomToCluster() {
@@ -273,8 +292,12 @@
               <img src={`/api/photos/${photo.id}/thumb?size=256`} alt={`地图照片 ${photo.id}`} loading="lazy" />
             {/each}
           </div>
-          {#if selectedPhotos.photos.length < selectedPhotos.total}
-            <Button variant="ghost" onclick={loadMorePhotos}>载入更多</Button>
+          {#if photoPageCount(selectedPhotos.total, selectedPhotos.per_page) > 1}
+            <nav class="cluster-pager" aria-label="地图照片分页">
+              <Button variant="ghost" disabled={selectedPhotos.page <= 1} onclick={previousPhotoPage}>上一页</Button>
+              <span>第 {selectedPhotos.page} / {photoPageCount(selectedPhotos.total, selectedPhotos.per_page)} 页</span>
+              <Button variant="ghost" disabled={selectedPhotos.page >= photoPageCount(selectedPhotos.total, selectedPhotos.per_page)} onclick={nextPhotoPage}>下一页</Button>
+            </nav>
           {/if}
         {/if}
       </aside>
@@ -308,6 +331,8 @@
   .close-panel { width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: var(--fill-subtle); cursor: pointer; font-size: 20px; }
   .cluster-photos { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px; }
   .cluster-photos img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: var(--fill-subtle); }
+  .cluster-pager { display: flex; justify-content: center; align-items: center; gap: 6px; }
+  .cluster-pager span { color: var(--muted); font-size: 11px; }
   .map-error { margin: 0; padding: 9px 14px; color: #9f2d2d; background: #fff0f0; font-size: 13px; }
   @media (max-width: 680px) { .map-toolbar { align-items: flex-start; } .map-toolbar > div:first-child { display: grid; gap: 2px; } .map { height: 390px; } .cluster-panel { max-height: 52%; } }
 </style>

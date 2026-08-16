@@ -117,8 +117,10 @@ pub async fn get_person_photos(
     Path(person_id): Path<i64>,
     Query(pag): Query<Pagination>,
 ) -> Result<Json<PersonPhotos>, StatusCode> {
-    let offset = (pag.page.saturating_sub(1)) as i64 * pag.per_page as i64;
-    let limit = pag.per_page as i64;
+    let page = pag.page.max(1);
+    let per_page = pag.per_page.clamp(1, 200);
+    let offset = (page - 1) as i64 * per_page as i64;
+    let limit = per_page as i64;
 
     let total: (i64,) = sqlx::query_as(
         "WITH RECURSIVE subtree(id) AS (
@@ -162,8 +164,8 @@ pub async fn get_person_photos(
     Ok(Json(PersonPhotos {
         photos,
         total: total.0,
-        page: pag.page,
-        per_page: pag.per_page,
+        page,
+        per_page,
     }))
 }
 

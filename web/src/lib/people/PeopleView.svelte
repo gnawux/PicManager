@@ -4,6 +4,7 @@
   import type { PersonSummary, PhotoPage } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
+  import { photoGridLayout, photoPageCount } from '../photos/pagination';
 
   interface Props { api: ApiClient }
   let { api }: Props = $props();
@@ -14,9 +15,9 @@
   let selected = $state<PersonSummary | null>(null);
   let photos = $state<PhotoPage | null>(null);
   let photosLoading = $state(false);
-  let loadingMore = $state(false);
-  let loadMoreError = $state<string | null>(null);
   let photoRequest = 0;
+  let photoColumns = $state(4);
+  let pageSize = $state(16);
   let editingId = $state<number | null>(null);
   let editName = $state('');
   let busyId = $state<number | null>(null);
@@ -38,16 +39,21 @@
   }
 
   async function open(person: PersonSummary) {
-    const request = ++photoRequest;
     selected = person;
     photos = null;
     photosLoading = true;
-    loadingMore = false;
-    loadMoreError = null;
+    error = null;
+    await loadPage(1);
+  }
+
+  async function loadPage(page: number, perPage = pageSize) {
+    if (!selected) return;
+    const request = ++photoRequest;
+    photosLoading = true;
     error = null;
     try {
-      const page = await api.people.photos(person.id, 1, 100);
-      if (request === photoRequest) photos = page;
+      const result = await api.people.photos(selected.id, page, perPage);
+      if (request === photoRequest) photos = result;
     } catch (reason) {
       if (request === photoRequest) error = reason instanceof Error ? reason.message : String(reason);
     } finally {
@@ -55,21 +61,22 @@
     }
   }
 
-  async function loadMore() {
-    if (!selected || !photos || loadingMore || photos.photos.length >= photos.total) return;
-    const request = photoRequest;
-    loadingMore = true;
-    loadMoreError = null;
-    try {
-      const next = await api.people.photos(selected.id, photos.page + 1, photos.per_page);
-      if (request !== photoRequest) return;
-      const existing = new Set(photos.photos.map((photo) => photo.id));
-      photos = { ...next, photos: [...photos.photos, ...next.photos.filter((photo) => !existing.has(photo.id))] };
-    } catch (reason) {
-      if (request === photoRequest) loadMoreError = reason instanceof Error ? reason.message : String(reason);
-    } finally {
-      if (request === photoRequest) loadingMore = false;
-    }
+  function measurePhotos(node: HTMLElement) {
+    if (typeof ResizeObserver === 'undefined') return {};
+    const observer = new ResizeObserver(([entry]) => {
+      const layout = photoGridLayout(entry.contentRect.width, 4, 170, 5);
+      if (layout.columns === photoColumns) return;
+      photoColumns = layout.columns;
+      pageSize = layout.perPage;
+      if (selected && photos && photos.per_page !== pageSize) void loadPage(1, pageSize);
+    });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
+
+  function previousPage() { if (photos && photos.page > 1) void loadPage(photos.page - 1); }
+  function nextPage() {
+    if (photos && photos.page < photoPageCount(photos.total, photos.per_page)) void loadPage(photos.page + 1);
   }
 
   function startRename(person: PersonSummary) {
@@ -124,11 +131,11 @@
 </script>
 
 {#if selected}
-  <section class="person-detail" aria-labelledby="person-title">
+  <section class="person-detail" aria-labelledby="person-title" use:measurePhotos>
     <div class="detail-heading">
       <Button variant="ghost" onclick={() => { photoRequest += 1; selected = null; photos = null; }}>← 返回人物</Button>
       <div><p>Person</p><h2 id="person-title">{selected.name ?? `未命名人物 ${selected.id}`}</h2></div>
-      <span>{photos ? `已显示 ${photos.photos.length} / ${photos.total} 张` : `${selected.photo_count} 张`}</span>
+      <span>{photos ? `第 ${photos.page} / ${photoPageCount(photos.total, photos.per_page)} 页 · 共 ${photos.total} 张` : `${selected.photo_count} 张`}</span>
     </div>
     {#if error}
       <PageState kind="error" title="无法读取人物照片" message={error} />
@@ -137,14 +144,17 @@
     {:else if photos.photos.length === 0}
       <PageState kind="empty" title="没有关联照片" />
     {:else}
-      <div class="photo-grid">
+      <div class="photo-grid" style={`--photo-columns: ${photoColumns}`}>
         {#each photos.photos as photo (photo.id)}
           <img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />
         {/each}
       </div>
-      {#if loadMoreError}<p class="load-error" role="alert">载入下一页失败：{loadMoreError}</p>{/if}
-      {#if photos.photos.length < photos.total}
-        <div class="load-more"><Button disabled={loadingMore} onclick={loadMore}>{loadingMore ? '正在载入…' : '载入更多'}</Button></div>
+      {#if photoPageCount(photos.total, photos.per_page) > 1}
+        <nav class="pager" aria-label="人物照片分页">
+          <Button variant="ghost" disabled={photos.page <= 1} onclick={previousPage}>上一页</Button>
+          <span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页</span>
+          <Button variant="ghost" disabled={photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPage}>下一页</Button>
+        </nav>
       {/if}
     {/if}
   </section>
@@ -215,9 +225,9 @@
   .actions button:hover { background: var(--fill-subtle); }
   form { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding-top: 10px; }
   form input { min-width: 0; }
-  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 5px; }
+  .photo-grid { display: grid; grid-template-columns: repeat(var(--photo-columns), minmax(0, 1fr)); gap: 5px; }
   .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; background: var(--fill-subtle); }
-  .load-more { display: flex; justify-content: center; padding: 18px 0 6px; }
-  .load-error { margin: 14px 0 0; color: var(--danger); text-align: center; font-size: 13px; }
+  .pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 18px 0 6px; }
+  .pager span { color: var(--muted); font-size: 12px; }
   @media (max-width: 680px) { .view-heading { align-items: stretch; flex-direction: column; } .controls { justify-content: space-between; } .people-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } .detail-heading { flex-wrap: wrap; } }
 </style>

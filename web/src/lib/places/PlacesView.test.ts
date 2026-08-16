@@ -7,7 +7,7 @@ describe('PlacesView', () => {
   it('shows GPS clusters and browses photos by city', async () => {
     const photos = vi.fn(async () => ({
       photos: [{ id: 12, path: '/x.jpg', taken_at: null, camera: null }],
-      total: 1, page: 1, per_page: 200,
+      total: 1, page: 1, per_page: 16,
     }));
     const api = {
       geo: {
@@ -47,13 +47,13 @@ describe('PlacesView', () => {
     await fireEvent.click(state.querySelector(':scope > summary') as HTMLElement);
     await fireEvent.click(screen.getByRole('button', { name: /上海 1/ }));
     expect(await screen.findByAltText('照片 12')).toBeVisible();
-    expect(photos).toHaveBeenCalledWith({ country: '中国', state: '上海市', city: '上海' }, 1, 200);
+    expect(photos).toHaveBeenCalledWith({ country: '中国', state: '上海市', city: '上海' }, 1, 16);
   });
 
   it('uses null sentinels when browsing unknown hierarchy entries', async () => {
     const photos = vi.fn(async () => ({
       photos: [{ id: 21, path: '/unknown.jpg', taken_at: null, camera: null }],
-      total: 1, page: 1, per_page: 200,
+      total: 1, page: 1, per_page: 16,
     }));
     const api = {
       geo: {
@@ -82,21 +82,18 @@ describe('PlacesView', () => {
     expect(await screen.findByAltText('照片 21')).toBeVisible();
     expect(photos).toHaveBeenCalledWith({
       country: '__null__', state: '__null__', city: '__null__',
-    }, 1, 200);
+    }, 1, 16);
   });
 
   it('loads later place pages without duplicating photos', async () => {
     const photos = vi.fn()
       .mockResolvedValueOnce({
         photos: [{ id: 1, path: '/1.jpg', taken_at: null, camera: null }],
-        total: 2, page: 1, per_page: 200,
+        total: 17, page: 1, per_page: 16,
       })
       .mockResolvedValueOnce({
-        photos: [
-          { id: 1, path: '/1.jpg', taken_at: null, camera: null },
-          { id: 2, path: '/2.jpg', taken_at: null, camera: null },
-        ],
-        total: 2, page: 2, per_page: 200,
+        photos: [{ id: 2, path: '/2.jpg', taken_at: null, camera: null }],
+        total: 17, page: 2, per_page: 16,
       });
     const api = {
       geo: {
@@ -114,11 +111,11 @@ describe('PlacesView', () => {
     await screen.findByRole('heading', { name: '按地点浏览' });
     await fireEvent.click(container.querySelector('.country-group > summary') as HTMLElement);
     await fireEvent.click(screen.getByRole('button', { name: '查看 中国 的全部照片' }));
-    expect(await screen.findByText('已显示 1 / 2 张')).toBeVisible();
-    await fireEvent.click(screen.getByRole('button', { name: '载入更多' }));
+    expect(await screen.findByText('第 1 / 2 页 · 共 17 张')).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', { name: '下一页' }));
     expect(await screen.findByAltText('照片 2')).toBeVisible();
-    expect(screen.getAllByAltText('照片 1')).toHaveLength(1);
-    expect(photos).toHaveBeenLastCalledWith({ country: '中国' }, 2, 200);
+    expect(screen.queryByAltText('照片 1')).not.toBeInTheDocument();
+    expect(photos).toHaveBeenLastCalledWith({ country: '中国' }, 2, 16);
   });
 
   it('offers a safe background repair for legacy place names', async () => {

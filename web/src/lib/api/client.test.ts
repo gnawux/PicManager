@@ -160,7 +160,7 @@ describe('API client', () => {
       '/api/geo/clusters?columns=32&rows=16&west=100&east=110&south=20&north=30',
     );
     expect(fetcher.mock.calls[1][0]).toBe(
-      '/api/geo/cluster-photos?page=1&per_page=200&west=100&east=110&south=20&north=30',
+      '/api/geo/cluster-photos?page=1&per_page=20&west=100&east=110&south=20&north=30',
     );
   });
 

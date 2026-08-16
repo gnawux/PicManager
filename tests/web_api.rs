@@ -2514,6 +2514,64 @@ async fn get_albums_latest_photo_at_is_most_recent() {
     );
 }
 
+#[tokio::test]
+async fn location_album_exposes_a_unique_non_null_parent_name() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let album_id: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('西城区', 'location') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+         VALUES ('/x.jpg', 'location-parent', 'jpeg', 'imported', 39.9000, 116.4000)
+         RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO geocache (lat_key, lon_key, city, state, country)
+         VALUES ('39.9000', '116.4000', '西城区', '北京市', '中国')",
+    )
+    .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(photo_id).bind(album_id).execute(&pool).await.unwrap();
+
+    let response = app
+        .oneshot(Request::builder().uri("/api/albums").body(Body::empty()).unwrap())
+        .await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let albums: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(albums[0]["parent_name"], "北京市");
+}
+
+#[tokio::test]
+async fn location_album_omits_a_null_parent_name() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let album_id: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('香港', 'location') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    let photo_id: i64 = sqlx::query_scalar(
+        "INSERT INTO photos (path, sha256, format, import_status, gps_lat, gps_lon)
+         VALUES ('/hk.jpg', 'location-null-parent', 'jpeg', 'imported', 22.3000, 114.2000)
+         RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO geocache (lat_key, lon_key, city, country)
+         VALUES ('22.3000', '114.2000', '香港', '中国')",
+    )
+    .execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(photo_id).bind(album_id).execute(&pool).await.unwrap();
+
+    let response = app
+        .oneshot(Request::builder().uri("/api/albums").body(Body::empty()).unwrap())
+        .await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let albums: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(albums[0]["parent_name"].is_null());
+}
+
 // ── helpers for embedding tests ───────────────────────────────────────────────
 
 fn unit_emb(dim: usize, hot: usize) -> Vec<u8> {
@@ -3425,6 +3483,40 @@ async fn list_collections_returns_empty_initially() {
     let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let arr: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(arr.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn list_collections_reports_latest_imported_photo() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let collection_id: i64 = sqlx::query_scalar(
+        "INSERT INTO albums (name, kind) VALUES ('旅行', 'curated') RETURNING id",
+    )
+    .fetch_one(&pool).await.unwrap();
+    for (suffix, taken_at, status) in [
+        ("old", "2024-01-01 10:00:00", "imported"),
+        ("new", "2024-03-01 10:00:00", "imported"),
+        ("deleted", "2025-01-01 10:00:00", "deleted"),
+    ] {
+        let photo_id: i64 = sqlx::query_scalar(
+            "INSERT INTO photos (path, sha256, format, import_status, taken_at)
+             VALUES (?, ?, 'jpeg', ?, ?) RETURNING id",
+        )
+        .bind(format!("/{suffix}.jpg"))
+        .bind(format!("collection-{suffix}"))
+        .bind(status)
+        .bind(taken_at)
+        .fetch_one(&pool).await.unwrap();
+        sqlx::query("INSERT INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+            .bind(photo_id).bind(collection_id).execute(&pool).await.unwrap();
+    }
+
+    let response = app
+        .oneshot(Request::builder().uri("/api/collections").body(Body::empty()).unwrap())
+        .await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let collections: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(collections[0]["photo_count"], 2);
+    assert_eq!(collections[0]["latest_photo_at"], "2024-03-01 10:00:00");
 }
 
 #[tokio::test]

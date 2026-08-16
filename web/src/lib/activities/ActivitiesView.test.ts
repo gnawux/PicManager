@@ -26,7 +26,7 @@ describe('ActivitiesView', () => {
         })),
         photos: vi.fn(async () => ({
           photos: [{ id: 17, path: '/x.jpg', format: 'jpeg', taken_at: null, gps_lat: 31.2, gps_lon: 121.4 }],
-          total: 1, page: 1, per_page: 100,
+          total: 1, page: 1, per_page: 16,
         })),
       },
     } as unknown as ApiClient;
@@ -43,11 +43,11 @@ describe('ActivitiesView', () => {
     const photos = vi.fn()
       .mockResolvedValueOnce({
         photos: [{ id: 17, path: '/x.jpg', format: 'jpeg', taken_at: null, gps_lat: 31.2, gps_lon: 121.4 }],
-        total: 2, page: 1, per_page: 100,
+        total: 17, page: 1, per_page: 16,
       })
       .mockResolvedValueOnce({
         photos: [{ id: 18, path: '/y.jpg', format: 'jpeg', taken_at: null, gps_lat: 31.2, gps_lon: 121.4 }],
-        total: 2, page: 2, per_page: 100,
+        total: 17, page: 2, per_page: 16,
       });
     const api = {
       activities: {
@@ -59,8 +59,9 @@ describe('ActivitiesView', () => {
     } as unknown as ApiClient;
     render(ActivitiesView, { api });
     await fireEvent.click(await screen.findByRole('button', { name: /滨江跑步/ }));
-    await fireEvent.click(await screen.findByRole('button', { name: '载入更多' }));
+    await fireEvent.click(await screen.findByRole('button', { name: '下一页' }));
     expect(await screen.findByAltText('活动照片 18')).toBeVisible();
-    expect(photos).toHaveBeenLastCalledWith(5, 2, 100);
+    expect(screen.queryByAltText('活动照片 17')).not.toBeInTheDocument();
+    expect(photos).toHaveBeenLastCalledWith(5, 2, 16);
   });
 });

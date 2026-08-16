@@ -520,6 +520,19 @@ Status: complete.
 - M23.3: complete — retry transient heartbeat-write contention so a healthy long-running
   job does not lose its lease because of one short SQLite lock.
 
+### M24 - Album ordering and grid-aware pagination
+
+Status: complete.
+
+- M24.1: complete — add count, latest-photo and localized-name ordering for smart albums and
+  curated collections.
+- M24.2: complete — replace cumulative photo loading with bounded previous/next page navigation
+  across albums, places, people and activities.
+- M24.3: complete — derive each page size from the rendered column count and a fixed number of
+  complete rows, recalculating safely when the result pane changes width.
+- M24.4: complete — qualify location albums with a unique non-null parent region while preserving
+  concise names for places such as Hong Kong whose parent region is absent.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

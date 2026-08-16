@@ -13,6 +13,7 @@ pub struct AlbumRow {
     pub kind: String,
     pub photo_count: i64,
     pub latest_photo_at: Option<String>,
+    pub parent_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -31,10 +32,22 @@ fn default_order() -> String { "desc".to_string() }
 pub async fn list_albums(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<AlbumRow>>, StatusCode> {
-    let rows: Vec<(i64, String, String, i64, Option<String>)> = sqlx::query_as(
+    let rows: Vec<(i64, String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT a.id, a.name, a.kind,
                 COUNT(p.id) as photo_count,
-                MAX(p.taken_at) as latest_photo_at
+                MAX(p.taken_at) as latest_photo_at,
+                CASE WHEN a.kind = 'location' THEN (
+                    SELECT CASE WHEN COUNT(DISTINCT gc.state) = 1
+                                THEN MAX(gc.state) ELSE NULL END
+                    FROM photo_albums pa2
+                    JOIN photos p2 ON p2.id = pa2.photo_id
+                                   AND p2.import_status = 'imported'
+                    JOIN geocache gc
+                      ON PRINTF('%.4f', p2.gps_lat) = gc.lat_key
+                     AND PRINTF('%.4f', p2.gps_lon) = gc.lon_key
+                    WHERE pa2.album_id = a.id
+                      AND gc.state IS NOT NULL AND TRIM(gc.state) != ''
+                ) END as parent_name
          FROM albums a
          LEFT JOIN photo_albums pa ON pa.album_id = a.id
          LEFT JOIN photos p ON p.id = pa.photo_id AND p.import_status = 'imported'
@@ -46,8 +59,8 @@ pub async fn list_albums(
 
     Ok(Json(
         rows.into_iter()
-            .map(|(id, name, kind, photo_count, latest_photo_at)| AlbumRow {
-                id, name, kind, photo_count, latest_photo_at,
+            .map(|(id, name, kind, photo_count, latest_photo_at, parent_name)| AlbumRow {
+                id, name, kind, photo_count, latest_photo_at, parent_name,
             })
             .collect(),
     ))
@@ -58,6 +71,8 @@ pub async fn list_album_photos(
     Path(album_id): Path<i64>,
     Query(pag): Query<Pagination>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
+    let page = pag.page.max(1);
+    let per_page = pag.per_page.clamp(1, 200);
     let exists: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM albums WHERE id = ?")
         .bind(album_id)
         .fetch_one(&state.pool)
@@ -67,7 +82,7 @@ pub async fn list_album_photos(
         return Err(StatusCode::NOT_FOUND);
     }
 
-    let offset = (pag.page.saturating_sub(1)) as i64 * pag.per_page as i64;
+    let offset = (page - 1) as i64 * per_page as i64;
     let total: (i64,) =
         sqlx::query_as(
             "SELECT COUNT(*) FROM photo_albums pa JOIN photos p ON p.id = pa.photo_id \
@@ -88,7 +103,7 @@ pub async fn list_album_photos(
     );
     let photos: Vec<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(&sql)
     .bind(album_id)
-    .bind(pag.per_page as i64)
+    .bind(per_page as i64)
     .bind(offset)
     .fetch_all(&state.pool)
     .await
@@ -96,8 +111,8 @@ pub async fn list_album_photos(
 
     Ok(Json(serde_json::json!({
         "total": total.0,
-        "page": pag.page,
-        "per_page": pag.per_page,
+        "page": page,
+        "per_page": per_page,
         "photos": photos.into_iter().map(|(id, path, taken_at, camera)| {
             serde_json::json!({ "id": id, "path": path, "taken_at": taken_at, "camera": camera })
         }).collect::<Vec<_>>()

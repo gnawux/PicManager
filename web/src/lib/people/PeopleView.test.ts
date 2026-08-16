@@ -7,7 +7,7 @@ function mockApi() {
   const update = vi.fn(async () => undefined);
   const photos = vi.fn(async () => ({
     photos: [{ id: 21, path: '/p.jpg', format: 'jpeg', taken_at: null, camera: null, import_status: 'imported' }],
-    total: 1, page: 1, per_page: 100,
+    total: 1, page: 1, per_page: 16,
   }));
   return {
     api: {
@@ -45,7 +45,7 @@ describe('PeopleView', () => {
     render(PeopleView, { api });
     await fireEvent.click(await screen.findByRole('button', { name: '打开未命名人物 4' }));
     expect(await screen.findByAltText('照片 21')).toHaveAttribute('src', '/api/photos/21/thumb?size=512');
-    expect(photos).toHaveBeenCalledWith(4, 1, 100);
+    expect(photos).toHaveBeenCalledWith(4, 1, 16);
   });
 
   it('loads additional person photo pages', async () => {
@@ -53,16 +53,17 @@ describe('PeopleView', () => {
     photos
       .mockResolvedValueOnce({
         photos: [{ id: 21, path: '/p.jpg', format: 'jpeg', taken_at: null, camera: null, import_status: 'imported' }],
-        total: 2, page: 1, per_page: 100,
+        total: 17, page: 1, per_page: 16,
       })
       .mockResolvedValueOnce({
         photos: [{ id: 22, path: '/q.jpg', format: 'jpeg', taken_at: null, camera: null, import_status: 'imported' }],
-        total: 2, page: 2, per_page: 100,
+        total: 17, page: 2, per_page: 16,
       });
     render(PeopleView, { api });
     await fireEvent.click(await screen.findByRole('button', { name: '打开未命名人物 4' }));
-    await fireEvent.click(await screen.findByRole('button', { name: '载入更多' }));
+    await fireEvent.click(await screen.findByRole('button', { name: '下一页' }));
     expect(await screen.findByAltText('照片 22')).toBeVisible();
-    expect(photos).toHaveBeenLastCalledWith(4, 2, 100);
+    expect(screen.queryByAltText('照片 21')).not.toBeInTheDocument();
+    expect(photos).toHaveBeenLastCalledWith(4, 2, 16);
   });
 });

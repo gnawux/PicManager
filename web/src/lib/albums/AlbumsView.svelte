@@ -4,10 +4,12 @@
   import type { AlbumPhotoPage, AlbumSummary, CollectionSummary } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
+  import { photoGridLayout, photoPageCount } from '../photos/pagination';
 
   interface Props { api: ApiClient }
   interface Selection { id: number; name: string; collection: boolean }
   interface AlbumSection { kind: string; kinds: string[]; label: string; icon: string; albums: AlbumSummary[] }
+  type SortMode = 'count' | 'recent' | 'name';
 
   let { api }: Props = $props();
   let albums = $state<AlbumSummary[]>([]);
@@ -17,19 +19,37 @@
   let selected = $state<Selection | null>(null);
   let photos = $state<AlbumPhotoPage | null>(null);
   let photosLoading = $state(false);
-  let loadingMore = $state(false);
-  let loadMoreError = $state<string | null>(null);
   let photoRequest = 0;
+  let sortMode = $state<SortMode>('count');
+  let photoColumns = $state(4);
+  let pageSize = $state(16);
+  let resultsElement = $state<HTMLElement | null>(null);
   let newName = $state('');
   let creating = $state(false);
 
-  const sortedCollections = $derived([...collections].sort(compareByCountAndName));
+  const sortedCollections = $derived([...collections].sort(compareAlbums));
   const albumSections = $derived(buildSections(albums));
 
   onMount(() => { void reload(); });
 
-  function compareByCountAndName(a: { photo_count: number; name: string }, b: { photo_count: number; name: string }) {
-    return b.photo_count - a.photo_count || a.name.localeCompare(b.name, 'zh-CN');
+  function compareAlbums(
+    a: { photo_count: number; name: string; latest_photo_at?: string | null; created_at?: string },
+    b: { photo_count: number; name: string; latest_photo_at?: string | null; created_at?: string },
+  ) {
+    const byName = a.name.localeCompare(b.name, 'zh-CN');
+    if (sortMode === 'name') return byName;
+    if (sortMode === 'recent') {
+      const aDate = Date.parse(a.latest_photo_at ?? a.created_at ?? '') || 0;
+      const bDate = Date.parse(b.latest_photo_at ?? b.created_at ?? '') || 0;
+      return bDate - aDate || byName;
+    }
+    return b.photo_count - a.photo_count || byName;
+  }
+
+  function displayAlbumName(album: AlbumSummary) {
+    return album.kind === 'location' && album.parent_name && album.parent_name !== album.name
+      ? `${album.name}（${album.parent_name}）`
+      : album.name;
   }
 
   function buildSections(source: AlbumSummary[]): AlbumSection[] {
@@ -41,9 +61,9 @@
     const known = new Set([...definitions.flatMap((item) => item.kinds), 'curated']);
     const sections = definitions.map((definition) => ({
       ...definition,
-      albums: source.filter((album) => definition.kinds.includes(album.kind)).sort(compareByCountAndName),
+      albums: source.filter((album) => definition.kinds.includes(album.kind)).sort(compareAlbums),
     }));
-    const other = source.filter((album) => !known.has(album.kind)).sort(compareByCountAndName);
+    const other = source.filter((album) => !known.has(album.kind)).sort(compareAlbums);
     if (other.length > 0) sections.push({ kind: 'other', kinds: [], label: '其他智能相册', icon: '✦', albums: other });
     return sections.filter((section) => section.albums.length > 0);
   }
@@ -61,16 +81,27 @@
   }
 
   async function open(id: number, name: string, collection: boolean) {
-    const request = ++photoRequest;
     selected = { id, name, collection };
     photos = null;
+    await loadPage(1);
+  }
+
+  async function loadPage(page: number, perPage = pageSize) {
+    if (!selected) return;
+    const request = ++photoRequest;
+    const current = selected;
     photosLoading = true;
-    loadingMore = false;
-    loadMoreError = null;
     error = null;
     try {
-      const page = collection ? await api.collections.photos(id, 1, 100) : await api.albums.photos(id, 1, 100);
-      if (request === photoRequest) photos = page;
+      const result = current.collection
+        ? await api.collections.photos(current.id, page, perPage)
+        : await api.albums.photos(current.id, page, perPage);
+      if (request === photoRequest) {
+        photos = result;
+        if (typeof resultsElement?.scrollTo === 'function') {
+          resultsElement.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+      }
     } catch (reason) {
       if (request === photoRequest) error = reason instanceof Error ? reason.message : String(reason);
     } finally {
@@ -78,23 +109,26 @@
     }
   }
 
-  async function loadMore() {
-    if (!selected || !photos || loadingMore || photos.photos.length >= photos.total) return;
-    const request = photoRequest;
-    const current = selected;
-    loadingMore = true;
-    loadMoreError = null;
-    try {
-      const next = current.collection
-        ? await api.collections.photos(current.id, photos.page + 1, photos.per_page)
-        : await api.albums.photos(current.id, photos.page + 1, photos.per_page);
-      if (request !== photoRequest) return;
-      const existing = new Set(photos.photos.map((photo) => photo.id));
-      photos = { ...next, photos: [...photos.photos, ...next.photos.filter((photo) => !existing.has(photo.id))] };
-    } catch (reason) {
-      if (request === photoRequest) loadMoreError = reason instanceof Error ? reason.message : String(reason);
-    } finally {
-      if (request === photoRequest) loadingMore = false;
+  function measureResults(node: HTMLElement) {
+    if (typeof ResizeObserver === 'undefined') return {};
+    const observer = new ResizeObserver(([entry]) => {
+      const layout = photoGridLayout(entry.contentRect.width);
+      if (layout.columns === photoColumns) return;
+      photoColumns = layout.columns;
+      pageSize = layout.perPage;
+      if (selected && photos && photos.per_page !== pageSize) void loadPage(1, pageSize);
+    });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
+
+  function previousPage() {
+    if (photos && photos.page > 1) void loadPage(photos.page - 1);
+  }
+
+  function nextPage() {
+    if (photos && photos.page < photoPageCount(photos.total, photos.per_page)) {
+      void loadPage(photos.page + 1);
     }
   }
 
@@ -123,7 +157,14 @@
 {:else}
   <section class="albums" aria-labelledby="albums-title">
     <div class="view-heading">
-      <div><p>Albums</p><h2 id="albums-title">相册</h2><span>从左侧选择相册，在右侧连续浏览照片。</span></div>
+      <div><p>Albums</p><h2 id="albums-title">相册</h2><span>从左侧选择相册，在右侧按页浏览照片。</span></div>
+      <label class="sort-control">排序
+        <select bind:value={sortMode}>
+          <option value="count">照片数量</option>
+          <option value="recent">从新到旧</option>
+          <option value="name">名称</option>
+        </select>
+      </label>
     </div>
 
     <div class="album-layout">
@@ -152,8 +193,8 @@
             <summary><span class="section-icon">{section.icon}</span><strong>{section.label}</strong><small>{section.albums.length}</small></summary>
             <div class="album-list">
               {#each section.albums as album (album.id)}
-                <button class:active={!selected?.collection && selected?.id === album.id} type="button" onclick={() => open(album.id, album.name, false)}>
-                  <span class="row-icon">{section.icon}</span><strong>{album.name}</strong><small>{album.photo_count}</small>
+                <button class:active={!selected?.collection && selected?.id === album.id} type="button" onclick={() => open(album.id, displayAlbumName(album), false)}>
+                  <span class="row-icon">{section.icon}</span><strong>{displayAlbumName(album)}</strong><small>{album.photo_count}</small>
                 </button>
               {/each}
             </div>
@@ -165,7 +206,7 @@
         {/if}
       </aside>
 
-      <div class="album-results" aria-live="polite">
+      <div class="album-results" aria-live="polite" bind:this={resultsElement} use:measureResults>
         {#if error}
           <PageState kind="error" title="无法打开相册" message={error} />
         {:else if photosLoading}
@@ -175,17 +216,20 @@
         {:else if photos}
           <div class="result-heading">
             <div><small>{selected?.collection ? '我的精选集' : '智能相册'}</small><strong>{selected?.name}</strong></div>
-            <span>已显示 {photos.photos.length} / {photos.total} 张</span>
+            <span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页 · 共 {photos.total} 张</span>
           </div>
-          {#if loadMoreError}<p class="load-error" role="alert">载入下一页失败：{loadMoreError}</p>{/if}
-          {#if photos.photos.length < photos.total}
-            <div class="load-more"><Button disabled={loadingMore} onclick={loadMore}>{loadingMore ? '正在载入…' : '载入更多'}</Button></div>
-          {/if}
-          <div class="photo-grid">
+          <div class="photo-grid" style={`--photo-columns: ${photoColumns}`}>
             {#each photos.photos as photo (photo.id)}
               <img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`照片 ${photo.id}`} loading="lazy" />
             {/each}
           </div>
+          {#if photoPageCount(photos.total, photos.per_page) > 1}
+            <nav class="pager" aria-label="照片分页">
+              <Button variant="ghost" disabled={photos.page <= 1} onclick={previousPage}>上一页</Button>
+              <span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页</span>
+              <Button variant="ghost" disabled={photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPage}>下一页</Button>
+            </nav>
+          {/if}
         {:else}
           <p class="hint">选择一个相册查看照片。</p>
         {/if}
@@ -196,10 +240,12 @@
 
 <style>
   section { margin-top: 34px; }
-  .view-heading { margin-bottom: 18px; }
+  .view-heading { display: flex; justify-content: space-between; align-items: end; gap: 16px; margin-bottom: 18px; }
   .view-heading p { margin: 0 0 7px; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
   h2 { margin: 0 0 4px; font-size: 28px; }
   .view-heading span { color: var(--muted); font-size: 13px; }
+  .sort-control { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+  .sort-control select { min-height: 36px; padding: 0 30px 0 10px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); background: var(--surface-solid); }
   .album-layout { display: grid; grid-template-columns: minmax(250px, 350px) 1fr; gap: 24px; }
   .album-sidebar, .album-results { height: min(72vh, 720px); min-height: 420px; overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--surface-solid); }
   .album-sidebar { padding: 8px; overscroll-behavior: contain; }
@@ -229,9 +275,9 @@
   .result-heading strong { font-size: 18px; }
   .result-heading small, .result-heading span, .hint { color: var(--muted); }
   .hint { display: grid; height: 300px; margin: 0; place-items: center; }
-  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 4px; }
+  .photo-grid { display: grid; grid-template-columns: repeat(var(--photo-columns), minmax(0, 1fr)); gap: 4px; }
   .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: var(--fill-subtle); }
-  .load-more { display: flex; justify-content: center; padding: 18px 0 6px; }
-  .load-error { margin: 14px 0 0; color: var(--danger); text-align: center; font-size: 13px; }
-  @media (max-width: 760px) { .album-layout { grid-template-columns: 1fr; } .album-sidebar, .album-results { height: auto; max-height: 62vh; min-height: 300px; } }
+  .pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 18px 0 6px; }
+  .pager span { color: var(--muted); font-size: 12px; }
+  @media (max-width: 760px) { .view-heading { align-items: stretch; flex-direction: column; } .sort-control { justify-content: flex-end; } .album-layout { grid-template-columns: 1fr; } .album-sidebar, .album-results { height: auto; max-height: 62vh; min-height: 300px; } }
 </style>

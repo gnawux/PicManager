@@ -172,6 +172,7 @@ export interface AlbumSummary {
   kind: string;
   photo_count: number;
   latest_photo_at: string | null;
+  parent_name: string | null;
 }
 
 export interface CollectionSummary {
@@ -179,6 +180,7 @@ export interface CollectionSummary {
   name: string;
   photo_count: number;
   created_at: string;
+  latest_photo_at: string | null;
 }
 
 export interface AlbumPhotoPage {

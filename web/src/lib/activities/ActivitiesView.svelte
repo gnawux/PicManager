@@ -4,6 +4,7 @@
   import type { ActivityPhotos, ActivitySummary, ActivityTrack } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
+  import { photoGridLayout, photoPageCount } from '../photos/pagination';
 
   interface Props { api: ApiClient }
   let { api }: Props = $props();
@@ -16,9 +17,10 @@
   let track = $state<ActivityTrack | null>(null);
   let photos = $state<ActivityPhotos | null>(null);
   let detailLoading = $state(false);
-  let loadingMore = $state(false);
-  let loadMoreError = $state<string | null>(null);
   let detailRequest = 0;
+  let photoRequest = 0;
+  let photoColumns = $state(4);
+  let pageSize = $state(16);
 
   onMount(() => { void reload(); });
 
@@ -43,11 +45,10 @@
     selected = activity;
     track = null;
     photos = null;
-    loadingMore = false;
-    loadMoreError = null;
+    photoRequest += 1;
     try {
       const [detail, activityTrack, photoPage] = await Promise.all([
-        api.activities.get(activity.id), api.activities.track(activity.id), api.activities.photos(activity.id, 1, 100),
+        api.activities.get(activity.id), api.activities.track(activity.id), api.activities.photos(activity.id, 1, pageSize),
       ]);
       if (request === detailRequest) [selected, track, photos] = [detail, activityTrack, photoPage];
     } catch (reason) {
@@ -57,21 +58,34 @@
     }
   }
 
-  async function loadMorePhotos() {
-    if (!selected || !photos || loadingMore || photos.photos.length >= photos.total) return;
-    const request = detailRequest;
-    loadingMore = true;
-    loadMoreError = null;
+  async function loadPhotoPage(page: number, perPage = pageSize) {
+    if (!selected) return;
+    const request = ++photoRequest;
+    const activityId = selected.id;
     try {
-      const next = await api.activities.photos(selected.id, photos.page + 1, photos.per_page);
-      if (request !== detailRequest) return;
-      const existing = new Set(photos.photos.map((photo) => photo.id));
-      photos = { ...next, photos: [...photos.photos, ...next.photos.filter((photo) => !existing.has(photo.id))] };
+      const result = await api.activities.photos(activityId, page, perPage);
+      if (request === photoRequest && selected?.id === activityId) photos = result;
     } catch (reason) {
-      if (request === detailRequest) loadMoreError = reason instanceof Error ? reason.message : String(reason);
-    } finally {
-      if (request === detailRequest) loadingMore = false;
+      if (request === photoRequest) error = reason instanceof Error ? reason.message : String(reason);
     }
+  }
+
+  function measurePhotos(node: HTMLElement) {
+    if (typeof ResizeObserver === 'undefined') return {};
+    const observer = new ResizeObserver(([entry]) => {
+      const layout = photoGridLayout(entry.contentRect.width, 4, 160, 5);
+      if (layout.columns === photoColumns) return;
+      photoColumns = layout.columns;
+      pageSize = layout.perPage;
+      if (selected && photos && photos.per_page !== pageSize) void loadPhotoPage(1, pageSize);
+    });
+    observer.observe(node);
+    return { destroy: () => observer.disconnect() };
+  }
+
+  function previousPhotoPage() { if (photos && photos.page > 1) void loadPhotoPage(photos.page - 1); }
+  function nextPhotoPage() {
+    if (photos && photos.page < photoPageCount(photos.total, photos.per_page)) void loadPhotoPage(photos.page + 1);
   }
 
   function icon(type: string) {
@@ -105,7 +119,7 @@
 </script>
 
 {#if selected}
-  <section class="activity-detail" aria-labelledby="activity-title">
+  <section class="activity-detail" aria-labelledby="activity-title" use:measurePhotos>
     <div class="detail-heading">
       <Button variant="ghost" onclick={() => { detailRequest += 1; selected = null; track = null; photos = null; }}>← 返回活动</Button>
       <div><p>{typeName(selected.activity_type)}</p><h2 id="activity-title">{selected.title ?? `${typeName(selected.activity_type)} · ${date(selected.start_time)}`}</h2></div>
@@ -135,12 +149,15 @@
         </dl>
       </div>
       <div class="activity-photos">
-        <h3>活动中的照片 <span>{photos ? `已显示 ${photos.photos.length} / ${photos.total}` : '0'}</span></h3>
+        <h3>活动中的照片 <span>{photos ? `第 ${photos.page} / ${photoPageCount(photos.total, photos.per_page)} 页 · 共 ${photos.total}` : '0'}</span></h3>
         {#if photos?.photos.length}
-          <div class="photo-grid">{#each photos.photos as photo (photo.id)}<img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`活动照片 ${photo.id}`} loading="lazy" />{/each}</div>
-          {#if loadMoreError}<p class="load-error" role="alert">载入下一页失败：{loadMoreError}</p>{/if}
-          {#if photos.photos.length < photos.total}
-            <div class="load-more"><Button disabled={loadingMore} onclick={loadMorePhotos}>{loadingMore ? '正在载入…' : '载入更多'}</Button></div>
+          <div class="photo-grid" style={`--photo-columns: ${photoColumns}`}>{#each photos.photos as photo (photo.id)}<img src={`/api/photos/${photo.id}/thumb?size=512`} alt={`活动照片 ${photo.id}`} loading="lazy" />{/each}</div>
+          {#if photoPageCount(photos.total, photos.per_page) > 1}
+            <nav class="pager" aria-label="活动照片分页">
+              <Button variant="ghost" disabled={photos.page <= 1} onclick={previousPhotoPage}>上一页</Button>
+              <span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页</span>
+              <Button variant="ghost" disabled={photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPhotoPage}>下一页</Button>
+            </nav>
           {/if}
         {:else}<p>活动时间和路线附近没有匹配的照片。</p>{/if}
       </div>
@@ -191,8 +208,8 @@
   dl div { display: flex; justify-content: space-between; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--line); } dl div:last-child { border: 0; }
   dt { color: var(--muted); font-size: 12px; } dd { margin: 0; text-align: right; }
   .activity-photos { margin-top: 30px; } .activity-photos h3 { font-size: 18px; } .activity-photos h3 span, .activity-photos p { color: var(--muted); }
-  .photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 5px; } .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; }
-  .load-more { display: flex; justify-content: center; padding: 18px 0 6px; }
-  .load-error { margin: 14px 0 0; color: var(--danger); text-align: center; font-size: 13px; }
+  .photo-grid { display: grid; grid-template-columns: repeat(var(--photo-columns), minmax(0, 1fr)); gap: 5px; } .photo-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; }
+  .pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 18px 0 6px; }
+  .pager span { color: var(--muted); font-size: 12px; }
   @media (max-width: 800px) { .activity-card { grid-template-columns: auto 1fr auto; } .stat.optional { display: none; } .stat { grid-row: 2; } .arrow { grid-column: 3; grid-row: 1 / 3; } .detail-layout { grid-template-columns: 1fr; } .route-card { min-height: 260px; } }
 </style>

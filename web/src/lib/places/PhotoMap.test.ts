@@ -48,10 +48,41 @@ describe('PhotoMap', () => {
     await fireEvent.click(screen.getByRole('button', { name: '查看此区域的 2 张照片' }));
     expect(await screen.findByAltText('地图照片 7')).toBeVisible();
     expect(screen.getByAltText('地图照片 8')).toBeVisible();
-    expect(clusterPhotos).toHaveBeenCalledWith({ west: 114, east: 114.5, south: 22, north: 22.5 });
+    expect(clusterPhotos).toHaveBeenCalledWith(
+      { west: 114, east: 114.5, south: 22, north: 22.5 }, 1, 20,
+    );
 
     await fireEvent.click(screen.getByRole('button', { name: '全屏显示地图' }));
     expect(container.querySelector('.map-shell')).toHaveClass('fullscreen');
     expect(screen.getByRole('button', { name: '退出全屏地图' })).toBeVisible();
+  });
+
+  it('pages cluster photos without growing the panel', async () => {
+    const pagedCluster = { ...cluster, photo_count: 21 };
+    const clusterPhotos = vi.fn()
+      .mockResolvedValueOnce({
+        photos: [{ id: 7, path: '/7.jpg', taken_at: null, camera: null }],
+        total: 21, page: 1, per_page: 20,
+      })
+      .mockResolvedValueOnce({
+        photos: [{ id: 8, path: '/8.jpg', taken_at: null, camera: null }],
+        total: 21, page: 2, per_page: 20,
+      });
+    const api = {
+      geo: {
+        clusters: vi.fn(async () => ({ clusters: [pagedCluster], total_photos: 21 })),
+        clusterPhotos,
+      },
+    } as unknown as ApiClient;
+    render(PhotoMap, { api, initialPage: { clusters: [pagedCluster], total_photos: 21 } });
+
+    await fireEvent.click(screen.getByRole('button', { name: '查看此区域的 21 张照片' }));
+    expect(await screen.findByAltText('地图照片 7')).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', { name: '下一页' }));
+    expect(await screen.findByAltText('地图照片 8')).toBeVisible();
+    expect(screen.queryByAltText('地图照片 7')).not.toBeInTheDocument();
+    expect(clusterPhotos).toHaveBeenLastCalledWith(
+      { west: 114, east: 114.5, south: 22, north: 22.5 }, 2, 20,
+    );
   });
 });
