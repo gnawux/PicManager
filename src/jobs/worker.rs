@@ -247,6 +247,25 @@ async fn lease_next_with_retry(
     Err(last_error.expect("lease retry records an error"))
 }
 
+async fn renew_lease_with_retry(
+    pool: &SqlitePool,
+    lease: &JobLease,
+    lease_seconds: u64,
+) -> crate::error::Result<()> {
+    let mut last_error = None;
+    for attempt in 1..=10 {
+        match renew_lease(pool, lease, lease_seconds).await {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt < 10 => {
+                last_error = Some(error);
+                tokio::time::sleep(Duration::from_millis(25 * attempt)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.expect("lease renewal retry records an error"))
+}
+
 async fn execute_leased(
     pool: &SqlitePool,
     registry: &WorkerRegistry,
@@ -282,7 +301,7 @@ async fn execute_leased(
         tokio::select! {
             result = &mut execution => break Some(result),
             _ = heartbeat.tick() => {
-                if let Err(error) = renew_lease(pool, &lease, config.lease_duration.as_secs()).await {
+                if let Err(error) = renew_lease_with_retry(pool, &lease, config.lease_duration.as_secs()).await {
                     tracing::error!(job_id = lease.job.id, "lost job lease heartbeat: {error}");
                     break None;
                 }
@@ -496,6 +515,38 @@ mod tests {
         let lease = lease.await.unwrap().unwrap().expect("queued job is leased");
         assert_eq!(lease.worker_id, "retry-worker");
         assert_eq!(lease.job.kind, "test_work");
+    }
+
+    #[tokio::test]
+    async fn heartbeat_retries_transient_writer_contention() {
+        let (pool, _directory) = pool().await;
+        enqueue(
+            &pool,
+            &NewJob::new("test_work", serde_json::json!({"index": 1})),
+        )
+        .await
+        .unwrap();
+        let lease = lease_next(&pool, "heartbeat-worker", 60)
+            .await
+            .unwrap()
+            .expect("queued job is leased");
+        let mut writer = pool.acquire().await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        let retry_pool = pool.clone();
+        let retry_lease = lease.clone();
+        let renewal = tokio::spawn(async move {
+            renew_lease_with_retry(&retry_pool, &retry_lease, 60).await
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        sqlx::query("COMMIT").execute(&mut *writer).await.unwrap();
+
+        renewal.await.unwrap().unwrap();
+        let current = get(&pool, lease.job.id).await.unwrap();
+        assert_eq!(current.status, "running");
+        assert_eq!(current.lease_owner.as_deref(), Some("heartbeat-worker"));
     }
 
     #[tokio::test]

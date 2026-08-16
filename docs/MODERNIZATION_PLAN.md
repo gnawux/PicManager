@@ -517,6 +517,8 @@ Status: complete.
   work cannot remain indefinitely marked as running.
 - M23.2: complete — verify the startup timing race, rebuild the macOS bundle and rehearse recovery
   against an isolated catalog before operating on a personal library.
+- M23.3: complete — retry transient heartbeat-write contention so a healthy long-running
+  job does not lose its lease because of one short SQLite lock.
 
 ## 9. Testing and commit protocol
 

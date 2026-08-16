@@ -116,6 +116,10 @@ marked as running forever. Worker runtimes must continue scanning for expired le
 a bounded interval. Tests must cover a lease that is valid at startup and expires only
 after workers are already polling.
 
+Lease heartbeats are writes and can encounter the same transient SQLite contention as
+progress updates and job acquisition. Retry heartbeat writes within a bounded window;
+otherwise one short lock can abandon healthy work and consume an entire retry attempt.
+
 ## Data and derived-state safety
 
 ### External IDs, filenames, labels, and paths are different concepts
