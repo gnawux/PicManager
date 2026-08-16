@@ -331,7 +331,12 @@ final class AppModel: ObservableObject {
     }
 
     func synchronizeAppleInventory() async {
-        guard !inventorySyncInProgress, let serviceExecutable else { return }
+        guard !inventorySyncInProgress else { return }
+        if serviceExecutable == nil { prepareServiceExecutable() }
+        guard let serviceExecutable else {
+            inventorySyncProgress = "Apple Photos sync cannot start: local service executable unavailable."
+            return
+        }
         inventorySyncInProgress = true
         inventorySyncProgress = "Preparing Apple Photos inventory…"
         defer { inventorySyncInProgress = false }

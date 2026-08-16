@@ -41,9 +41,10 @@ struct WebLibraryView: NSViewRepresentable {
         }
 
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard message.name == "picmanager", let body = message.body as? [String: String] else { return }
-            if body["action"] == "syncApple" { Task { await model.synchronizeAppleInventory() } }
-            if body["action"] == "configureGarmin" { model.presentGarminCredentials() }
+            guard message.name == "picmanager", let body = message.body as? [String: Any],
+                  let action = body["action"] as? String else { return }
+            if action == "syncApple" { Task { await model.synchronizeAppleInventory() } }
+            if action == "configureGarmin" { model.presentGarminCredentials() }
         }
 
         func webView(

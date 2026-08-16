@@ -16,6 +16,7 @@
   let error = $state<string | null>(null);
   let busyId = $state<number | null>(null);
   let reviewingId = $state<number | null>(null);
+  let nativeSyncRequested = $state(false);
 
   onMount(() => { void loadWorkspace(); });
 
@@ -102,20 +103,25 @@
       : value === 'failed' || value === 'missing' ? 'danger'
       : ['queued', 'downloading', 'downloaded', 'importing', 'discovered'].includes(value) ? 'warning' : 'neutral';
   }
-  function syncApple() { (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager?.postMessage({ action: 'syncApple' }); }
+  function syncApple() {
+    const bridge = (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager;
+    if (!bridge) { error = 'iCloud 同步需要从 PicManager Mac 应用的嵌入式窗口运行。'; return; }
+    bridge.postMessage({ action: 'syncApple' }); nativeSyncRequested = true;
+  }
 </script>
 
 <section aria-labelledby="apple-title">
   <div class="view-heading">
     <div><p>Apple Photos</p><h2 id="apple-title">同步清单</h2><span>逐项核对 Apple 照片图库与本地归档。</span></div>
     <form onsubmit={(event) => { event.preventDefault(); void loadWorkspace(); }}>
-      <Button type="button" onclick={syncApple}>同步 iCloud 照片</Button>
+      <Button type="button" disabled={nativeSyncRequested} onclick={syncApple}>{nativeSyncRequested ? 'iCloud 同步已开始…' : '同步 iCloud 照片'}</Button>
       <input aria-label="搜索 Apple 照片" placeholder="文件名或 Apple 标识" bind:value={search} />
       <Button type="submit">搜索</Button>
     </form>
   </div>
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if nativeSyncRequested}<p class="sync-note" role="status">PicManager 正在读取 Apple Photos；完成后可刷新此页查看同步结果。</p>{/if}
   <div class="summary" aria-label="Apple 照片同步概览">
     <button type="button" class:active={filter === 'all'} onclick={() => applyFilter('all')}><small>全部</small><strong>{Object.values(page?.status_counts ?? {}).reduce((a, b) => a + b, 0)}</strong></button>
     <button type="button" class:active={filter === 'synced'} onclick={() => applyFilter('synced')}><small>已同步</small><strong>{count('synced')}</strong></button>
@@ -172,7 +178,7 @@
   .view-heading p, .section-heading p { margin: 0 0 7px; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
   h2 { margin: 0 0 5px; font-size: 28px; } .view-heading span, .section-heading > span { color: var(--muted); }
   form { display: flex; gap: 8px; } input { width: 260px; min-height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: white; }
-  .error { padding: 10px 14px; border-radius: 10px; color: var(--danger); background: #fff0ee; }
+  .error,.sync-note { padding: 10px 14px; border-radius: 10px; color: var(--danger); background: #fff0ee; }.sync-note { color: var(--muted); background: var(--fill-subtle); }
   .summary { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 18px; }
   .summary button { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; color: var(--text); text-align: left; background: white; cursor: pointer; }
   .summary button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); } .summary small { color: var(--muted); } .summary strong { font-size: 24px; }
