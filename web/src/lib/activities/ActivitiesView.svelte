@@ -5,6 +5,7 @@
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
   import { photoGridLayout, photoPageCount } from '../photos/pagination';
+  import ActivityMap from './ActivityMap.svelte';
 
   interface Props { api: ApiClient }
   let { api }: Props = $props();
@@ -105,16 +106,15 @@
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? value : new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(parsed);
   }
-  function routePoints(activityTrack: ActivityTrack | null) {
-    const values = activityTrack?.points ?? [];
-    if (values.length < 2) return '';
-    const lats = values.map((point) => point.lat);
-    const lons = values.map((point) => point.lon);
-    const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-    const minLon = Math.min(...lons), maxLon = Math.max(...lons);
-    const latSpan = maxLat - minLat || 1;
-    const lonSpan = maxLon - minLon || 1;
-    return values.map((point) => `${40 + ((point.lon - minLon) / lonSpan) * 920},${380 - ((point.lat - minLat) / latSpan) * 340}`).join(' ');
+  function equipment(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    return value.map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const record = item as Record<string, unknown>;
+      const type = typeof record.sensor_type === 'string' ? record.sensor_type : 'equipment';
+      const name = typeof record.name === 'string' ? record.name : typeof record.manufacturer === 'string' ? record.manufacturer : type;
+      return `${type}: ${name}`;
+    }).filter((item): item is string => item !== null);
   }
 </script>
 
@@ -132,11 +132,7 @@
       <div class="detail-layout">
         <div class="route-card">
           {#if track && track.points.length > 1}
-            <svg viewBox="0 0 1000 420" role="img" aria-label={`包含 ${track.original_count} 个轨迹点的路线`}>
-              <defs><linearGradient id="route" x1="0" x2="1"><stop stop-color="#2e7de9"/><stop offset="1" stop-color="#8b5cf6"/></linearGradient></defs>
-              <path d="M0 80 C180 20 250 150 410 100 S720 40 1000 120 V420 H0Z" fill="#dce9e1" opacity=".7" />
-              <polyline points={routePoints(track)} fill="none" stroke="url(#route)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+            <ActivityMap {track} {photos} />
           {:else}<PageState kind="empty" title="这条活动没有路线数据" />{/if}
         </div>
         <dl>
@@ -146,6 +142,7 @@
           <div><dt>累计爬升</dt><dd>{selected.elevation_gain_meters ? `${Math.round(selected.elevation_gain_meters)} m` : '—'}</dd></div>
           <div><dt>平均 / 最大心率</dt><dd>{selected.avg_heart_rate ?? '—'} / {selected.max_heart_rate ?? '—'} bpm</dd></div>
           <div><dt>设备</dt><dd>{selected.device ?? '未知'} · {selected.file_format.toUpperCase()}</dd></div>
+          {#if equipment(selected.sensors).length}<div><dt>传感器 / 装备</dt><dd>{equipment(selected.sensors).join(' · ')}</dd></div>{/if}
         </dl>
       </div>
       <div class="activity-photos">
@@ -203,7 +200,6 @@
   .arrow { color: var(--muted); font-size: 30px; }
   .detail-layout { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(250px, .7fr); gap: 20px; }
   .route-card { display: grid; min-height: 350px; overflow: hidden; place-items: center; border-radius: 20px; background: linear-gradient(145deg, #dceaf5, #eff3ea); }
-  svg { width: 100%; height: 100%; }
   dl { display: grid; align-content: start; gap: 0; margin: 0; padding: 12px 20px; border: 1px solid var(--line); border-radius: 18px; background: white; }
   dl div { display: flex; justify-content: space-between; gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--line); } dl div:last-child { border: 0; }
   dt { color: var(--muted); font-size: 12px; } dd { margin: 0; text-align: right; }

@@ -594,6 +594,17 @@ Status: in progress.
 - M29.3: complete — expose policy, progress and recovery behavior in the Mac application; rehearse
   interrupted transfers and a subsequent application restart against an isolated library.
 
+### M30 - Garmin activity synchronization and map detail
+
+Status: in progress.
+
+- M30.1: replace the schematic activity route with an OpenStreetMap view that renders the
+  bounded route and matched photo markers locally.
+- M30.2: show parsed FIT sensors and non-device equipment metadata without conflating those
+  identities with the recording watch or head unit.
+- M30.3: add a local `garmin-connect` adapter with Keychain-backed Mac credentials, explicit
+  account verification and durable, idempotent FIT downloads.
+
 ## 9. Testing and commit protocol
 
 For every milestone:
