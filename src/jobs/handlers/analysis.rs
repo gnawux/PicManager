@@ -189,43 +189,81 @@ impl JobHandler for GeocodeJobHandler {
             let execution = async {
                 if payload.refresh_names {
                     crate::album::location::normalize_geo_names_with_progress(
-                        application.pool(), progress.clone(),
-                    ).await
+                        application.pool(),
+                        progress.clone(),
+                    )
+                    .await
                 } else {
                     crate::album::location::group_by_location_with_progress(
-                        application.pool(), progress.clone(),
-                    ).await
+                        application.pool(),
+                        progress.clone(),
+                    )
+                    .await
                 }
             };
             tokio::pin!(execution);
+            let mut last_published = None;
             loop {
                 tokio::select! {
                     result = &mut execution => {
                         result.map_err(|error| JobFailure::retryable("geocode_failed", error.to_string()))?;
                         break;
                     }
-                    _ = tokio::time::sleep(Duration::from_millis(250)) => {
-                        control.progress(
-                            progress.processed.load(Relaxed) as i64,
-                            Some(progress.total.load(Relaxed) as i64),
-                            Some("geocoding"),
-                        ).await.map_err(progress_failure)?;
+                    _ = tokio::time::sleep(Duration::from_secs(2)) => {
+                        if control.cancellation_requested().await.unwrap_or(false) {
+                            progress.cancellation_requested.store(true, Relaxed);
+                        }
+                        let snapshot = (
+                            progress.processed.load(Relaxed),
+                            progress.total.load(Relaxed),
+                        );
+                        if last_published != Some(snapshot) {
+                            publish_geo_progress(&control, snapshot.0, snapshot.1, "geocoding").await?;
+                            last_published = Some(snapshot);
+                        }
                     }
                 }
             }
             let total = progress.total.load(Relaxed);
             let processed = progress.processed.load(Relaxed);
+            publish_geo_progress(&control, processed, total, "completed").await?;
             control
-                .progress(processed as i64, Some(total as i64), Some("completed"))
-                .await
-                .map_err(progress_failure)?;
-            control
-                .set_result(&serde_json::json!({"processed": processed, "total": total}))
+                .set_result(&serde_json::json!({
+                    "processed_coordinates": processed,
+                    "total_coordinates": total,
+                    "updated_coordinates": progress.updated.load(Relaxed),
+                    "cache_hits": progress.cache_hits.load(Relaxed),
+                    "provider_failures": progress.provider_failures.load(Relaxed),
+                }))
                 .await
                 .map_err(result_failure)?;
             Ok(())
         })
     }
+}
+
+async fn publish_geo_progress(
+    control: &JobControl,
+    completed: usize,
+    total: usize,
+    stage: &str,
+) -> Result<(), JobFailure> {
+    let mut last_error = None;
+    for attempt in 0..3 {
+        match control
+            .progress(completed as i64, Some(total as i64), Some(stage))
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error);
+                tokio::time::sleep(Duration::from_millis(100 * (attempt + 1))).await;
+            }
+        }
+    }
+    Err(progress_failure(
+        last_error.expect("progress retry records an error"),
+    ))
 }
 
 fn analysis_payload(job: &Job) -> Result<PhotoAnalysisPayload, JobFailure> {
