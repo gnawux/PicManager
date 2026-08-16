@@ -120,6 +120,12 @@ Lease heartbeats are writes and can encounter the same transient SQLite contenti
 progress updates and job acquisition. Retry heartbeat writes within a bounded window;
 otherwise one short lock can abandon healthy work and consume an entire retry attempt.
 
+Heartbeat retries cannot compensate for a handler that owns SQLite's single writer lock
+for an entire full-library scan. Resolve expensive read scopes before beginning a write
+transaction, then apply derived-state changes in small atomic batches. This preserves
+per-photo reconciliation while leaving regular lock gaps for leases, progress and other
+interactive writes.
+
 ## Data and derived-state safety
 
 ### External IDs, filenames, labels, and paths are different concepts

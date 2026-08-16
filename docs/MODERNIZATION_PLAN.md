@@ -533,6 +533,17 @@ Status: complete.
 - M24.4: complete — qualify location albums with a unique non-null parent region while preserving
   concise names for places such as Hong Kong whose parent region is absent.
 
+### M25 - Geographic writer-lock hardening
+
+Status: complete.
+
+- M25.1: complete — resolve photos sharing a coordinate before opening a write transaction so
+  full-library coordinate scans cannot starve durable-job heartbeats.
+- M25.2: complete — reconcile derived location-album membership in bounded atomic batches,
+  preserving per-photo consistency while regularly releasing SQLite's writer lock.
+- M25.3: complete — verify duplicate-coordinate behavior in isolation and observe multiple lease
+  renewals plus forward normalization progress against the existing library.
+
 ## 9. Testing and commit protocol
 
 For every milestone:
