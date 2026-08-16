@@ -22,6 +22,8 @@
   let photoRequest = 0;
   let photoColumns = $state(4);
   let pageSize = $state(16);
+  let syncing = $state(false);
+  let mfaCode = $state('');
 
   onMount(() => { void reload(); });
 
@@ -37,6 +39,12 @@
       error = reason instanceof Error ? reason.message : String(reason);
       status = 'error';
     }
+  }
+  async function syncGarmin() {
+    syncing = true; error = null;
+    try { const result = await api.activities.syncGarmin(mfaCode || undefined); mfaCode = ''; await reload(); alert(`Garmin 同步完成：导入 ${result.downloaded} 条，跳过 ${result.skipped} 条。`); }
+    catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
+    finally { syncing = false; }
   }
 
   async function open(activity: ActivitySummary) {
@@ -164,7 +172,7 @@
   <section aria-labelledby="activities-title">
     <div class="view-heading">
       <div><p>Motion</p><h2 id="activities-title">运动与活动</h2><span>{total} 条记录</span></div>
-      <label>类型<select bind:value={typeFilter} onchange={() => { void reload(); }}><option value="">全部</option><option value="running">跑步</option><option value="cycling">骑行</option><option value="walking">步行</option><option value="hiking">徒步</option><option value="swimming">游泳</option></select></label>
+      <div class="activity-actions"><input aria-label="Garmin MFA 验证码" placeholder="MFA 验证码（如需要）" bind:value={mfaCode} /><Button disabled={syncing} onclick={() => void syncGarmin()}>{syncing ? '正在同步 Garmin…' : '同步 Garmin 数据'}</Button><label>类型<select bind:value={typeFilter} onchange={() => { void reload(); }}><option value="">全部</option><option value="running">跑步</option><option value="cycling">骑行</option><option value="walking">步行</option><option value="hiking">徒步</option><option value="swimming">游泳</option></select></label></div>
     </div>
     {#if status === 'loading'}<PageState kind="loading" title="正在载入活动" />
     {:else if status === 'error'}<PageState kind="error" title="无法读取活动" message={error ?? undefined} />
@@ -191,7 +199,7 @@
   .view-heading, .detail-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 22px; }
   .view-heading p, .detail-heading p { margin: 0 0 7px; color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
   h2 { margin: 0 0 5px; font-size: 28px; } .view-heading span { color: var(--muted); }
-  label { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; } select { min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: white; }
+  label,.activity-actions { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; } select,.activity-actions input { min-height: 38px; padding: 0 10px; border: 1px solid var(--line); border-radius: 10px; background: white; }
   .activity-list { display: grid; gap: 8px; }
   .activity-card { display: grid; grid-template-columns: auto minmax(160px, 1fr) repeat(3, minmax(100px, auto)) auto; align-items: center; gap: 18px; width: 100%; padding: 14px 18px; border: 1px solid var(--line); border-radius: 16px; color: var(--text); text-align: left; background: var(--surface-solid); cursor: pointer; }
   .activity-card:hover { border-color: rgba(23,105,224,.28); box-shadow: 0 8px 24px rgba(0,0,0,.05); }

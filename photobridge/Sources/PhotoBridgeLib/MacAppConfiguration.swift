@@ -21,6 +21,7 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
     public var launchAtLogin: Bool
     /// Metadata discovery is safe for existing libraries; downloading is always explicit.
     public var applePhotosSyncPolicy: ApplePhotosSyncPolicy
+    public var garminEmail: String?
 
     public init(
         libraryPath: String,
@@ -30,7 +31,7 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
         port: UInt16 = 8080,
         presentationMode: PhotoPresentationMode = .embedded,
         launchAtLogin: Bool = false,
-        applePhotosSyncPolicy: ApplePhotosSyncPolicy = .inventoryOnly
+        applePhotosSyncPolicy: ApplePhotosSyncPolicy = .inventoryOnly, garminEmail: String? = nil
     ) {
         self.libraryPath = libraryPath
         self.libraryBookmark = libraryBookmark
@@ -40,11 +41,12 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
         self.presentationMode = presentationMode
         self.launchAtLogin = launchAtLogin
         self.applePhotosSyncPolicy = applePhotosSyncPolicy
+        self.garminEmail = garminEmail
     }
 
     private enum CodingKeys: String, CodingKey {
         case libraryPath, libraryBookmark, serviceExecutablePath, host, port
-        case presentationMode, launchAtLogin, applePhotosSyncPolicy
+        case presentationMode, launchAtLogin, applePhotosSyncPolicy, garminEmail
     }
 
     public init(from decoder: Decoder) throws {
@@ -57,6 +59,7 @@ public struct MacAppConfiguration: Codable, Equatable, Sendable {
         presentationMode = try values.decodeIfPresent(PhotoPresentationMode.self, forKey: .presentationMode) ?? .embedded
         launchAtLogin = try values.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? false
         applePhotosSyncPolicy = try values.decodeIfPresent(ApplePhotosSyncPolicy.self, forKey: .applePhotosSyncPolicy) ?? .inventoryOnly
+        garminEmail = try values.decodeIfPresent(String.self, forKey: .garminEmail)
     }
 
     public static var `default`: MacAppConfiguration {

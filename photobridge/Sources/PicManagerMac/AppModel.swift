@@ -236,7 +236,8 @@ final class AppModel: ObservableObject {
                 // No compatible service is listening, so start the owned service below.
             }
         }
-        serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration)
+        let garminPassword = try? GarminKeychain.password()
+        serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration, garminPassword: garminPassword ?? nil)
         serviceStatus = "Preparing library"
         lastError = nil
         return await waitForServiceReadiness(at: configuration.serviceURL)

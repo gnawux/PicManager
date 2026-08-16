@@ -314,6 +314,7 @@ private struct OnboardingAssistant: View {
 
 private struct ConfigurationView: View {
     @ObservedObject var model: AppModel
+    @State private var garminPassword = ""
 
     var body: some View {
         Form {
@@ -332,6 +333,16 @@ private struct ConfigurationView: View {
                 Text("System browser").tag(PhotoPresentationMode.systemBrowser)
             }
             Toggle("Launch PicManager at login", isOn: $model.configuration.launchAtLogin)
+            Section("Garmin Connect China") {
+                TextField("Garmin account", text: Binding(get: { model.configuration.garminEmail ?? "" }, set: { model.configuration.garminEmail = $0.isEmpty ? nil : $0 }))
+                SecureField("Garmin password", text: $garminPassword)
+                Text("密码仅保存到 macOS Keychain。同步活动时，如 Garmin 要求验证，请在活动页填写一次性 MFA 验证码。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Save Garmin credentials") {
+                    do { if !garminPassword.isEmpty { try GarminKeychain.save(password: garminPassword); garminPassword = "" }; model.saveConfiguration() }
+                    catch { model.lastError = error.localizedDescription }
+                }
+            }
             Picker("Apple Photos sync", selection: $model.configuration.applePhotosSyncPolicy) {
                 Text("Off").tag(ApplePhotosSyncPolicy.disabled)
                 Text("Discover new photos").tag(ApplePhotosSyncPolicy.inventoryOnly)

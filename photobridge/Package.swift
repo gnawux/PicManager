@@ -18,6 +18,7 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Photos"),
                 .linkedFramework("CFNetwork"),
+                .linkedFramework("Security"),
             ]
         ),
         // CLI executable

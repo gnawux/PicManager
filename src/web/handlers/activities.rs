@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use crate::activities::{importer, rdp};
 use crate::web::AppState;
+use std::process::Stdio;
+use tokio::process::Command;
 
 const RDP_THRESHOLD: usize = 7200;
 const RDP_EPSILON: f64 = 1e-5; // ~1 m in degrees
@@ -94,6 +96,20 @@ pub struct ActivityPhotosQuery {
     page: u32,
     #[serde(default = "default_per_page")]
     per_page: u32,
+}
+#[derive(Debug, Deserialize)]
+pub struct GarminSyncRequest { pub mfa_code: Option<String> }
+
+pub async fn sync_garmin_activities(State(state): State<AppState>, Json(request): Json<GarminSyncRequest>) -> Result<Json<serde_json::Value>, StatusCode> {
+    let email = std::env::var("PICMANAGER_GARMIN_EMAIL").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
+    let password = std::env::var("PICMANAGER_GARMIN_PASSWORD").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
+    let python = std::env::var("PICMANAGER_GARMIN_PYTHON").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
+    let helper = std::env::var("PICMANAGER_GARMIN_HELPER").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
+    let root = state.config.activities_dir().join(".garmin"); let downloads = root.join("downloads"); let journal = root.join("journal.json");
+    let output = Command::new(python).arg(helper).arg("--output").arg(&downloads).arg("--state").arg(&journal).arg("--email").arg(email).arg("--password").arg(password).args(request.mfa_code.as_deref().map(|code| vec!["--mfa", code]).unwrap_or_default()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    if !output.status.success() { return Err(StatusCode::UNAUTHORIZED); }
+    let summary = importer::import_dir_activities(&state.pool, &downloads, &state.config.activities_dir(), false).await;
+    Ok(Json(serde_json::json!({"downloaded": summary.imported, "skipped": summary.skipped})))
 }
 
 pub async fn list_activities(

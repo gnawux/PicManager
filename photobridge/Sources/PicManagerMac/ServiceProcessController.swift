@@ -17,6 +17,7 @@ final class ServiceProcessController {
     private let logCapture: ServiceLogCapture
     private var outputPipe: Pipe?
     private var errorPipe: Pipe?
+    private var garminPassword: String?
 
     init(
         restartPolicy: ServiceRestartPolicy = ServiceRestartPolicy(),
@@ -27,14 +28,16 @@ final class ServiceProcessController {
         logCapture = ServiceLogCapture(logURL: logURL)
     }
 
-    func start(executableURL: URL, configuration: MacAppConfiguration) {
+    func start(executableURL: URL, configuration: MacAppConfiguration, garminPassword: String?) {
         guard process == nil else { return }
         launchConfiguration = LaunchConfiguration(
             executableURL: executableURL,
             libraryPath: configuration.libraryPath,
             host: configuration.host,
-            port: configuration.port
+            port: configuration.port,
+            garminEmail: configuration.garminEmail
         )
+        self.garminPassword = garminPassword
         logCapture.configure(libraryPath: configuration.libraryPath)
         requestedStop = false
         restartAttempt = 0
@@ -65,6 +68,12 @@ final class ServiceProcessController {
         environment["PICMANAGER_LIBRARY_PATH"] = launchConfiguration.libraryPath
         environment["PICMANAGER_HOST"] = launchConfiguration.host
         environment["PICMANAGER_PORT"] = String(launchConfiguration.port)
+        if let email = launchConfiguration.garminEmail, let garminPassword {
+            environment["PICMANAGER_GARMIN_EMAIL"] = email
+            environment["PICMANAGER_GARMIN_PASSWORD"] = garminPassword
+            environment["PICMANAGER_GARMIN_HELPER"] = Bundle.main.resourceURL!.appendingPathComponent("garmin_sync.py").path
+            environment["PICMANAGER_GARMIN_PYTHON"] = Bundle.main.resourceURL!.appendingPathComponent("python/bin/python3").path
+        }
         process.environment = environment
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -121,4 +130,5 @@ private struct LaunchConfiguration {
     let libraryPath: String
     let host: String
     let port: UInt16
+    let garminEmail: String?
 }
