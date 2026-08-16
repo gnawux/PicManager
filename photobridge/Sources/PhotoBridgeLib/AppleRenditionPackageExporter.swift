@@ -23,11 +23,6 @@ public enum AppleRenditionPackageError: Error, LocalizedError {
 /// catalog. The Rust service verifies and commits this package atomically afterwards.
 @available(macOS 13, *)
 public func exportAppleRenditionPackage(identifier: String, destination: URL) async throws {
-    // Keep the native path on the same full-access contract as `photobridge
-    // export-asset`. Inventory metadata can be read with limited access, while
-    // original-resource export cannot reliably do so.
-    let authorization = try await requestPhotoLibraryAccess()
-    if case .limited = authorization { throw AuthError.limited }
     let manifestURL = destination.appendingPathComponent("manifest.json")
     if FileManager.default.fileExists(atPath: destination.path) {
         guard FileManager.default.fileExists(atPath: manifestURL.path) else {

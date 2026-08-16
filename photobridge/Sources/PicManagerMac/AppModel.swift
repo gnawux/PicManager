@@ -2,10 +2,12 @@ import Foundation
 import AppKit
 import Photos
 import UniformTypeIdentifiers
+import OSLog
 import PhotoBridgeLib
 
 @MainActor
 final class AppModel: ObservableObject {
+    private let appleSyncLog = Logger(subsystem: "io.picmanager.mac", category: "apple-sync")
     @Published var configuration: MacAppConfiguration
     @Published var serviceStatus = "Stopped"
     @Published var lastError: String?
@@ -378,6 +380,7 @@ final class AppModel: ObservableObject {
             .appendingPathComponent(".sync-staging/apple", isDirectory: true)
         for index in 0..<maximum {
             guard let claim = try await client.claimAppleExport(workerID: workerID) else { break }
+            appleSyncLog.info("claimed Apple export item \(claim.itemID, privacy: .public)")
             let package = staging.appendingPathComponent("source-\(claim.source.id)", isDirectory: true)
             inventorySyncProgress = "Downloading Apple Photo \(index + 1) of up to \(maximum)…"
             let heartbeat = Task {
@@ -387,6 +390,10 @@ final class AppModel: ObservableObject {
                 }
             }
             do {
+                appleSyncLog.info("checking Apple Photos authorization")
+                let authorization = try await requestPhotoLibraryAccess()
+                if case .limited = authorization { throw AuthError.limited }
+                appleSyncLog.info("starting Apple resource export")
                 // PhotoKit's synchronous asset lookup must not inherit the app
                 // main actor. The command-line exporter runs off the main actor;
                 // keeping the same execution context here avoids a stalled
@@ -396,10 +403,12 @@ final class AppModel: ObservableObject {
                     try await exportAppleRenditionPackage(identifier: identifier, destination: package)
                 }.value
                 try await client.commitAppleExport(sourceID: claim.source.id, workerID: workerID, packageURL: package)
+                appleSyncLog.info("committed Apple rendition package")
                 try? FileManager.default.removeItem(at: package)
             } catch {
                 heartbeat.cancel()
                 let message = error.localizedDescription
+                appleSyncLog.error("Apple export failed: \(message, privacy: .public)")
                 try? await client.failAppleExport(itemID: claim.itemID, workerID: workerID, error: message)
                 try? FileManager.default.removeItem(at: package)
                 inventorySyncProgress = "Apple Photos export failed; continuing with the next item."
