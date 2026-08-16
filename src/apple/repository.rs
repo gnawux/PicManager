@@ -28,6 +28,8 @@ pub struct AppleSourcePage {
     pub status_counts: BTreeMap<String, i64>,
     pub next_before_id: Option<i64>,
 }
+#[derive(Debug, Clone, Serialize)]
+pub struct AppleExportClaim { pub item_id: i64, pub source: AppleSourceView }
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct AppleLinkCandidate {
@@ -112,6 +114,23 @@ pub async fn get_source(pool: &SqlitePool, source_id: i64) -> Result<AppleSource
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound(format!("Apple Photos source {source_id}")))
+}
+pub async fn claim_next_export(pool: &SqlitePool, worker: &str, lease_seconds: u32) -> Result<Option<AppleExportClaim>> {
+    let mut tx = pool.begin().await?;
+    let item: Option<(i64, i64)> = sqlx::query_as("SELECT i.id, i.source_id FROM sync_items i JOIN asset_sources s ON s.id = i.source_id WHERE i.status = 'queued' AND i.available_at <= datetime('now') AND i.operation = 'export_original' AND s.provider = 'apple_photos' ORDER BY i.available_at, i.id LIMIT 1").fetch_optional(&mut *tx).await?;
+    let Some((item_id, source_id)) = item else { tx.commit().await?; return Ok(None); };
+    let modifier = format!("+{} seconds", lease_seconds.clamp(60, 3600));
+    sqlx::query("UPDATE sync_items SET status = 'leased', attempt_count = attempt_count + 1, lease_owner = ?, lease_expires_at = datetime('now', ?), started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now') WHERE id = ? AND status = 'queued'").bind(worker).bind(modifier).bind(item_id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE asset_sources SET sync_status = 'downloading', last_error = NULL, updated_at = datetime('now') WHERE id = ?").bind(source_id).execute(&mut *tx).await?;
+    sqlx::query("UPDATE sync_jobs SET status = 'running', started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now') WHERE id = (SELECT job_id FROM sync_items WHERE id = ?)").bind(item_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(Some(AppleExportClaim { item_id, source: get_source(pool, source_id).await? }))
+}
+pub async fn renew_export_lease(pool: &SqlitePool, item_id: i64, worker: &str, lease_seconds: u32) -> Result<()> {
+    let modifier = format!("+{} seconds", lease_seconds.clamp(60, 3600));
+    let result = sqlx::query("UPDATE sync_items SET lease_expires_at = datetime('now', ?), updated_at = datetime('now') WHERE id = ? AND status = 'leased' AND lease_owner = ?").bind(modifier).bind(item_id).bind(worker).execute(pool).await?;
+    if result.rows_affected() == 0 { return Err(AppError::NotFound("Apple export lease".into())); }
+    Ok(())
 }
 
 pub async fn retry_source(pool: &SqlitePool, source_id: i64) -> Result<(i64, AppleSourceView)> {

@@ -340,11 +340,42 @@ final class AppModel: ObservableObject {
                 inventoryURL: inventoryURL,
                 libraryPath: configuration.libraryPath
             ))
+            if configuration.applePhotosSyncPolicy == .importNew {
+                try await synchronizeQueuedAppleExports(maximum: 3)
+            }
             inventorySyncProgress = "Apple Photos inventory is up to date."
             await refreshDashboard()
         } catch {
             inventorySyncProgress = "Inventory refresh failed."
             lastError = error.localizedDescription
+        }
+    }
+
+    private func synchronizeQueuedAppleExports(maximum: Int) async throws {
+        guard let serviceURL = configuration.serviceURL else { return }
+        let client = dashboardClient(baseURL: serviceURL)
+        let workerID = "mac-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)"
+        let staging = URL(fileURLWithPath: configuration.libraryPath, isDirectory: true)
+            .appendingPathComponent(".sync-staging/apple", isDirectory: true)
+        for index in 0..<maximum {
+            guard let claim = try await client.claimAppleExport(workerID: workerID) else { break }
+            let package = staging.appendingPathComponent("source-\(claim.source.id)", isDirectory: true)
+            inventorySyncProgress = "Downloading Apple Photo \(index + 1) of up to \(maximum)…"
+            let heartbeat = Task {
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(45))
+                    try? await client.renewAppleExport(itemID: claim.itemID, workerID: workerID)
+                }
+            }
+            do {
+                try await exportAppleRenditionPackage(identifier: claim.source.externalID, destination: package)
+                try await client.commitAppleExport(sourceID: claim.source.id, workerID: workerID, packageURL: package)
+                try? FileManager.default.removeItem(at: package)
+            } catch {
+                heartbeat.cancel()
+                throw error
+            }
+            heartbeat.cancel()
         }
     }
 

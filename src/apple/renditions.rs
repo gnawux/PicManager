@@ -60,6 +60,9 @@ pub async fn commit_rendition_package(
     source_id: i64,
     package_dir: &Path,
 ) -> Result<RenditionCommit> {
+    commit_rendition_package_for_lease(pool, source_id, package_dir, None).await
+}
+pub async fn commit_rendition_package_for_lease(pool: &SqlitePool, source_id: i64, package_dir: &Path, lease_owner: Option<&str>) -> Result<RenditionCommit> {
     let manifest_text = std::fs::read_to_string(package_dir.join("manifest.json"))?;
     let manifest: RenditionPackageManifest = serde_json::from_str(&manifest_text)
         .map_err(|error| AppError::Metadata(format!("invalid rendition manifest: {error}")))?;
@@ -254,6 +257,12 @@ pub async fn commit_rendition_package(
         "UPDATE asset_sources SET sync_status = 'ready', exclusion_reason = NULL, last_error = NULL, \
          updated_at = datetime('now') WHERE id = ?",
     ).bind(source_id).execute(&mut *tx).await?;
+    if let Some(worker) = lease_owner {
+        let result = sqlx::query("UPDATE sync_items SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, finished_at = datetime('now'), updated_at = datetime('now') WHERE source_id = ? AND operation = 'export_original' AND status = 'leased' AND lease_owner = ?").bind(source_id).bind(worker).execute(&mut *tx).await?;
+        if result.rows_affected() != 1 { return Err(AppError::Metadata("Apple export lease is no longer active".into())); }
+        let job_id: i64 = sqlx::query_scalar("SELECT job_id FROM sync_items WHERE source_id = ? AND operation = 'export_original' ORDER BY id DESC LIMIT 1").bind(source_id).fetch_one(&mut *tx).await?;
+        sqlx::query("UPDATE sync_jobs SET completed_items = (SELECT COUNT(*) FROM sync_items WHERE job_id = ? AND status IN ('succeeded', 'excluded', 'cancelled')), failed_items = (SELECT COUNT(*) FROM sync_items WHERE job_id = ? AND status = 'failed'), status = CASE WHEN EXISTS(SELECT 1 FROM sync_items WHERE job_id = ? AND status IN ('queued', 'leased')) THEN 'running' WHEN EXISTS(SELECT 1 FROM sync_items WHERE job_id = ? AND status = 'failed') THEN 'failed' ELSE 'completed' END, finished_at = CASE WHEN EXISTS(SELECT 1 FROM sync_items WHERE job_id = ? AND status IN ('queued', 'leased')) THEN NULL ELSE datetime('now') END, updated_at = datetime('now') WHERE id = ?").bind(job_id).bind(job_id).bind(job_id).bind(job_id).bind(job_id).bind(job_id).execute(&mut *tx).await?;
+    }
     tx.commit().await?;
 
     Ok(RenditionCommit {

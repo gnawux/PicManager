@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -36,6 +37,8 @@ pub(crate) struct CandidateQuery {
 pub(crate) struct ReviewRequest {
     accept: bool,
 }
+#[derive(Debug, Deserialize)] pub(crate) struct AppleExportWorkerRequest { worker_id: String }
+#[derive(Debug, Deserialize)] pub(crate) struct AppleExportCommitRequest { worker_id: String, package_path: PathBuf }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct ReviewResponse {
@@ -103,6 +106,19 @@ pub(crate) async fn retry_apple_source(
 ) -> Result<Json<RetryResponse>, AppleApiError> {
     let (job_id, source) = apple::retry_source(&state.pool, id).await?;
     Ok(Json(RetryResponse { job_id, source }))
+}
+pub(crate) async fn claim_apple_export(State(state): State<AppState>, Json(body): Json<AppleExportWorkerRequest>) -> Result<Json<Option<apple::AppleExportClaim>>, AppleApiError> {
+    if body.worker_id.is_empty() { return Err(AppError::Metadata("Apple export worker is required".into()).into()); }
+    Ok(Json(apple::claim_next_export(&state.pool, &body.worker_id, 300).await?))
+}
+pub(crate) async fn renew_apple_export(State(state): State<AppState>, Path(item_id): Path<i64>, Json(body): Json<AppleExportWorkerRequest>) -> Result<StatusCode, AppleApiError> {
+    apple::renew_export_lease(&state.pool, item_id, &body.worker_id, 300).await?; Ok(StatusCode::NO_CONTENT)
+}
+pub(crate) async fn commit_apple_export(State(state): State<AppState>, Path(source_id): Path<i64>, Json(body): Json<AppleExportCommitRequest>) -> Result<Json<apple::RenditionCommit>, AppleApiError> {
+    let staging = std::fs::canonicalize(state.config.library_path.join(".sync-staging/apple")).map_err(|_| AppError::Metadata("Apple export staging is unavailable".into()))?;
+    let package = std::fs::canonicalize(&body.package_path).map_err(|_| AppError::Metadata("Apple export package is unavailable".into()))?;
+    if !package.starts_with(&staging) { return Err(AppError::Metadata("Apple export package is outside the managed staging area".into()).into()); }
+    Ok(Json(apple::commit_rendition_package_for_lease(&state.pool, source_id, &package, Some(&body.worker_id)).await?))
 }
 
 pub(crate) async fn list_apple_candidates(

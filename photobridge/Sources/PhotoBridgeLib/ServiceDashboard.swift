@@ -76,6 +76,11 @@ public struct AppleSourcePage: Decodable, Equatable, Sendable {
     public let nextBeforeID: Int?
 }
 
+public struct AppleExportClaim: Decodable, Equatable, Sendable {
+    public let itemID: Int
+    public let source: AppleSource
+}
+
 public struct ApplePhotoInventory: Equatable, Sendable {
     public let imageCount: Int
     public let videoCount: Int
@@ -198,6 +203,21 @@ public struct ServiceDashboardClient: Sendable {
         try await get("api/apple/sources?status=\(status)&limit=\(min(max(limit, 1), 100))")
     }
 
+    public func claimAppleExport(workerID: String) async throws -> AppleExportClaim? {
+        try await request("api/apple/exports/claim", method: "POST", body: AppleExportWorker(workerID: workerID))
+    }
+
+    public func renewAppleExport(itemID: Int, workerID: String) async throws {
+        try await requestNoContent("api/apple/exports/\(itemID)/renew", body: AppleExportWorker(workerID: workerID))
+    }
+
+    public func commitAppleExport(sourceID: Int, workerID: String, packageURL: URL) async throws {
+        let _: AppleExportCommit = try await request(
+            "api/apple/sources/\(sourceID)/commit-package", method: "POST",
+            body: AppleExportCommitRequest(workerID: workerID, packagePath: packageURL.path)
+        )
+    }
+
     private func get<Response: Decodable & Sendable>(_ path: String) async throws -> Response {
         try await request(path, method: "GET")
     }
@@ -219,4 +239,37 @@ public struct ServiceDashboardClient: Sendable {
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(Response.self, from: data)
     }
+
+    private func request<Response: Decodable & Sendable, Body: Encodable>(
+        _ path: String, method: String, body: Body
+    ) async throws -> Response {
+        guard let url = URL(string: path, relativeTo: baseURL) else { throw ServiceDashboardError.invalidBaseURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ServiceDashboardError.response((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(Response.self, from: data)
+    }
+
+    private func requestNoContent<Body: Encodable>(_ path: String, body: Body) async throws {
+        guard let url = URL(string: path, relativeTo: baseURL) else { throw ServiceDashboardError.invalidBaseURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(body)
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ServiceDashboardError.response((response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+    }
 }
+
+private struct AppleExportWorker: Encodable { let workerID: String }
+private struct AppleExportCommitRequest: Encodable { let workerID: String; let packagePath: String }
+private struct AppleExportCommit: Decodable, Sendable {}
