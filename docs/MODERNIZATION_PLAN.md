@@ -591,7 +591,7 @@ Status: in progress.
   Existing installations discover inventory only by default; downloading remains opt-in.
 - M29.2: complete — lease queued Apple export work through the owned service, export PhotoKit rendition
   packages into recoverable staging, and atomically commit package plus durable work state.
-- M29.3: expose policy, progress and recovery behavior in the Mac application; rehearse
+- M29.3: complete — expose policy, progress and recovery behavior in the Mac application; rehearse
   interrupted transfers and a subsequent application restart against an isolated library.
 
 ## 9. Testing and commit protocol

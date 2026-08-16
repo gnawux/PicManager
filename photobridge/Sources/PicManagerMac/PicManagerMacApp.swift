@@ -28,6 +28,7 @@ private struct MenuBarContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        Group {
         Text("Service: \(model.serviceStatus)")
         if let dashboard = model.dashboard {
             Text("Tasks: \(dashboard.metrics.running) running, \(dashboard.metrics.queued) queued")
@@ -57,6 +58,15 @@ private struct MenuBarContent: View {
         SettingsLink { Text("Settings…") }
         Divider()
         Button("Quit PicManager") { NSApplication.shared.terminate(nil) }
+        }
+        .task {
+            guard !model.onboardingRequired else { return }
+            if await model.ensureServiceRunning() {
+                await model.refreshDashboard()
+                model.startHealthMonitoring()
+                model.startAppleSyncMonitoring()
+            }
+        }
     }
 }
 
