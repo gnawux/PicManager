@@ -4,7 +4,7 @@ import type { ApiClient } from '../api/client';
 import AlbumsView from './AlbumsView.svelte';
 
 describe('AlbumsView', () => {
-  it('browses smart albums and creates curated collections', async () => {
+  it('groups albums in a split view, browses photos, and creates collections', async () => {
     const listCollections = vi.fn()
       .mockResolvedValueOnce([{ id: 8, name: '家人', photo_count: 3, created_at: '2024-01-01' }])
       .mockResolvedValueOnce([
@@ -18,7 +18,11 @@ describe('AlbumsView', () => {
     }));
     const api = {
       albums: {
-        list: vi.fn(async () => [{ id: 2, name: '2024年1月', kind: 'month', photo_count: 1, latest_photo_at: '2024-01-01' }]),
+        list: vi.fn(async () => [
+          { id: 2, name: '2024年1月', kind: 'month', photo_count: 1, latest_photo_at: '2024-01-01' },
+          { id: 3, name: '上海', kind: 'location', photo_count: 12, latest_photo_at: '2024-01-02' },
+          { id: 4, name: 'Leica Q', kind: 'camera', photo_count: 5, latest_photo_at: '2024-01-03' },
+        ]),
         photos: albumPhotos,
       },
       collections: {
@@ -29,12 +33,16 @@ describe('AlbumsView', () => {
     } as unknown as ApiClient;
     render(AlbumsView, { api });
 
+    expect(await screen.findByRole('complementary', { name: '相册导航' })).toBeVisible();
+    expect(screen.getByText('按月份')).toBeVisible();
+    expect(screen.getByText('按地点')).toBeVisible();
+    expect(screen.getByText('按相机')).toBeVisible();
     expect(await screen.findByRole('button', { name: /2024年1月/ })).toBeVisible();
     expect(screen.getByRole('button', { name: /家人/ })).toBeVisible();
     await fireEvent.click(screen.getByRole('button', { name: /2024年1月/ }));
     expect(await screen.findByAltText('照片 42')).toHaveAttribute('src', '/api/photos/42/thumb?size=512');
     expect(albumPhotos).toHaveBeenCalledWith(2);
-    await fireEvent.click(screen.getByRole('button', { name: /返回相册/ }));
+    expect(screen.getByRole('button', { name: /2024年1月/ })).toBeVisible();
 
     await fireEvent.input(screen.getByRole('textbox', { name: '新精选集名称' }), { target: { value: '旅行' } });
     await fireEvent.click(screen.getByRole('button', { name: '创建' }));
