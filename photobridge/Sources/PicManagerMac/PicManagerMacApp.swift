@@ -128,7 +128,7 @@ private struct LibraryPresentationView: View {
             }
         }
         .sheet(isPresented: $showingStatus) {
-            DashboardView(model: model)
+            DashboardView(model: model, showsCloseButton: true)
                 .frame(minWidth: 760, minHeight: 520)
         }
     }
@@ -137,6 +137,8 @@ private struct LibraryPresentationView: View {
 private struct DashboardView: View {
     @ObservedObject var model: AppModel
     var showsBrowserButton = false
+    var showsCloseButton = false
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
@@ -154,6 +156,10 @@ private struct DashboardView: View {
                             .buttonStyle(.borderedProminent)
                     }
                     Button("Refresh") { Task { await model.refreshDashboard() } }
+                    if showsCloseButton {
+                        Button("Close") { dismiss() }
+                            .keyboardShortcut(.cancelAction)
+                    }
                 }
                 HStack(alignment: .top, spacing: 16) {
                     inventoryCard
