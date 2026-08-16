@@ -399,7 +399,11 @@ final class AppModel: ObservableObject {
                 try? FileManager.default.removeItem(at: package)
             } catch {
                 heartbeat.cancel()
-                throw error
+                let message = error.localizedDescription
+                try? await client.failAppleExport(itemID: claim.itemID, workerID: workerID, error: message)
+                try? FileManager.default.removeItem(at: package)
+                inventorySyncProgress = "Apple Photos export failed; continuing with the next item."
+                continue
             }
             heartbeat.cancel()
         }

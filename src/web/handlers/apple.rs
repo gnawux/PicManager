@@ -38,6 +38,7 @@ pub(crate) struct ReviewRequest {
     accept: bool,
 }
 #[derive(Debug, Deserialize)] pub(crate) struct AppleExportWorkerRequest { worker_id: String }
+#[derive(Debug, Deserialize)] pub(crate) struct AppleExportFailureRequest { worker_id: String, error: String }
 #[derive(Debug, Deserialize)] pub(crate) struct AppleExportCommitRequest { worker_id: String, package_path: PathBuf }
 
 #[derive(Debug, Serialize)]
@@ -113,6 +114,9 @@ pub(crate) async fn claim_apple_export(State(state): State<AppState>, Json(body)
 }
 pub(crate) async fn renew_apple_export(State(state): State<AppState>, Path(item_id): Path<i64>, Json(body): Json<AppleExportWorkerRequest>) -> Result<StatusCode, AppleApiError> {
     apple::renew_export_lease(&state.pool, item_id, &body.worker_id, 300).await?; Ok(StatusCode::NO_CONTENT)
+}
+pub(crate) async fn fail_apple_export(State(state): State<AppState>, Path(item_id): Path<i64>, Json(body): Json<AppleExportFailureRequest>) -> Result<StatusCode, AppleApiError> {
+    apple::fail_export(&state.pool, item_id, &body.worker_id, &body.error).await?; Ok(StatusCode::NO_CONTENT)
 }
 pub(crate) async fn commit_apple_export(State(state): State<AppState>, Path(source_id): Path<i64>, Json(body): Json<AppleExportCommitRequest>) -> Result<Json<apple::RenditionCommit>, AppleApiError> {
     let staging = std::fs::canonicalize(state.config.library_path.join(".sync-staging/apple")).map_err(|_| AppError::Metadata("Apple export staging is unavailable".into()))?;

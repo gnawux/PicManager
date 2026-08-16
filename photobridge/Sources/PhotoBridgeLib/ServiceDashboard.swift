@@ -210,6 +210,9 @@ public struct ServiceDashboardClient: Sendable {
     public func renewAppleExport(itemID: Int, workerID: String) async throws {
         try await requestNoContent("api/apple/exports/\(itemID)/renew", body: AppleExportWorker(workerID: workerID))
     }
+    public func failAppleExport(itemID: Int, workerID: String, error: String) async throws {
+        try await requestNoContent("api/apple/exports/\(itemID)/fail", body: AppleExportFailure(workerID: workerID, error: error))
+    }
 
     public func commitAppleExport(sourceID: Int, workerID: String, packageURL: URL) async throws {
         let _: AppleExportCommit = try await request(
@@ -278,5 +281,6 @@ public struct ServiceDashboardClient: Sendable {
 }
 
 private struct AppleExportWorker: Encodable { let workerID: String }
+private struct AppleExportFailure: Encodable { let workerID: String; let error: String }
 private struct AppleExportCommitRequest: Encodable { let workerID: String; let packagePath: String }
 private struct AppleExportCommit: Decodable, Sendable {}

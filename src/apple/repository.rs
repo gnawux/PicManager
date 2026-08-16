@@ -132,6 +132,13 @@ pub async fn renew_export_lease(pool: &SqlitePool, item_id: i64, worker: &str, l
     if result.rows_affected() == 0 { return Err(AppError::NotFound("Apple export lease".into())); }
     Ok(())
 }
+pub async fn fail_export(pool: &SqlitePool, item_id: i64, worker: &str, error: &str) -> Result<()> {
+    let retrying = crate::sync::fail_item(pool, item_id, worker, error).await?;
+    let status = if retrying { "queued" } else { "failed" };
+    sqlx::query("UPDATE asset_sources SET sync_status = ?, last_error = ?, updated_at = datetime('now') WHERE id = (SELECT source_id FROM sync_items WHERE id = ?)")
+        .bind(status).bind(error).bind(item_id).execute(pool).await?;
+    Ok(())
+}
 
 pub async fn retry_source(pool: &SqlitePool, source_id: i64) -> Result<(i64, AppleSourceView)> {
     let mut tx = pool.begin().await?;

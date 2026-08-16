@@ -13,7 +13,7 @@ use crate::application::{Application, CallerKind};
 use embed::static_handler;
 use handlers::{
     activities::{list_activities, get_activity, get_activity_track, get_activity_photos, sync_garmin_activities, trim_activity, merge_activities},
-    apple::{claim_apple_export, commit_apple_export, list_apple_candidates, list_apple_sources, renew_apple_export, retry_apple_source, review_apple_candidate},
+    apple::{claim_apple_export, commit_apple_export, fail_apple_export, list_apple_candidates, list_apple_sources, renew_apple_export, retry_apple_source, review_apple_candidate},
     albums::{list_albums, list_album_photos, merge_albums},
     collections::{list_collections, create_collection, rename_collection, delete_collection, add_photos, remove_photos, list_collection_photos},
     animals::{list_species, list_species_photos, list_photo_animals},
@@ -89,6 +89,7 @@ fn router_with_application(
         .route("/api/apple/sources", get(list_apple_sources))
         .route("/api/apple/exports/claim", post(claim_apple_export))
         .route("/api/apple/exports/{item_id}/renew", post(renew_apple_export))
+        .route("/api/apple/exports/{item_id}/fail", post(fail_apple_export))
         .route("/api/apple/sources/{id}/commit-package", post(commit_apple_export))
         .route("/api/apple/sources/{id}/retry", post(retry_apple_source))
         .route("/api/apple/link-candidates", get(list_apple_candidates))
@@ -174,6 +175,18 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
             "background library reconciliation could not be scheduled"
         ),
     }
+    let sync_recovery_pool = pool.clone();
+    let sync_recovery = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            match crate::sync::recover_expired_leases(&sync_recovery_pool).await {
+                Ok(0) => {}
+                Ok(count) => tracing::warn!(count, "recovered expired sync item leases"),
+                Err(error) => tracing::error!(%error, "failed to recover expired sync item leases"),
+            }
+        }
+    });
     let worker = crate::jobs::WorkerRuntime::new(
         pool,
         crate::jobs::handlers::registry(application.clone()),
@@ -183,13 +196,16 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
     .start();
     let app = router_with_application(application, None);
     println!("Web 服务启动：http://{addr}");
-    axum::serve(listener, app)
+    let server = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             if let Err(error) = tokio::signal::ctrl_c().await {
                 tracing::error!("failed to listen for shutdown signal: {error}");
             }
         })
-        .await?;
+        .await;
+    sync_recovery.abort();
+    let _ = sync_recovery.await;
+    server?;
     if !worker.shutdown().await {
         tracing::warn!("application workers did not stop within the shutdown timeout");
     }
