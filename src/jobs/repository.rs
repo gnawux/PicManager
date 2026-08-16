@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 
 use crate::error::{AppError, Result};
@@ -457,15 +459,25 @@ async fn finish(
 }
 
 pub async fn recover_expired(pool: &SqlitePool) -> Result<u64> {
+    recover_expired_excluding(pool, &HashSet::new()).await
+}
+
+pub(crate) async fn recover_expired_excluding(
+    pool: &SqlitePool,
+    active_owners: &HashSet<String>,
+) -> Result<u64> {
     let mut tx = pool.begin().await?;
-    let expired: Vec<(i64, i64, i64, Option<String>)> = sqlx::query_as(
-        "SELECT id, attempt_count, max_attempts, cancel_requested_at \
+    let expired: Vec<(i64, i64, i64, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, attempt_count, max_attempts, cancel_requested_at, lease_owner \
          FROM application_jobs WHERE status = 'running' \
            AND lease_expires_at <= datetime('now')",
     )
     .fetch_all(&mut *tx)
-    .await?;
-    for (job_id, attempt_count, max_attempts, cancel_requested_at) in &expired {
+    .await?
+    .into_iter()
+    .filter(|(_, _, _, _, owner)| !active_owners.contains(owner))
+    .collect();
+    for (job_id, attempt_count, max_attempts, cancel_requested_at, _) in &expired {
         sqlx::query(
             "UPDATE application_job_attempts SET status = 'interrupted', \
                  error_code = 'lease_expired', error_message = 'Worker lease expired', \
@@ -715,5 +727,33 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(attempt_status, "interrupted");
+    }
+
+    #[tokio::test]
+    async fn expired_lease_recovery_skips_an_active_local_owner() {
+        let pool = pool().await;
+        let job = enqueue(&pool, &NewJob::new("geocode", serde_json::json!({})))
+            .await
+            .unwrap()
+            .job;
+        lease_next(&pool, "active-worker", 60)
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query(
+            "UPDATE application_jobs SET lease_expires_at = datetime('now', '-1 second') \
+             WHERE id = ?",
+        )
+        .bind(job.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let active = HashSet::from(["active-worker".to_owned()]);
+        assert_eq!(recover_expired_excluding(&pool, &active).await.unwrap(), 0);
+        assert_eq!(get(&pool, job.id).await.unwrap().status, "running");
+
+        assert_eq!(recover_expired(&pool).await.unwrap(), 1);
+        assert_eq!(get(&pool, job.id).await.unwrap().status, "queued");
     }
 }

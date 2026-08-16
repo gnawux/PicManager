@@ -27,6 +27,14 @@ pub struct AnimalAnalysisJobHandler(pub Application);
 #[derive(Clone)]
 pub struct GeocodeJobHandler(pub Application);
 
+struct AbortTaskOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortTaskOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 pub async fn enqueue_face_analysis(
     application: &Application,
     context: &RequestContext,
@@ -186,26 +194,31 @@ impl JobHandler for GeocodeJobHandler {
             let payload: GeocodePayload = serde_json::from_str(&job.payload_json)
                 .map_err(|error| JobFailure::terminal("invalid_payload", error.to_string()))?;
             let progress = SharedGeoProgress::default();
-            let execution = async {
+            let execution_pool = application.pool().clone();
+            let execution_progress = progress.clone();
+            let mut execution = tokio::spawn(async move {
                 if payload.refresh_names {
                     crate::album::location::normalize_geo_names_with_progress(
-                        application.pool(),
-                        progress.clone(),
+                        &execution_pool,
+                        execution_progress,
                     )
                     .await
                 } else {
                     crate::album::location::group_by_location_with_progress(
-                        application.pool(),
-                        progress.clone(),
+                        &execution_pool,
+                        execution_progress,
                     )
                     .await
                 }
-            };
-            tokio::pin!(execution);
+            });
+            let _abort_execution = AbortTaskOnDrop(execution.abort_handle());
             let mut last_published = None;
             loop {
                 tokio::select! {
                     result = &mut execution => {
+                        let result = result.map_err(|error| {
+                            JobFailure::retryable("geocode_task_failed", error.to_string())
+                        })?;
                         result.map_err(|error| JobFailure::retryable("geocode_failed", error.to_string()))?;
                         break;
                     }

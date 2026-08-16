@@ -543,6 +543,10 @@ Status: complete.
   preserving per-photo consistency while regularly releasing SQLite's writer lock.
 - M25.3: complete — verify duplicate-coordinate behavior in isolation and observe multiple lease
   renewals plus forward normalization progress against the existing library.
+- M25.4: complete — keep locally active lease owners out of periodic crash recovery and treat
+  transient heartbeat database contention as delayed telemetry rather than lost ownership;
+  run renewal and geographic execution independently so telemetry never suspends the
+  transaction-owning handler future.
 
 ## 9. Testing and commit protocol
 

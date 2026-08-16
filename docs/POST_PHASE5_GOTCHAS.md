@@ -126,6 +126,22 @@ transaction, then apply derived-state changes in small atomic batches. This pres
 per-photo reconciliation while leaving regular lock gaps for leases, progress and other
 interactive writes.
 
+Periodic crash recovery must also distinguish a dead prior-process lease from a locally
+active handler whose heartbeat is temporarily blocked. Track active worker owners in the
+runtime, exclude only those owners from that process's recovery pass, and continue the
+handler on transient database errors. A replacement process starts with an empty active
+set, so genuinely abandoned leases remain recoverable after restart.
+
+Do not await heartbeat retries inside the same `select` branch that polls a handler. If
+the handler is suspended while it owns the writer transaction that blocked the heartbeat,
+the retry loop creates a self-deadlock. Run heartbeat renewal in an independent task so
+the handler can finish and release its transaction while renewal waits.
+
+The same rule applies inside a handler that selects between core work and progress
+publication. Geographic execution must continue in an independently owned task while
+progress writes wait, and that task must be aborted if the owning durable handler is
+dropped. Optional telemetry must never pause the operation that can release its lock.
+
 ## Data and derived-state safety
 
 ### External IDs, filenames, labels, and paths are different concepts

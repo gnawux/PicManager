@@ -1,4 +1,10 @@
-use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use sqlx::SqlitePool;
 use tokio::{sync::watch, task::JoinHandle};
@@ -7,7 +13,7 @@ use crate::error::Result;
 
 use super::{
     Job, JobFailure, JobLease, cancel_leased, cancellation_requested, complete, fail, lease_next,
-    recover_expired, renew_lease, set_result, update_progress,
+    recover_expired, recover_expired_excluding, renew_lease, set_result, update_progress,
 };
 
 pub type HandlerFuture = Pin<Box<dyn Future<Output = std::result::Result<(), JobFailure>> + Send>>;
@@ -123,9 +129,11 @@ impl WorkerRuntime {
         if let Err(error) = recover_expired(&self.pool).await {
             tracing::error!("failed to recover expired application jobs: {error}");
         }
+        let active_owners = Arc::new(Mutex::new(HashSet::new()));
         let recovery = tokio::spawn(expired_lease_recovery_loop(
             self.pool.clone(),
             (self.config.lease_duration / 2).max(Duration::from_millis(250)),
+            active_owners.clone(),
             shutdown.clone(),
         ));
         let concurrency = self.config.concurrency.clamp(1, 64);
@@ -136,6 +144,7 @@ impl WorkerRuntime {
                 self.registry.clone(),
                 self.config.clone(),
                 format!("{}-{slot}", self.worker_prefix),
+                active_owners.clone(),
                 shutdown.clone(),
             )));
         }
@@ -177,12 +186,14 @@ impl Drop for WorkerHandle {
 async fn expired_lease_recovery_loop(
     pool: SqlitePool,
     interval: Duration,
+    active_owners: Arc<Mutex<HashSet<String>>>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
         tokio::select! {
             _ = tokio::time::sleep(interval) => {
-                match recover_expired(&pool).await {
+                let active_owners = active_owners.lock().unwrap().clone();
+                match recover_expired_excluding(&pool, &active_owners).await {
                     Ok(0) => {}
                     Ok(count) => tracing::warn!(count, "recovered expired application job leases"),
                     Err(error) => tracing::error!("failed to recover expired application jobs: {error}"),
@@ -202,6 +213,7 @@ async fn worker_loop(
     registry: Arc<WorkerRegistry>,
     config: WorkerConfig,
     worker_id: String,
+    active_owners: Arc<Mutex<HashSet<String>>>,
     mut shutdown: watch::Receiver<bool>,
 ) {
     loop {
@@ -209,7 +221,10 @@ async fn worker_loop(
             return;
         }
         match lease_next_with_retry(&pool, &worker_id, config.lease_duration.as_secs()).await {
-            Ok(Some(lease)) => execute_leased(&pool, &registry, &config, lease).await,
+            Ok(Some(lease)) => {
+                let _active_lease = ActiveLeaseGuard::new(active_owners.clone(), &lease.worker_id);
+                execute_leased(&pool, &registry, &config, lease).await;
+            }
             Ok(None) => {
                 tokio::select! {
                     _ = tokio::time::sleep(config.poll_interval) => {}
@@ -225,6 +240,27 @@ async fn worker_loop(
                 tokio::time::sleep(config.poll_interval).await;
             }
         }
+    }
+}
+
+struct ActiveLeaseGuard {
+    active_owners: Arc<Mutex<HashSet<String>>>,
+    worker_id: String,
+}
+
+impl ActiveLeaseGuard {
+    fn new(active_owners: Arc<Mutex<HashSet<String>>>, worker_id: &str) -> Self {
+        active_owners.lock().unwrap().insert(worker_id.to_owned());
+        Self {
+            active_owners,
+            worker_id: worker_id.to_owned(),
+        }
+    }
+}
+
+impl Drop for ActiveLeaseGuard {
+    fn drop(&mut self) {
+        self.active_owners.lock().unwrap().remove(&self.worker_id);
     }
 }
 
@@ -294,20 +330,34 @@ async fn execute_leased(
     let execution = handler.execute(lease.job.clone(), control);
     tokio::pin!(execution);
     let heartbeat_period = (config.lease_duration / 3).max(Duration::from_millis(50));
-    let mut heartbeat = tokio::time::interval(heartbeat_period);
-    heartbeat.tick().await;
-
-    let outcome = loop {
-        tokio::select! {
-            result = &mut execution => break Some(result),
-            _ = heartbeat.tick() => {
-                if let Err(error) = renew_lease_with_retry(pool, &lease, config.lease_duration.as_secs()).await {
-                    tracing::error!(job_id = lease.job.id, "lost job lease heartbeat: {error}");
-                    break None;
+    let heartbeat_pool = pool.clone();
+    let heartbeat_lease = lease.clone();
+    let lease_seconds = config.lease_duration.as_secs();
+    let (lease_lost_tx, mut lease_lost_rx) = tokio::sync::oneshot::channel();
+    let heartbeat_task = tokio::spawn(async move {
+        let mut heartbeat = tokio::time::interval(heartbeat_period);
+        heartbeat.tick().await;
+        loop {
+            heartbeat.tick().await;
+            if let Err(error) =
+                renew_lease_with_retry(&heartbeat_pool, &heartbeat_lease, lease_seconds).await
+            {
+                if matches!(error, crate::error::AppError::Database(_)) {
+                    tracing::warn!(job_id = heartbeat_lease.job.id, "job lease heartbeat remains delayed by database contention: {error}");
+                } else {
+                    tracing::error!(job_id = heartbeat_lease.job.id, "lost job lease ownership: {error}");
+                    let _ = lease_lost_tx.send(());
+                    return;
                 }
             }
         }
+    });
+    let outcome = tokio::select! {
+        result = &mut execution => Some(result),
+        _ = &mut lease_lost_rx => None,
     };
+    heartbeat_task.abort();
+    let _ = heartbeat_task.await;
     let Some(outcome) = outcome else {
         return;
     };
@@ -394,6 +444,8 @@ mod tests {
 
     struct CancellationHandler;
 
+    struct SlowHandler;
+
     impl JobHandler for CancellationHandler {
         fn execute(&self, _job: Job, control: JobControl) -> HandlerFuture {
             Box::pin(async move {
@@ -418,6 +470,15 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(60)).await;
                 control.progress(2, Some(2), Some("done")).await.unwrap();
                 active.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+    }
+
+    impl JobHandler for SlowHandler {
+        fn execute(&self, _job: Job, _control: JobControl) -> HandlerFuture {
+            Box::pin(async move {
+                tokio::time::sleep(Duration::from_millis(3_500)).await;
                 Ok(())
             })
         }
@@ -606,6 +667,66 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(recovered_events, 1);
+    }
+
+    #[tokio::test]
+    async fn active_job_survives_writer_contention_beyond_its_lease() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = SqliteConnectOptions::new()
+            .filename(directory.path().join("jobs.db"))
+            .create_if_missing(true)
+            .busy_timeout(Duration::from_millis(10));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(6)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let job = enqueue(
+            &pool,
+            &NewJob::new("slow_work", serde_json::json!({"index": 1})),
+        )
+        .await
+        .unwrap()
+        .job;
+        let worker = WorkerRuntime::new(
+            pool.clone(),
+            WorkerRegistry::new().register("slow_work", SlowHandler),
+            WorkerConfig {
+                concurrency: 1,
+                lease_duration: Duration::from_secs(1),
+                poll_interval: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_secs(2),
+                ..Default::default()
+            },
+            "contention-worker",
+        )
+        .start();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while get(&pool, job.id).await.unwrap().status != "running" {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let mut writer = pool.acquire().await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE")
+            .execute(&mut *writer)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(2_200)).await;
+        sqlx::query("COMMIT").execute(&mut *writer).await.unwrap();
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while get(&pool, job.id).await.unwrap().status != "succeeded" {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(get(&pool, job.id).await.unwrap().attempt_count, 1);
+        assert!(worker.shutdown().await);
     }
 
     #[tokio::test]
