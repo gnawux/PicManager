@@ -548,6 +548,19 @@ Status: complete.
   run renewal and geographic execution independently so telemetry never suspends the
   transaction-owning handler future.
 
+### M26 - Interactive query and polling performance
+
+Status: complete.
+
+- M26.1: complete — remove full SQLite integrity scans from the native shell's five-second
+  readiness polling path while retaining them for explicit deep diagnostics.
+- M26.2: complete — replace correlated per-album geographic parent lookup with one set-based
+  aggregation and add an additive album-first membership index.
+- M26.3: complete — verify the index migration on a copied legacy catalog and reduce the
+  existing-library album query from observed 39–123 second runs to 0.40 seconds on a copy.
+- M26.4: complete — record the day's pagination, telemetry, polling and SQL performance lessons
+  in `POST_PHASE5_GOTCHAS.md` for future refactors.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

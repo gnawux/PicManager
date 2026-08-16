@@ -182,6 +182,32 @@ explicit action, durable progress, safe retry, and copied-library rehearsal.
 - Before declaring a performance fix, compare API size/latency, rendered node count,
   and both entry and exit interaction latency on a large synthetic library.
 
+## 2026-08-16 performance incident summary
+
+Several independent costs looked like one "background task uses all CPU" failure. Diagnose
+the running job table, process CPU and slow-query log separately before blaming the visible task.
+
+- Large photo sets must use replacement pagination, not cumulative "load more" DOM growth.
+  Derive page size from actual grid columns times complete rows so bounded pages also render
+  without partial final rows.
+- Optional telemetry must run independently from transaction-owning work. Heartbeat or progress
+  retries inside the same `select` branch can suspend the future that must release SQLite's
+  writer lock, creating a self-deadlock that resembles CPU or database overload.
+- Frequent health endpoints must be constant-time. The native shell polls every five seconds;
+  running `PRAGMA quick_check` there repeatedly scanned a roughly 600 MB catalog and kept the
+  service busy even when no durable task was active. Integrity and filesystem checks belong to
+  explicit deep diagnostics.
+- Correlated presentation subqueries multiply with catalog size. Computing a location parent
+  independently for every album produced observed 39- and 123-second `/api/albums` queries.
+  A grouped location pass plus set-based album statistics reduced the same query to 0.40 seconds
+  on a copied existing catalog.
+- Composite index order must match traversal direction. `photo_albums(photo_id, album_id)`
+  protects uniqueness and photo-first lookup but does not efficiently serve album-first browsing;
+  keep the additive `(album_id, photo_id)` index as well.
+- Remote geocoding throughput and interactive database throughput are separate concerns. Provider
+  HTTP 429 responses should trip the circuit breaker and stop safely; they must not trigger busy
+  retries that consume local CPU or disguise a rate limit as database contention.
+
 ## Refactor review checklist
 
 Before merging related work, answer all of the following:
