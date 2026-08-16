@@ -123,6 +123,11 @@ impl WorkerRuntime {
         if let Err(error) = recover_expired(&self.pool).await {
             tracing::error!("failed to recover expired application jobs: {error}");
         }
+        let recovery = tokio::spawn(expired_lease_recovery_loop(
+            self.pool.clone(),
+            (self.config.lease_duration / 2).max(Duration::from_millis(250)),
+            shutdown.clone(),
+        ));
         let concurrency = self.config.concurrency.clamp(1, 64);
         let mut workers = Vec::with_capacity(concurrency);
         for slot in 0..concurrency {
@@ -137,6 +142,7 @@ impl WorkerRuntime {
         for worker in workers {
             let _ = worker.await;
         }
+        let _ = recovery.await;
     }
 }
 
@@ -165,6 +171,29 @@ impl WorkerHandle {
 impl Drop for WorkerHandle {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
+    }
+}
+
+async fn expired_lease_recovery_loop(
+    pool: SqlitePool,
+    interval: Duration,
+    mut shutdown: watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            _ = tokio::time::sleep(interval) => {
+                match recover_expired(&pool).await {
+                    Ok(0) => {}
+                    Ok(count) => tracing::warn!(count, "recovered expired application job leases"),
+                    Err(error) => tracing::error!("failed to recover expired application jobs: {error}"),
+                }
+            }
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+            }
+        }
     }
 }
 
@@ -467,6 +496,65 @@ mod tests {
         let lease = lease.await.unwrap().unwrap().expect("queued job is leased");
         assert_eq!(lease.worker_id, "retry-worker");
         assert_eq!(lease.job.kind, "test_work");
+    }
+
+    #[tokio::test]
+    async fn worker_recovers_a_lease_that_expires_after_startup() {
+        let (pool, _directory) = pool().await;
+        let job = enqueue(
+            &pool,
+            &NewJob::new("test_work", serde_json::json!({"index": 1})),
+        )
+        .await
+        .unwrap()
+        .job;
+        lease_next(&pool, "stopped-worker", 1)
+            .await
+            .unwrap()
+            .expect("job is initially leased");
+
+        let handle = WorkerRuntime::new(
+            pool.clone(),
+            WorkerRegistry::new().register(
+                "test_work",
+                ConcurrencyHandler {
+                    active: Arc::new(AtomicUsize::new(0)),
+                    peak: Arc::new(AtomicUsize::new(0)),
+                },
+            ),
+            WorkerConfig {
+                concurrency: 1,
+                lease_duration: Duration::from_secs(1),
+                poll_interval: Duration::from_millis(10),
+                shutdown_timeout: Duration::from_secs(2),
+                ..Default::default()
+            },
+            "recovery-worker",
+        )
+        .start();
+
+        let completed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let current = get(&pool, job.id).await.unwrap();
+                if current.status == "succeeded" {
+                    break current;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("periodic recovery completes the stranded job");
+        assert!(handle.shutdown().await);
+        assert_eq!(completed.attempt_count, 2);
+        let recovered_events: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM application_job_events \
+             WHERE job_id = ? AND code = 'lease_expired'",
+        )
+        .bind(job.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(recovered_events, 1);
     }
 
     #[tokio::test]

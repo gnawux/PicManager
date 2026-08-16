@@ -509,6 +509,15 @@ Status: complete.
 - M22.4: complete — rebuild the embedded frontend and Rust service, ad-hoc sign the
   macOS application, and verify bundle plus clean-install/upgrade/uninstall safety.
 
+### M23 - Continuous expired-lease recovery
+
+Status: in progress.
+
+- M23.1: recover job leases that expire after service startup so interrupted durable
+  work cannot remain indefinitely marked as running.
+- M23.2: verify the startup timing race, rebuild the macOS bundle and rehearse recovery
+  against an isolated catalog before operating on a personal library.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

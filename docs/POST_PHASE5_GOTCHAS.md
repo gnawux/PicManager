@@ -108,6 +108,14 @@ a bounded interval, retry transient lock errors, and separately retry worker lea
 contention. Provider failures need a circuit breaker, and cancellation must be checked
 between bounded remote calls. Never report a timed-out lookup as successfully updated.
 
+### Expired job leases require continuous recovery
+
+Startup-only lease recovery has a race: a replacement service can start seconds before
+the previous process's lease expires, miss it during startup recovery, and leave the job
+marked as running forever. Worker runtimes must continue scanning for expired leases at
+a bounded interval. Tests must cover a lease that is valid at startup and expires only
+after workers are already polling.
+
 ## Data and derived-state safety
 
 ### External IDs, filenames, labels, and paths are different concepts
