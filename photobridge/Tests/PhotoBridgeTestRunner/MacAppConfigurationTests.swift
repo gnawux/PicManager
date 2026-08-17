@@ -28,5 +28,13 @@ func runMacAppConfigurationTests() {
         test("Apple Photos discovery is enabled without enabling downloads") {
             try expect(MacAppConfiguration.default.applePhotosSyncPolicy, equals: .inventoryOnly)
         }
+
+        test("manual Apple sync drains while automatic sync stays bounded") {
+            try expect(
+                AppleExportBatchPolicy.maximumItems(for: .automatic),
+                equals: AppleExportBatchPolicy.automaticMaximumItems
+            )
+            try expect(AppleExportBatchPolicy.maximumItems(for: .userInitiated) == nil)
+        }
     }
 }

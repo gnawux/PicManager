@@ -595,7 +595,7 @@ Status: in progress.
   interrupted transfers and a subsequent application restart against an isolated library.
 - M29.4: complete — stabilize the native claim contract with literal wire fixtures, explicitly sign
   and supervise the packaged exporter, and document the boundary-first incident workflow.
-- M29.5: in progress — reconcile stale Apple source states and let explicit user synchronization drain
+- M29.5: complete — reconcile stale Apple source states and let explicit user synchronization drain
   the durable queue while retaining bounded automatic foreground batches.
 
 ### M30 - Garmin activity synchronization and map detail

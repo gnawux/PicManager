@@ -189,7 +189,7 @@ final class AppModel: ObservableObject {
     private func synchronizeAppleInventoryIfEnabled() async {
         guard configuration.applePhotosSyncPolicy != .disabled,
               photoAccess == .authorized else { return }
-        await synchronizeAppleInventory()
+        await synchronizeAppleInventory(initiator: .automatic)
     }
 
     private func pollServiceHealth() async -> Bool {
@@ -332,7 +332,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func synchronizeAppleInventory() async {
+    func synchronizeAppleInventory(initiator: AppleSyncInitiator = .userInitiated) async {
         guard !inventorySyncInProgress else { return }
         if serviceExecutable == nil { prepareServiceExecutable() }
         guard let serviceExecutable else {
@@ -362,7 +362,9 @@ final class AppModel: ObservableObject {
                 libraryPath: configuration.libraryPath
             ))
             if configuration.applePhotosSyncPolicy == .importNew {
-                try await synchronizeQueuedAppleExports(maximum: 3)
+                try await synchronizeQueuedAppleExports(
+                    maximum: AppleExportBatchPolicy.maximumItems(for: initiator)
+                )
             }
             inventorySyncProgress = "Apple Photos inventory is up to date."
             await refreshDashboard()
@@ -372,17 +374,21 @@ final class AppModel: ObservableObject {
         }
     }
 
-    private func synchronizeQueuedAppleExports(maximum: Int) async throws {
+    private func synchronizeQueuedAppleExports(maximum: Int?) async throws {
         guard let serviceURL = configuration.serviceURL else { return }
         let client = dashboardClient(baseURL: serviceURL)
         let workerID = "mac-\(ProcessInfo.processInfo.processIdentifier)-\(UUID().uuidString)"
         let staging = URL(fileURLWithPath: configuration.libraryPath, isDirectory: true)
             .appendingPathComponent(".sync-staging/apple", isDirectory: true)
-        for index in 0..<maximum {
+        var attempted = 0
+        while maximum.map({ attempted < $0 }) ?? true {
             guard let claim = try await client.claimAppleExport(workerID: workerID) else { break }
+            attempted += 1
             appleSyncLog.info("claimed Apple export item \(claim.itemID, privacy: .public)")
             let package = staging.appendingPathComponent("source-\(claim.source.id)", isDirectory: true)
-            inventorySyncProgress = "Downloading Apple Photo \(index + 1) of up to \(maximum)…"
+            inventorySyncProgress = maximum.map {
+                "Downloading Apple Photo \(attempted) of up to \($0)…"
+            } ?? "Downloading Apple Photo \(attempted)…"
             let heartbeat = Task {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(45))
