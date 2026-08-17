@@ -1,4 +1,17 @@
-# Garmin 数据同步方案调研
+# Garmin 数据同步
+
+## 当前实现（M35）
+
+PicManager 现在由 Rust 服务直接实现 Garmin Connect 中国区的移动端 JSON SSO、MFA、
+DI OAuth token 刷新、活动分页和 ORIGINAL ZIP/FIT 下载。认证只在用户明确点击认证或同步时
+触发；普通启动和浏览活动不会读取 Keychain。token 延续旧版兼容路径
+`.activities/.garmin/tokens/garmin_tokens.json`，下载 WAL 在每个 FIT 安全落盘后更新，只有
+catalog 导入成功才推进 checkpoint，因此中断后可继续且不会提前跳过活动。
+
+新 App 不再捆绑 Python、`garminconnect` 或 `curl_cffi`。旧 Python 方案及其依赖仅保留在
+`v1.0.1-garmin-python` tag 和 `PicManager-Python-Garmin.app` 回退包中。
+
+以下内容是最初的方案调研，保留作设计背景。
 
 ## 背景
 

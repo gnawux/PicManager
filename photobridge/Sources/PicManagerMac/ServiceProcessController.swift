@@ -81,13 +81,6 @@ final class ServiceProcessController {
         if let email = launchConfiguration.garminEmail, let garminPassword {
             environment["PICMANAGER_GARMIN_EMAIL"] = email
             environment["PICMANAGER_GARMIN_PASSWORD"] = garminPassword
-            environment["PICMANAGER_GARMIN_HELPER"] = Bundle.main.resourceURL!.appendingPathComponent("garmin_sync.py").path
-            environment["PICMANAGER_GARMIN_PYTHON"] = Bundle.main.resourceURL!.appendingPathComponent("python/bin/python3").path
-            // A sealed app bundle is executable code, never a Python cache directory.
-            environment["PYTHONDONTWRITEBYTECODE"] = "1"
-            environment["PYTHONPYCACHEPREFIX"] = MacAppConfiguration.applicationSupportURL
-                .deletingLastPathComponent()
-                .appendingPathComponent("Caches/python-bytecode", isDirectory: true).path
         }
         process.environment = environment
         let outputPipe = Pipe()

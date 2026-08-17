@@ -111,29 +111,20 @@ accessory could collapse its account/password controls, while bundled Python cre
   not read Keychain or prompt for access. Keep saved credentials behind an in-memory
   activation boundary; only an explicit authenticate or synchronize action may read
   Keychain and restart the owned service with Garmin environment variables.
-- Run bundled Python with `-B` and `PYTHONDONTWRITEBYTECODE=1`. The release gate must
-  execute an offline helper invocation after app signing and then run strict signature
-  verification; a successful pre-launch seal alone is not sufficient.
-- Provider errors cross Python, Rust, and Web as stable error codes. Log only redacted
-  exception class and HTTP status, never provider response text, account identifiers,
-  passwords, token bytes, or URLs containing credentials.
-- MFA codes are secrets too: pass them to a short-lived helper through private stdin,
-  never through a command-line argument. Treat helper stdout as an untrusted boundary:
-  accept only known status/error codes and bounded phase, exception-class and HTTP-status
-  diagnostics; discard provider-controlled messages and unknown diagnostic values before
-  logging or returning an API response.
-- Garmin China uses the reviewed public-PyPI `garminconnect` 0.3.10 wheel and its client-owned
-  `garmin_tokens.json` token store; the bundled macOS Python closure is hash locked and must not
-  bundle the obsolete `garth` dependency. The first credential probe may return the explicit
-  `needs_mfa` challenge. A submitted code starts a fresh, short-lived SSO exchange through the
-  current prompt API and must load the profile
-  before the helper reports authentication. Restore cached tokens first, but a rejected cache
-  must fall back to this credential/MFA path rather than being presented as an authenticated
-  session.
-- The Garmin bundle lifecycle gate verifies the exact dependency metadata and absence of
-  `garth`, executes an offline no-credential helper invocation after the outer application is
-  signed, checks that no bytecode appeared under `Contents`, and then runs strict deep signature
-  verification. This is required whenever either the Python runtime or embedded web assets change.
+- Provider errors cross Rust and Web as stable error codes. Log only the bounded phase and HTTP
+  status, never provider response text, account identifiers, passwords, MFA codes, token bytes,
+  service tickets or URLs containing credentials.
+- Garmin China uses a domain-allowlisted native Rust client and keeps compatibility with the old
+  `garmin_tokens.json` schema. The credential probe may return `MFA_REQUIRED`; a submitted code
+  starts a fresh cookie-backed SSO exchange, persists the DI refresh token atomically, and validates
+  it before reporting authentication. A rejected cache falls back to credentials/MFA; network
+  failures remain visible instead of causing an unnecessary new login.
+- Treat Garmin acronym-bearing wire keys literally (`activityId`, `startTimeGMT`). Automatic case
+  conversion produces `startTimeGmt` and silently removes the cutoff, causing old activities to be
+  downloaded again. Fake-provider fixtures must use the producer's literal JSON spelling.
+- The Garmin bundle lifecycle gate proves that `Contents/Resources/python`, `garmin_sync.py`,
+  `garminconnect` and Python dynamic-library links are absent, then runs strict deep signature
+  verification. Protocol coverage comes from the offline Rust fake-provider integration test.
 
 ## Browser and API scalability
 

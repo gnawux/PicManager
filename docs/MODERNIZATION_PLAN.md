@@ -701,7 +701,7 @@ rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this mi
   JSON responses consumed by Web and the on-demand macOS Keychain activation contract. Cover
   `authenticate -> MFA -> persisted token -> sync -> import -> acknowledge` end to end with a fake
   Garmin service and isolated catalog.
-- M35.5: remove the bundled Python runtime, `garminconnect`, `curl_cffi`, helper and dependency
+- M35.5: complete — remove the bundled Python runtime, `garminconnect`, `curl_cffi`, helper and dependency
   installation scripts from the new App. Update bundle/license gates to prove no Python Garmin
   payload remains and compare the new package size with the preserved rollback bundle.
 - M35.6: run all Rust, Web and Swift suites plus production/release builds, offline protocol tests,
