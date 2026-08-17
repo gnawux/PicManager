@@ -23,9 +23,18 @@ except ImportError as error:  # reported as safe JSON after argparse has initial
     Garmin = None
     DEPENDENCY_IMPORT_ERROR = error
 
-
-class MfaRequired(Exception):
-    pass
+try:
+    from garminconnect import (
+        GarminConnectAuthenticationError,
+        GarminConnectConnectionError,
+        GarminConnectTooManyRequestsError,
+    )
+except ImportError:
+    # Keep the helper importable for the isolated fake-provider test suite. The
+    # real 0.3.10 bundle exports all three classes.
+    GarminConnectAuthenticationError = ()
+    GarminConnectConnectionError = ()
+    GarminConnectTooManyRequestsError = ()
 
 
 def emit(status, **fields):
@@ -43,31 +52,24 @@ def safe_http_status(error):
     return status if isinstance(status, int) and 100 <= status <= 599 else None
 
 
-def authentication_error_status(error):
-    """Map provider failures to stable, user-safe codes without leaking exception text."""
-    name = safe_exception_class(error).lower()
-    text = str(error).lower()
+def authentication_error_status(error, phase):
+    """Map provider failures to stable codes without inspecting provider text."""
     http_status = safe_http_status(error)
-    if "mfa" in name or "verification" in name or "mfa" in text:
-        return "mfa_required"
-    if "token" in name and any(word in name for word in ("expired", "invalid", "stale")):
-        return "stale_token"
-    if http_status in (401, 403) or "credential" in name or "authentication" in name or "unauthorized" in name:
-        return "invalid_credentials"
-    if http_status == 429 or (http_status is not None and http_status >= 500):
-        return "network_error"
+    if isinstance(error, GarminConnectTooManyRequestsError) or http_status == 429:
+        return "rate_limited"
     if isinstance(error, (socket.timeout, TimeoutError, ConnectionError, OSError)):
         return "network_error"
-    if any(word in name or word in text for word in ("proxy", "connect", "timeout", "dns", "ssl")):
+    if isinstance(error, GarminConnectConnectionError) or (http_status is not None and http_status >= 500):
         return "network_error"
-    if isinstance(error, (AttributeError, KeyError, TypeError, ImportError, ModuleNotFoundError)):
+    if isinstance(error, GarminConnectAuthenticationError) or http_status in (401, 403):
+        return "invalid_mfa" if phase == "mfa_login" else "invalid_credentials"
+    if isinstance(error, (AssertionError, AttributeError, KeyError, TypeError, ImportError, ModuleNotFoundError)):
         return "sso_contract_error"
-    return "authentication_failed"
+    return "sso_contract_error"
 
 
-def log_authentication_failure(error, phase):
+def log_authentication_failure(error, phase, status):
     """Diagnostics deliberately exclude email, response body, URL, and exception message."""
-    status = authentication_error_status(error)
     http_status = safe_http_status(error)
     fields = [f"phase={phase}", f"status={status}", f"class={safe_exception_class(error)}"]
     if http_status is not None:
@@ -78,12 +80,32 @@ def log_authentication_failure(error, phase):
 def authentication_message(status):
     return {
         "invalid_credentials": "Garmin Connect rejected the saved account or password",
+        "invalid_mfa": "Garmin Connect rejected the one-time verification code",
         "mfa_required": "Garmin Connect requires a one-time verification code",
         "network_error": "Garmin Connect could not be reached; check network or proxy settings",
-        "stale_token": "The saved Garmin sign-in token has expired; verify the account again",
+        "rate_limited": "Garmin Connect is temporarily rate limiting sign-in attempts",
         "sso_contract_error": "The Garmin sign-in protocol changed or this bundled client is incompatible",
         "dependency_error": "The bundled Garmin client dependency is unavailable",
+        "token_store_error": "The local Garmin token store could not be updated",
     }.get(status, "Garmin Connect could not complete authentication")
+
+
+def emit_failure(status, error, phase, message=None):
+    """Emit a literal, redacted helper diagnostic contract.
+
+    Provider exception text can contain account data, response bodies, signed URLs,
+    or token fragments. Only the stable status, phase, exception class and bounded
+    HTTP status cross this process boundary.
+    """
+    log_authentication_failure(error, phase, status)
+    emit(
+        status,
+        error_code=status,
+        message=message or authentication_message(status),
+        phase=phase,
+        exception_class=safe_exception_class(error),
+        http_status=safe_http_status(error),
+    )
 
 
 def load(path):
@@ -136,49 +158,73 @@ def write_atomic(path, data):
     os.replace(name, path)
 
 
+def token_file(token_dir):
+    return token_dir / "garminconnect.json"
+
+
 def tokens_exist(token_dir):
-    return (token_dir / "oauth1_token.json").is_file() and (token_dir / "oauth2_token.json").is_file()
+    return token_file(token_dir).is_file()
+
+
+def dump_tokens(api, token_dir):
+    """Persist the 0.3.10 token store with private permissions only."""
+    token_dir.mkdir(parents=True, exist_ok=True)
+    os.chmod(token_dir, 0o700)
+    api.client.dump(str(token_dir))
+    # The provider owns the atomic write. Enforce owner-only permissions again
+    # for deterministic behavior with fake providers and restrictive umasks.
+    for token in token_dir.glob("*.json"):
+        os.chmod(token, 0o600)
 
 
 def authenticate(args):
     if DEPENDENCY_IMPORT_ERROR is not None or Garmin is None:
-        log_authentication_failure(DEPENDENCY_IMPORT_ERROR, "dependency_import")
-        emit("dependency_error", error_code="dependency_error", message=authentication_message("dependency_error"), diagnostic=safe_exception_class(DEPENDENCY_IMPORT_ERROR))
+        emit_failure("dependency_error", DEPENDENCY_IMPORT_ERROR, "dependency_import")
         return None
     password = args.password or os.environ.get("PICMANAGER_GARMIN_PASSWORD")
     if not password:
         emit("not_configured", message="Garmin credentials are not available to the local service")
         return None
-    api = Garmin(args.email, password, is_cn=True)
+
+    # Restore valid OAuth tokens first. A rejected or malformed token is never
+    # returned as an authentication result: the helper makes a new credential
+    # attempt below, which can independently request MFA.
     if tokens_exist(args.tokens):
         try:
+            api = Garmin(args.email, password, is_cn=True)
             api.login(tokenstore=str(args.tokens))
+            dump_tokens(api, args.tokens)
             return api
         except Exception as error:
-            # A stale token is not a usable authentication result. Preserve no secrets
-            # and let the normal sign-in path obtain a fresh token below.
-            log_authentication_failure(error, "token_refresh")
-
-    def prompt_mfa():
-        if args.mfa:
-            return args.mfa
-        raise MfaRequired()
+            # A stale token falls through to a credential refresh. Logging keeps
+            # the phase/class/status available without exposing the token or body.
+            status = authentication_error_status(error, "token_restore")
+            log_authentication_failure(error, "token_restore", status)
 
     try:
-        api.garth.login(args.email, password, prompt_mfa=prompt_mfa)
-        api.display_name = api.garth.profile["displayName"]
-        api.full_name = api.garth.profile.get("fullName")
-        api.garth.dump(str(args.tokens))
-        for token in args.tokens.glob("*.json"):
-            os.chmod(token, 0o600)
+        if args.mfa:
+            # 0.3.10 keeps the challenge inside the client object. The helper is
+            # intentionally short-lived, so a submitted code starts a clean SSO
+            # exchange with the code supplied through the prompt callback.
+            api = Garmin(args.email, password, is_cn=True, prompt_mfa=lambda: args.mfa)
+            api.login()
+        else:
+            # The first probe returns a structured MFA state instead of asserting
+            # against the old China success-page title.
+            api = Garmin(args.email, password, is_cn=True, return_on_mfa=True)
+            mfa_status, _ = api.login()
+            if mfa_status in {"needs_mfa", "mfa_required"}:
+                emit("mfa_required", error_code="mfa_required", message=authentication_message("mfa_required"), phase="credential_login")
+                return None
+            if mfa_status is not None:
+                emit("sso_contract_error", error_code="sso_contract_error", message=authentication_message("sso_contract_error"), phase="credential_login", exception_class="UnexpectedMfaStatus")
+                return None
+        dump_tokens(api, args.tokens)
         return api
-    except MfaRequired:
-        emit("mfa_required", error_code="mfa_required", message=authentication_message("mfa_required"))
-        return None
     except Exception as error:
-        status = authentication_error_status(error)
-        log_authentication_failure(error, "password_login")
-        emit(status, error_code=status, message=authentication_message(status), diagnostic=safe_exception_class(error), http_status=safe_http_status(error))
+        phase = "mfa_login" if args.mfa else "credential_login"
+        status = authentication_error_status(error, phase)
+        emit_failure(status, error, phase)
         return None
 
 
@@ -202,7 +248,12 @@ def command_sync(args):
     offset = 0
     pages = 0
     while pages < args.max_pages:
-        activities = api.get_activities(offset, 100)
+        try:
+            activities = api.get_activities(offset, 100)
+        except Exception as error:
+            status = authentication_error_status(error, "activity_list")
+            emit_failure(status, error, "activity_list")
+            return
         if not activities:
             break
         pages += 1
@@ -219,8 +270,12 @@ def command_sync(args):
             try:
                 original = api.download_activity(activity["activityId"], dl_fmt=api.ActivityDownloadFormat.ORIGINAL)
                 fit = original_fit(original)
-            except Exception:
-                emit("download_failed", message="Garmin returned an invalid activity download")
+            except Exception as error:
+                if isinstance(error, ValueError):
+                    emit_failure("download_failed", error, "download", "Garmin returned an invalid activity download")
+                else:
+                    status = authentication_error_status(error, "download")
+                    emit_failure(status, error, "download")
                 return
             target = args.output / f"{identifier}.fit"
             write_atomic(target, fit)
@@ -240,9 +295,11 @@ def command_sync(args):
         if item.get("state") == "downloaded"
     ]
     pending.sort(key=lambda item: item.get("start_time") or "")
-    api.garth.dump(str(args.tokens))
-    for token in args.tokens.glob("*.json"):
-        os.chmod(token, 0o600)
+    try:
+        dump_tokens(api, args.tokens)
+    except Exception as error:
+        emit_failure("token_store_error", error, "token_persist")
+        return
     emit("ready", downloaded=downloaded, items=pending)
 
 

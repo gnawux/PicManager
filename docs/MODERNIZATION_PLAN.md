@@ -647,6 +647,15 @@ Status: complete.
 - M31.4: complete — run the installed-bundle helper lifecycle, re-verify every signature after execution,
   and document the supported Garmin dependency pair.
 
+### M32 - Garmin China current-client migration
+
+Status: in progress.
+
+- M32.1: complete — pin the reviewed upstream `garminconnect` 0.3.10 release commit, remove obsolete
+  `garth` coupling, and move the isolated helper fake contract to the current token/MFA API.
+- M32.2: planned — retain and validate redacted helper diagnostics across the Python/Rust/Web boundary.
+- M32.3: planned — verify the updated runtime dependency manifest, signed bundle lifecycle, and release gates.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

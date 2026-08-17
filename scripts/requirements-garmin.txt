@@ -1,6 +1,5 @@
-# This pair is intentionally retained after offline contract review: Garmin 0.2.8
-# exposes the China `is_cn` constructor argument and the `.garth.login(...,
-# prompt_mfa=...)` / token-store surface used by garmin_sync.py. Do not upgrade one
-# package independently; update the fake provider contract tests at the same time.
-garminconnect==0.2.8
-garth==0.4.47
+# Garmin Connect 0.3.10 has not been published to PyPI. Pin the reviewed upstream
+# release commit so the bundled runtime uses the current China SSO/MFA protocol.
+# It owns token persistence through `Garmin.client.dump()` and deliberately has no
+# `garth` dependency. Do not replace this with a floating branch reference.
+garminconnect @ git+https://github.com/cyberjunky/python-garminconnect.git@414b54023a31259232744bb67f00a2aa71065e09

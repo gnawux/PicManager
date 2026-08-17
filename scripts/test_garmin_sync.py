@@ -34,19 +34,20 @@ class GarminHelperTests(unittest.TestCase):
         class ProxyFailure(ConnectionError):
             pass
 
-        self.assertEqual(HELPER.authentication_error_status(UnauthorizedError("account=private@example.invalid")), "invalid_credentials")
-        self.assertEqual(HELPER.authentication_error_status(ProviderContractError("missing private response")), "sso_contract_error")
-        self.assertEqual(HELPER.authentication_error_status(ProxyFailure("proxy password=secret")), "network_error")
+        self.assertEqual(HELPER.authentication_error_status(UnauthorizedError("account=private@example.invalid"), "credential_login"), "invalid_credentials")
+        self.assertEqual(HELPER.authentication_error_status(UnauthorizedError("code=private"), "mfa_login"), "invalid_mfa")
+        self.assertEqual(HELPER.authentication_error_status(ProviderContractError("missing private response"), "credential_login"), "sso_contract_error")
+        self.assertEqual(HELPER.authentication_error_status(ProxyFailure("proxy password=secret"), "credential_login"), "network_error")
         self.assertEqual(HELPER.safe_exception_class(UnauthorizedError("private@example.invalid")), "UnauthorizedError")
 
     def test_mfa_and_dependency_messages_are_stable(self):
-        self.assertEqual(HELPER.authentication_error_status(HELPER.MfaRequired()), "mfa_required")
+        self.assertEqual(HELPER.authentication_message("invalid_mfa"), "Garmin Connect rejected the one-time verification code")
         self.assertEqual(HELPER.authentication_message("network_error"), "Garmin Connect could not be reached; check network or proxy settings")
 
-    def test_pinned_dependency_pair_matches_the_fake_provider_contract(self):
+    def test_pinned_dependency_source_matches_the_fake_provider_contract(self):
         requirements = pathlib.Path(__file__).with_name("requirements-garmin.txt").read_text()
-        self.assertIn("garminconnect==0.2.8", requirements)
-        self.assertIn("garth==0.4.47", requirements)
+        self.assertIn("garminconnect @ git+https://github.com/cyberjunky/python-garminconnect.git@414b54023a31259232744bb67f00a2aa71065e09", requirements)
+        self.assertNotIn("garth==", requirements)
 
     def test_extracts_the_single_fit_from_an_original_archive(self):
         archive = io.BytesIO()
@@ -69,19 +70,88 @@ class GarminHelperTests(unittest.TestCase):
             self.assertEqual(HELPER.load(path)["version"], 2)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
-    def test_fake_garmin_download_is_acknowledged_only_after_import(self):
-        class FakeGarth:
-            profile = {"displayName": "fixture", "fullName": "Fixture"}
-            def login(self, *_args, **_kwargs): pass
+    def test_fake_garmin_mfa_token_restore_and_stale_token_refresh(self):
+        events = []
+
+        class FakeClient:
             def dump(self, directory):
                 target = pathlib.Path(directory)
                 target.mkdir(parents=True, exist_ok=True)
-                (target / "oauth1_token.json").write_text("{}")
-                (target / "oauth2_token.json").write_text("{}")
+                (target / "garminconnect.json").write_text('{"fixture":"private-token"}')
+
+        class FakeGarmin:
+            stale_tokens = False
+
+            def __init__(self, _email, _password, is_cn, prompt_mfa=None, return_on_mfa=False):
+                self.is_cn = is_cn
+                self.prompt_mfa = prompt_mfa
+                self.return_on_mfa = return_on_mfa
+                self.client = FakeClient()
+
+            def login(self, tokenstore=None):
+                if tokenstore is not None:
+                    events.append("token_restore")
+                    if type(self).stale_tokens:
+                        raise ConnectionError("token=private-token")
+                    return (None, None)
+                events.append("credential_login")
+                if self.return_on_mfa:
+                    return ("needs_mfa", None)
+                self.prompt_mfa()
+                return (None, None)
+
+        original_garmin = HELPER.Garmin
+        HELPER.Garmin = FakeGarmin
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                args = types.SimpleNamespace(
+                    output=root / "downloads", state=root / "journal.json", tokens=root / "tokens",
+                    email="fixture@example.invalid", password="fixture", mfa=None, after=None, max_pages=1,
+                    ids=[],
+                )
+                first = io.StringIO()
+                with contextlib.redirect_stdout(first):
+                    HELPER.command_auth(args)
+                self.assertEqual(json.loads(first.getvalue())["status"], "mfa_required")
+                self.assertFalse(HELPER.tokens_exist(args.tokens))
+
+                args.mfa = "123456"
+                second = io.StringIO()
+                with contextlib.redirect_stdout(second):
+                    HELPER.command_auth(args)
+                self.assertEqual(json.loads(second.getvalue())["status"], "authenticated")
+                self.assertTrue(HELPER.tokens_exist(args.tokens))
+                self.assertEqual(HELPER.token_file(args.tokens).stat().st_mode & 0o777, 0o600)
+                self.assertNotIn("private-token", second.getvalue())
+
+                args.mfa = None
+                third = io.StringIO()
+                with contextlib.redirect_stdout(third):
+                    HELPER.command_auth(args)
+                self.assertEqual(json.loads(third.getvalue())["status"], "authenticated")
+                self.assertEqual(events.count("token_restore"), 1)
+
+                FakeGarmin.stale_tokens = True
+                fourth = io.StringIO()
+                with contextlib.redirect_stdout(fourth), contextlib.redirect_stderr(io.StringIO()):
+                    HELPER.command_auth(args)
+                self.assertEqual(json.loads(fourth.getvalue())["status"], "mfa_required")
+                self.assertEqual(events.count("token_restore"), 2)
+        finally:
+            HELPER.Garmin = original_garmin
+
+    def test_fake_garmin_download_is_acknowledged_only_after_import(self):
+        class FakeClient:
+            def dump(self, directory):
+                target = pathlib.Path(directory)
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "garminconnect.json").write_text("{}")
 
         class FakeGarmin:
             ActivityDownloadFormat = types.SimpleNamespace(ORIGINAL="original")
-            def __init__(self, *_args, **_kwargs): self.garth = FakeGarth()
+            def __init__(self, *_args, **_kwargs): self.client = FakeClient()
+            def login(self, *_args, **_kwargs): return (None, None)
             def get_activities(self, _offset, _limit): return [{"activityId": 42, "startTimeGMT": "2026-08-17T00:00:00Z"}]
             def download_activity(self, _identifier, dl_fmt):
                 self.last_format = dl_fmt
