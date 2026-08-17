@@ -46,7 +46,8 @@ impl GarminErrorCode {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("Garmin request failed during {phase}")]
 pub struct GarminError {
     pub code: GarminErrorCode,
     pub phase: &'static str,
@@ -158,6 +159,31 @@ impl GarminClient {
             .build()
             .map_err(|error| GarminError::transport("client_initialization", &error))?;
         Ok(Self { http, endpoints })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(root: Url) -> Result<Self, GarminError> {
+        Self::new(Endpoints {
+            sso: root.clone(),
+            di_token: root.join("di-oauth2-service/oauth/token").map_err(|_| {
+                GarminError::provider(
+                    GarminErrorCode::SsoContractError,
+                    "endpoint_validation",
+                    None,
+                )
+            })?,
+            connect_api: root.clone(),
+            service_url: root
+                .join("gcm/ios")
+                .map_err(|_| {
+                    GarminError::provider(
+                        GarminErrorCode::SsoContractError,
+                        "endpoint_validation",
+                        None,
+                    )
+                })?
+                .to_string(),
+        })
     }
 
     pub async fn authenticate(
@@ -429,53 +455,72 @@ impl GarminClient {
     }
 
     pub async fn validate(&self, tokens: &GarminTokens) -> Result<GarminTokens, GarminError> {
-        let mut active = if Self::token_expires_within(tokens, Duration::from_secs(300)) {
-            self.refresh(tokens).await?
-        } else {
-            tokens.clone()
-        };
-        let mut response = self.validation_request(&active).await?;
+        let mut active = tokens.clone();
+        self.authenticated_get(
+            &mut active,
+            "activitylist-service/activities/search/activities",
+            &[("start", "0".to_owned()), ("limit", "1".to_owned())],
+            "token_restore",
+        )
+        .await?;
+        Ok(active)
+    }
+
+    pub(crate) async fn authenticated_get(
+        &self,
+        tokens: &mut GarminTokens,
+        path: &str,
+        query: &[(&str, String)],
+        phase: &'static str,
+    ) -> Result<reqwest::Response, GarminError> {
+        if Self::token_expires_within(tokens, Duration::from_secs(300)) {
+            *tokens = self.refresh(tokens).await?;
+        }
+        let url = self.api_url(path)?;
+        let mut response = self
+            .http
+            .get(url.clone())
+            .headers(self.native_headers())
+            .bearer_auth(&tokens.di_token)
+            .query(query)
+            .send()
+            .await
+            .map_err(|error| GarminError::transport(phase, &error))?;
         if response.status() == StatusCode::UNAUTHORIZED {
-            active = self.refresh(&active).await?;
-            response = self.validation_request(&active).await?;
+            *tokens = self.refresh(tokens).await?;
+            response = self
+                .http
+                .get(url)
+                .headers(self.native_headers())
+                .bearer_auth(&tokens.di_token)
+                .query(query)
+                .send()
+                .await
+                .map_err(|error| GarminError::transport(phase, &error))?;
         }
         match response.status() {
-            status if status.is_success() => Ok(active),
+            status if status.is_success() => Ok(response),
             StatusCode::TOO_MANY_REQUESTS => Err(GarminError::provider(
                 GarminErrorCode::RateLimited,
-                "token_restore",
+                phase,
                 Some(response.status()),
             )),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(GarminError::provider(
                 GarminErrorCode::InvalidCredentials,
-                "token_restore",
+                phase,
                 Some(response.status()),
             )),
             status if status.is_server_error() => Err(GarminError::provider(
                 GarminErrorCode::NetworkError,
-                "token_restore",
+                phase,
                 Some(status),
             )),
             status => Err(GarminError::provider(
                 GarminErrorCode::SsoContractError,
-                "token_restore",
+                phase,
                 Some(status),
             )),
         }
-    }
-
-    async fn validation_request(
-        &self,
-        tokens: &GarminTokens,
-    ) -> Result<reqwest::Response, GarminError> {
-        self.http
-            .get(self.api_url("activitylist-service/activities/search/activities")?)
-            .headers(self.native_headers())
-            .bearer_auth(&tokens.di_token)
-            .query(&[("start", 0_u32), ("limit", 1_u32)])
-            .send()
-            .await
-            .map_err(|error| GarminError::transport("token_restore", &error))
     }
 
     pub fn token_expires_within(tokens: &GarminTokens, duration: Duration) -> bool {

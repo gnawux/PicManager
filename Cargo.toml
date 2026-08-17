@@ -44,6 +44,7 @@ ndarray = "0.17"
 tempfile = "3"
 fitparser = "0.10"
 gpx = "0.10"
+zip = { version = "4", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tower = "0.5"

@@ -694,7 +694,7 @@ rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this mi
   `garmin_tokens.json` fields so the migration reuses authenticated sessions without rewriting or
   deleting the Python client's token file. Reject symlinked stores and malformed/unsigned JWT
   metadata used for expiry decisions.
-- M35.3: port activity pagination and authenticated ORIGINAL download into Rust. Preserve exact
+- M35.3: complete — port activity pagination and authenticated ORIGINAL download into Rust. Preserve exact
   ZIP/FIT validation, bounded paging, staging filenames derived only from provider activity IDs,
   durable journal writes and post-import acknowledgement/checkpoint semantics.
 - M35.4: replace the Python subprocess boundary in the activity handlers while retaining literal
