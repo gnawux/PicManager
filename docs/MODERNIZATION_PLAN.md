@@ -686,7 +686,7 @@ Status: complete.
 Status: in progress. The Python-backed baseline is tagged `v1.0.1-garmin-python`; its signed
 rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this milestone runs.
 
-- M35.1: implement a domain-allowlisted Rust Garmin transport for the China mobile SSO JSON
+- M35.1: complete — implement a domain-allowlisted Rust Garmin transport for the China mobile SSO JSON
   protocol, MFA verification, DI service-ticket exchange, token validation and refresh. Preserve
   the existing stable Web error vocabulary and never log credentials, MFA codes, provider bodies,
   service tickets or token values. Test every protocol transition against a controlled fake server.
