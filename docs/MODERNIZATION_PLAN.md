@@ -681,6 +681,41 @@ Status: complete.
 - M34.3: complete — cover no-read startup behavior, snake-case request/result DTOs and both
   explicit activity-page actions in native and Web tests.
 
+### M35 - Native Rust Garmin China client
+
+Status: in progress. The Python-backed baseline is tagged `v1.0.1-garmin-python`; its signed
+rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this milestone runs.
+
+- M35.1: implement a domain-allowlisted Rust Garmin transport for the China mobile SSO JSON
+  protocol, MFA verification, DI service-ticket exchange, token validation and refresh. Preserve
+  the existing stable Web error vocabulary and never log credentials, MFA codes, provider bodies,
+  service tickets or token values. Test every protocol transition against a controlled fake server.
+- M35.2: implement owner-only atomic token storage compatible with the existing
+  `garmin_tokens.json` fields so the migration reuses authenticated sessions without rewriting or
+  deleting the Python client's token file. Reject symlinked stores and malformed/unsigned JWT
+  metadata used for expiry decisions.
+- M35.3: port activity pagination and authenticated ORIGINAL download into Rust. Preserve exact
+  ZIP/FIT validation, bounded paging, staging filenames derived only from provider activity IDs,
+  durable journal writes and post-import acknowledgement/checkpoint semantics.
+- M35.4: replace the Python subprocess boundary in the activity handlers while retaining literal
+  JSON responses consumed by Web and the on-demand macOS Keychain activation contract. Cover
+  `authenticate -> MFA -> persisted token -> sync -> import -> acknowledge` end to end with a fake
+  Garmin service and isolated catalog.
+- M35.5: remove the bundled Python runtime, `garminconnect`, `curl_cffi`, helper and dependency
+  installation scripts from the new App. Update bundle/license gates to prove no Python Garmin
+  payload remains and compare the new package size with the preserved rollback bundle.
+- M35.6: run all Rust, Web and Swift suites plus production/release builds, offline protocol tests,
+  bundle inspection and strict deep signature verification. Produce a new `dist/PicManager.app`
+  while leaving `dist/PicManager-Python-Garmin.app` unchanged and valid for rollback.
+
+Acceptance criteria:
+
+- A user without Garmin credentials can start and use PicManager without Keychain access.
+- Garmin China credential login and MFA produce a refreshable persisted Rust session.
+- Interrupted sync resumes without duplicate imports or premature checkpoint advancement.
+- The new application contains no Python interpreter or Garmin Python package.
+- Both the new and rollback applications pass strict deep signature verification.
+
 ## 9. Testing and commit protocol
 
 For every milestone:
