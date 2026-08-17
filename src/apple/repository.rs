@@ -140,6 +140,45 @@ pub async fn fail_export(pool: &SqlitePool, item_id: i64, worker: &str, error: &
     Ok(())
 }
 
+pub async fn reconcile_export_source_statuses(pool: &SqlitePool) -> Result<u64> {
+    let rows: Vec<(i64, Option<i64>, String, Option<String>, String, Option<String>)> = sqlx::query_as(
+        "SELECT s.id, s.asset_id, s.sync_status, s.last_error, i.status, i.last_error \
+         FROM asset_sources s JOIN sync_items i ON i.id = (\
+             SELECT latest.id FROM sync_items latest \
+             WHERE latest.source_id = s.id AND latest.operation = 'export_original' \
+             ORDER BY latest.id DESC LIMIT 1\
+         ) WHERE s.provider = 'apple_photos'",
+    )
+    .fetch_all(pool)
+    .await?;
+    let mut tx = pool.begin().await?;
+    let mut changed = 0_u64;
+    for (source_id, asset_id, current, current_error, item_status, item_error) in rows {
+        let desired = match item_status.as_str() {
+            "queued" => Some("queued"),
+            "leased" => Some("downloading"),
+            "failed" => Some("failed"),
+            "succeeded" if asset_id.is_some() => Some("ready"),
+            _ => None,
+        };
+        let Some(desired) = desired else { continue };
+        let desired_error = if item_status == "failed" { item_error.as_deref() } else { None };
+        if current == desired && current_error.as_deref() == desired_error { continue }
+        sqlx::query(
+            "UPDATE asset_sources SET sync_status = ?, last_error = ?, updated_at = datetime('now') \
+             WHERE id = ?",
+        )
+        .bind(desired)
+        .bind(desired_error)
+        .bind(source_id)
+        .execute(&mut *tx)
+        .await?;
+        changed += 1;
+    }
+    tx.commit().await?;
+    Ok(changed)
+}
+
 pub async fn retry_source(pool: &SqlitePool, source_id: i64) -> Result<(i64, AppleSourceView)> {
     let mut tx = pool.begin().await?;
     let source: Option<(String, String)> = sqlx::query_as(
@@ -373,6 +412,30 @@ mod tests {
         assert_eq!(claim.source.id, source_id);
         assert_eq!(claim.source.sync_status, "downloading");
         assert!(claim_next_export(&pool, "another-native-test", 300).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn reconciliation_repairs_a_source_left_downloading_after_lease_failure() {
+        let pool = test_pool().await;
+        let source_id = source(&pool, "expired-one", "IMG_0002.HEIC", "queued").await;
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, total_items) \
+             VALUES ('apple_full_inventory', 'apple_photos', 1) RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation, max_attempts) \
+             VALUES (?, ?, 'expired-one', 'export_original', 1)",
+        ).bind(job_id).bind(source_id).execute(&pool).await.unwrap();
+        let claim = claim_next_export(&pool, "dead-native", 300).await.unwrap().unwrap();
+        sqlx::query("UPDATE sync_items SET lease_expires_at = datetime('now', '-1 second') WHERE id = ?")
+            .bind(claim.item_id).execute(&pool).await.unwrap();
+
+        assert_eq!(crate::sync::recover_expired_leases(&pool).await.unwrap(), 1);
+        assert_eq!(get_source(&pool, source_id).await.unwrap().sync_status, "downloading");
+        assert_eq!(reconcile_export_source_statuses(&pool).await.unwrap(), 1);
+        let repaired = get_source(&pool, source_id).await.unwrap();
+        assert_eq!(repaired.sync_status, "failed");
+        assert!(repaired.last_error.unwrap().contains("lease expired"));
     }
 
     #[tokio::test]

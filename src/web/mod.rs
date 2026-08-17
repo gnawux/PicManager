@@ -156,6 +156,10 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
         filesystem_intents = recovery.filesystem_intents_recovered,
         "startup recovery completed"
     );
+    let repaired_apple_sources = crate::apple::reconcile_export_source_statuses(&pool).await?;
+    if repaired_apple_sources > 0 {
+        tracing::warn!(count = repaired_apple_sources, "reconciled Apple export source states");
+    }
     let application = Application::new(pool.clone(), config);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let reconciliation_context = application.request_context(CallerKind::InternalWorker);
@@ -184,6 +188,9 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
                 Ok(0) => {}
                 Ok(count) => tracing::warn!(count, "recovered expired sync item leases"),
                 Err(error) => tracing::error!(%error, "failed to recover expired sync item leases"),
+            }
+            if let Err(error) = crate::apple::reconcile_export_source_statuses(&sync_recovery_pool).await {
+                tracing::error!(%error, "failed to reconcile Apple export source states");
             }
         }
     });
