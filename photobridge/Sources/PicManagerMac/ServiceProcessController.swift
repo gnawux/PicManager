@@ -56,6 +56,15 @@ final class ServiceProcessController {
         process.terminate()
     }
 
+    /// Credential changes alter the child process environment. Do not start a replacement
+    /// until the previous owned service has actually exited, or `start` will retain it.
+    func waitUntilStopped() async {
+        for _ in 0..<50 {
+            if process == nil { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
     private func launch() {
         guard let launchConfiguration, !requestedStop else { return }
         state = .starting

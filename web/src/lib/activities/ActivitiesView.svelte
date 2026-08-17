@@ -28,7 +28,12 @@
   let garminNotice = $state<string | null>(null);
   let garminNeedsMfa = $state(false);
 
-  onMount(() => { void reload(); void loadGarminStatus(); });
+  onMount(() => {
+    const credentialsSaved = () => { garminNotice = 'Garmin 凭据已保存，本地服务正在刷新；随后点击“验证登录”。'; void loadGarminStatus(); };
+    window.addEventListener('picmanager:garmin-credentials', credentialsSaved);
+    void reload(); void loadGarminStatus();
+    return () => window.removeEventListener('picmanager:garmin-credentials', credentialsSaved);
+  });
 
   async function reload() {
     status = 'loading';

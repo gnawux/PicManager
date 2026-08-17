@@ -339,8 +339,7 @@ private struct ConfigurationView: View {
                 Text("密码仅保存到 macOS Keychain。同步活动时，如 Garmin 要求验证，请在活动页填写一次性 MFA 验证码。")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Save Garmin credentials") {
-                    do { if !garminPassword.isEmpty { try GarminKeychain.save(password: garminPassword); garminPassword = "" }; model.saveConfiguration() }
-                    catch { model.lastError = error.localizedDescription }
+                    Task { await model.saveGarminCredentials(password: garminPassword); garminPassword = "" }
                 }
             }
             Picker("Apple Photos sync", selection: $model.configuration.applePhotosSyncPolicy) {

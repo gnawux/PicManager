@@ -106,16 +106,55 @@ final class AppModel: ObservableObject {
         photoAccess = Self.photoAccessReadiness()
     }
 
-    func presentGarminCredentials() {
+    func presentGarminCredentials() async -> Bool {
         let alert = NSAlert(); alert.messageText = "Connect Garmin China"; alert.informativeText = "Credentials are saved only in macOS Keychain."
         let stack = NSStackView(); stack.orientation = .vertical
         let email = NSTextField(string: configuration.garminEmail ?? ""); email.placeholderString = "Garmin account"
         let password = NSSecureTextField(); password.placeholderString = "Garmin password"
         stack.addArrangedSubview(email); stack.addArrangedSubview(password); alert.accessoryView = stack
         alert.addButton(withTitle: "Save and sync"); alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        do { configuration.garminEmail = email.stringValue; try GarminKeychain.save(password: password.stringValue); saveConfiguration() }
-        catch { lastError = error.localizedDescription }
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        do {
+            configuration.garminEmail = email.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !configuration.garminEmail.orEmpty.isEmpty, !password.stringValue.isEmpty else {
+                lastError = "Garmin account and password are required."
+                return false
+            }
+            try GarminKeychain.save(password: password.stringValue)
+            try configuration.save(to: MacAppConfiguration.applicationSupportURL)
+            await restartServiceForGarminCredentials()
+            return lastError == nil
+        } catch {
+            lastError = error.localizedDescription
+            return false
+        }
+    }
+
+    func saveGarminCredentials(password: String) async {
+        do {
+            let email = configuration.garminEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !email.isEmpty, !password.isEmpty else {
+                lastError = "Garmin account and password are required."
+                return
+            }
+            configuration.garminEmail = email
+            try GarminKeychain.save(password: password)
+            try configuration.save(to: MacAppConfiguration.applicationSupportURL)
+            await restartServiceForGarminCredentials()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
+    private func restartServiceForGarminCredentials() async {
+        stopService()
+        await serviceProcess.waitUntilStopped()
+        libraryOwnership = nil
+        dashboard = nil
+        guard await ensureServiceRunning() else { return }
+        await refreshDashboard()
+        startHealthMonitoring()
+        startAppleSyncMonitoring()
     }
 
     func finishOnboarding() {
@@ -483,4 +522,8 @@ final class AppModel: ObservableObject {
         @unknown default: .restricted
         }
     }
+}
+
+private extension Optional where Wrapped == String {
+    var orEmpty: String { self ?? "" }
 }

@@ -16,6 +16,7 @@ struct WebLibraryView: NSViewRepresentable {
         configuration.userContentController.add(context.coordinator, name: "picmanager")
         configuration.websiteDataStore = .default()
         let webView = WKWebView(frame: .zero, configuration: configuration)
+        context.coordinator.webView = webView
         webView.navigationDelegate = context.coordinator
         webView.allowsMagnification = true
         return webView
@@ -33,6 +34,7 @@ struct WebLibraryView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         var serviceURL: URL
         let model: AppModel
+        weak var webView: WKWebView?
         var wasAvailable = false
 
         init(serviceURL: URL, model: AppModel) {
@@ -47,7 +49,9 @@ struct WebLibraryView: NSViewRepresentable {
             if action == "configureGarmin" {
                 Task { @MainActor in
                     NSApplication.shared.activate(ignoringOtherApps: true)
-                    model.presentGarminCredentials()
+                    let saved = await model.presentGarminCredentials()
+                    let result = saved ? "saved" : "cancelled"
+                    _ = try? await self.webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('picmanager:garmin-credentials', { detail: '\(result)' }))")
                 }
             }
         }
