@@ -50,5 +50,29 @@ func runServiceDashboardTests() {
             try expect(claim.source.originalFilename, equals: "IMG_0001.HEIC")
             try expect(claim.source.syncStatus, equals: "downloading")
         }
+
+        test("retries transient Apple export claim failures with bounded backoff") {
+            try expect(AppleExportClaimRetryPolicy.shouldRetry(
+                ServiceDashboardError.response(500), afterFailure: 1
+            ))
+            try expect(AppleExportClaimRetryPolicy.shouldRetry(
+                URLError(.networkConnectionLost), afterFailure: 2
+            ))
+            try expect(!AppleExportClaimRetryPolicy.shouldRetry(
+                ServiceDashboardError.response(400), afterFailure: 1
+            ))
+            try expect(!AppleExportClaimRetryPolicy.shouldRetry(
+                ServiceDashboardError.response(500),
+                afterFailure: AppleExportClaimRetryPolicy.maximumAttempts
+            ))
+            try expect(
+                AppleExportClaimRetryPolicy.delayMilliseconds(afterFailure: 1),
+                equals: 200
+            )
+            try expect(
+                AppleExportClaimRetryPolicy.delayMilliseconds(afterFailure: 4),
+                equals: 1_600
+            )
+        }
     }
 }

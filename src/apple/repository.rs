@@ -1,6 +1,6 @@
 use serde::Serialize;
 use sqlx::{FromRow, SqlitePool};
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 
 use crate::error::{AppError, Result};
 
@@ -140,6 +140,22 @@ pub async fn list_recently_synchronized(pool: &SqlitePool, hours: u32, limit: u3
     ).bind(since).bind(i64::from(limit.clamp(1, 200))).fetch_all(pool).await?)
 }
 pub async fn claim_next_export(pool: &SqlitePool, worker: &str, lease_seconds: u32) -> Result<Option<AppleExportClaim>> {
+    let mut last_error = None;
+    for attempt in 1..=5 {
+        match claim_next_export_once(pool, worker, lease_seconds).await {
+            Ok(claim) => return Ok(claim),
+            Err(error) if attempt < 5 && is_sqlite_contention(&error) => {
+                tracing::warn!(attempt, worker, "Apple export claim delayed by database contention");
+                last_error = Some(error);
+                tokio::time::sleep(Duration::from_millis(25 * attempt)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.expect("Apple export claim retry records an error"))
+}
+
+async fn claim_next_export_once(pool: &SqlitePool, worker: &str, lease_seconds: u32) -> Result<Option<AppleExportClaim>> {
     let mut tx = pool.begin().await?;
     let item: Option<(i64, i64)> = sqlx::query_as("SELECT i.id, i.source_id FROM sync_items i JOIN asset_sources s ON s.id = i.source_id WHERE i.status = 'queued' AND i.available_at <= datetime('now') AND i.operation = 'export_original' AND s.provider = 'apple_photos' ORDER BY i.available_at, i.id LIMIT 1").fetch_optional(&mut *tx).await?;
     let Some((item_id, source_id)) = item else { tx.commit().await?; return Ok(None); };
@@ -149,6 +165,11 @@ pub async fn claim_next_export(pool: &SqlitePool, worker: &str, lease_seconds: u
     sqlx::query("UPDATE sync_jobs SET status = 'running', started_at = COALESCE(started_at, datetime('now')), updated_at = datetime('now') WHERE id = (SELECT job_id FROM sync_items WHERE id = ?)").bind(item_id).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(Some(AppleExportClaim { item_id, source: get_source(pool, source_id).await? }))
+}
+
+fn is_sqlite_contention(error: &AppError) -> bool {
+    let AppError::Database(sqlx::Error::Database(database)) = error else { return false; };
+    matches!(database.code().as_deref(), Some("5" | "6" | "517"))
 }
 pub async fn renew_export_lease(pool: &SqlitePool, item_id: i64, worker: &str, lease_seconds: u32) -> Result<()> {
     let modifier = format!("+{} seconds", lease_seconds.clamp(60, 3600));
@@ -404,7 +425,7 @@ pub async fn review_link(pool: &SqlitePool, link_id: i64, accept: bool) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
     async fn test_pool() -> SqlitePool {
         let pool = SqlitePoolOptions::new()
@@ -510,6 +531,43 @@ mod tests {
         assert_eq!(claim.source.id, source_id);
         assert_eq!(claim.source.sync_status, "downloading");
         assert!(claim_next_export(&pool, "another-native-test", 300).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn export_claim_retries_transient_writer_contention() {
+        let directory = tempfile::tempdir().unwrap();
+        let options = SqliteConnectOptions::new()
+            .filename(directory.path().join("catalog.db"))
+            .create_if_missing(true)
+            .busy_timeout(Duration::from_millis(10));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let source_id = source(&pool, "contended", "IMG_0003.HEIC", "queued").await;
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, total_items) \
+             VALUES ('apple_full_inventory', 'apple_photos', 1) RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation) \
+             VALUES (?, ?, 'contended', 'export_original')",
+        ).bind(job_id).bind(source_id).execute(&pool).await.unwrap();
+
+        let mut writer = pool.acquire().await.unwrap();
+        sqlx::query("BEGIN IMMEDIATE").execute(&mut *writer).await.unwrap();
+        let retry_pool = pool.clone();
+        let claim = tokio::spawn(async move {
+            claim_next_export(&retry_pool, "retry-native", 300).await
+        });
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        sqlx::query("COMMIT").execute(&mut *writer).await.unwrap();
+
+        let claim = claim.await.unwrap().unwrap().expect("queued export is claimed");
+        assert_eq!(claim.source.id, source_id);
+        assert_eq!(claim.source.sync_status, "downloading");
     }
 
     #[tokio::test]

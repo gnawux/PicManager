@@ -382,7 +382,10 @@ final class AppModel: ObservableObject {
             .appendingPathComponent(".sync-staging/apple", isDirectory: true)
         var attempted = 0
         while maximum.map({ attempted < $0 }) ?? true {
-            guard let claim = try await client.claimAppleExport(workerID: workerID) else { break }
+            guard let claim = try await claimAppleExportWithRetry(client: client, workerID: workerID) else {
+                appleSyncLog.info("Apple export queue drained")
+                break
+            }
             attempted += 1
             appleSyncLog.info("claimed Apple export item \(claim.itemID, privacy: .public)")
             let package = staging.appendingPathComponent("source-\(claim.source.id)", isDirectory: true)
@@ -417,6 +420,32 @@ final class AppModel: ObservableObject {
                 continue
             }
             heartbeat.cancel()
+        }
+    }
+
+    private func claimAppleExportWithRetry(
+        client: ServiceDashboardClient,
+        workerID: String
+    ) async throws -> AppleExportClaim? {
+        var failureCount = 0
+        while true {
+            do {
+                return try await client.claimAppleExport(workerID: workerID)
+            } catch {
+                failureCount += 1
+                guard AppleExportClaimRetryPolicy.shouldRetry(error, afterFailure: failureCount) else {
+                    appleSyncLog.error(
+                        "Apple export claim stopped after \(failureCount, privacy: .public) failure(s): \(error.localizedDescription, privacy: .public)"
+                    )
+                    throw error
+                }
+                let delay = AppleExportClaimRetryPolicy.delayMilliseconds(afterFailure: failureCount)
+                appleSyncLog.warning(
+                    "Apple export claim failed; retrying attempt \(failureCount + 1, privacy: .public) of \(AppleExportClaimRetryPolicy.maximumAttempts, privacy: .public) after \(delay, privacy: .public) ms: \(error.localizedDescription, privacy: .public)"
+                )
+                inventorySyncProgress = "Local service was temporarily busy; retrying Apple Photos sync…"
+                try await Task.sleep(for: .milliseconds(delay))
+            }
         }
     }
 

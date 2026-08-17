@@ -5,6 +5,14 @@ Implementation status: Phase 0–5 and M18 stabilization are complete and merged
 services, modern Web application, and macOS product are implemented. Phase 6 is
 intentionally deferred.
 
+Current stabilization milestones:
+
+- M19 — Apple export claim resilience: completed. Retry transient SQLite contention in
+  the service, retry bounded HTTP/network failures in the Mac shell, and log every
+  queue exit reason.
+- M20 — Apple smart-album consistency: in progress. Maintain month membership during
+  rendition commits and backfill missing derived relationships additively.
+
 ## 1. Product direction
 
 PicManager will evolve from a feature-rich local engineering tool into a reliable,
