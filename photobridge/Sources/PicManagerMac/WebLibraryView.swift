@@ -1,4 +1,5 @@
 import AppKit
+import PhotoBridgeLib
 import SwiftUI
 import WebKit
 
@@ -50,12 +51,36 @@ struct WebLibraryView: NSViewRepresentable {
                 Task { @MainActor in
                     NSApplication.shared.activate(ignoringOtherApps: true)
                     let result = await model.presentGarminCredentials()
-                    guard let data = try? JSONEncoder().encode(result),
-                          let detail = String(data: data, encoding: .utf8) else { return }
-                    _ = try? await self.webView?.evaluateJavaScript(
-                        "window.dispatchEvent(new CustomEvent('picmanager:garmin-credentials', { detail: \(detail) }))"
-                    )
+                    await self.dispatch(event: "picmanager:garmin-credentials", detail: result)
                 }
+            }
+            if action == "prepareGarmin",
+               let request = GarminPreparationRequest(wireObject: body as? [String: Any] ?? [:]) {
+                Task { @MainActor in
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    let result = await model.prepareGarminForExplicitRequest(requestID: request.requestID)
+                    await self.dispatch(event: "picmanager:garmin-prepared", detail: result)
+                }
+            }
+        }
+
+        @MainActor
+        private func dispatch<T: Encodable>(event: String, detail: T) async {
+            do {
+                let data = try JSONEncoder().encode(detail)
+                let object = try JSONSerialization.jsonObject(with: data)
+                guard let webView else {
+                    model.lastError = "The embedded Web view closed before the native response was delivered."
+                    return
+                }
+                _ = try await webView.callAsyncJavaScript(
+                    "window.dispatchEvent(new CustomEvent(eventName, { detail: detail }));",
+                    arguments: ["eventName": event, "detail": object],
+                    in: nil,
+                    contentWorld: .page
+                )
+            } catch {
+                model.lastError = "The native Garmin response could not be delivered: \(error.localizedDescription)"
             }
         }
 

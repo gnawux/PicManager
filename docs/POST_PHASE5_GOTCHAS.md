@@ -107,6 +107,10 @@ accessory could collapse its account/password controls, while bundled Python cre
   account without broad deletion.
 - A credential save is not applied until the owned service has stopped and restarted
   with the new environment. Surface a saved-but-restart-failed result explicitly.
+- Garmin is optional. Ordinary app/service startup and activity-page status loading must
+  not read Keychain or prompt for access. Keep saved credentials behind an in-memory
+  activation boundary; only an explicit authenticate or synchronize action may read
+  Keychain and restart the owned service with Garmin environment variables.
 - Run bundled Python with `-B` and `PYTHONDONTWRITEBYTECODE=1`. The release gate must
   execute an offline helper invocation after app signing and then run strict signature
   verification; a successful pre-launch seal alone is not sufficient.

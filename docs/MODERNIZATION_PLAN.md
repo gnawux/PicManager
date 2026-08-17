@@ -669,6 +669,18 @@ Status: complete.
 - M33.2: complete — assert the provider filename contract in the bundled-runtime gate and the
   isolated fake-provider suite.
 
+### M34 - Optional Garmin credential activation
+
+Status: complete.
+
+- M34.1: complete — start the local service without reading Garmin Keychain credentials and
+  retain only credentials activated in memory by an explicit user action.
+- M34.2: complete — add a literal `prepareGarmin` / `picmanager:garmin-prepared` WebKit contract
+  so authenticate and synchronize clicks can request native credential activation before their
+  Rust API call, while passive activity browsing remains provider-independent.
+- M34.3: complete — cover no-read startup behavior, snake-case request/result DTOs and both
+  explicit activity-page actions in native and Web tests.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

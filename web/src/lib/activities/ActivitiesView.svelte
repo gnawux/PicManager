@@ -27,6 +27,7 @@
   let loginNotice = $state<string | null>(null);
   let garminNotice = $state<string | null>(null);
   let garminNeedsMfa = $state(false);
+  let garminPreparationSequence = 0;
 
   onMount(() => {
     const credentialsFinished = (event: Event) => {
@@ -67,6 +68,7 @@
   async function syncGarmin() {
     syncing = true; error = null; garminNotice = null;
     try {
+      if (!await prepareGarmin('sync')) return;
       const result = await api.activities.syncGarmin(mfaCode || undefined);
       garminNeedsMfa = result.status === 'mfa_required';
       garminNotice = result.message ?? garminMessage(result);
@@ -81,6 +83,7 @@
   async function authenticateGarmin() {
     syncing = true; error = null; garminNotice = null;
     try {
+      if (!await prepareGarmin('authenticate')) return;
       const result = await api.activities.authenticateGarmin(mfaCode || undefined);
       garminNeedsMfa = result.status === 'mfa_required';
       garminNotice = result.message ?? garminMessage(result);
@@ -116,6 +119,46 @@
     const bridge = (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager;
     if (!bridge) { loginNotice = 'Garmin 登录需要从 PicManager Mac 应用的内嵌窗口运行。'; return; }
     bridge.postMessage({ action: 'configureGarmin' }); loginNotice = '正在打开 Mac 原生 Garmin 登录窗口…';
+  }
+
+  function prepareGarmin(operation: 'authenticate' | 'sync'): Promise<boolean> {
+    const bridge = (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager;
+    if (!bridge) return Promise.resolve(true);
+    const requestId = `garmin-${Date.now()}-${++garminPreparationSequence}`;
+    return new Promise((resolve) => {
+      const timeout = window.setTimeout(() => {
+        window.removeEventListener('picmanager:garmin-prepared', prepared);
+        garminNotice = 'Mac 原生 Garmin 凭据准备超时；请重试。';
+        resolve(false);
+      }, 45_000);
+      const prepared = (event: Event) => {
+        const detail = (event as CustomEvent<unknown>).detail;
+        if (!detail || typeof detail !== 'object' || !('request_id' in detail)) return;
+        const result = detail as { request_id?: unknown; outcome?: unknown; message?: unknown };
+        if (result.request_id !== requestId) return;
+        window.clearTimeout(timeout);
+        window.removeEventListener('picmanager:garmin-prepared', prepared);
+        if (result.outcome === 'ready') {
+          resolve(true);
+        } else {
+          garminNotice = typeof result.message === 'string'
+            ? result.message
+            : result.outcome === 'cancelled'
+              ? '已取消 Garmin 凭据准备。'
+              : 'Mac 无法准备 Garmin 凭据。';
+          resolve(false);
+        }
+      };
+      window.addEventListener('picmanager:garmin-prepared', prepared);
+      try {
+        bridge.postMessage({ action: 'prepareGarmin', request_id: requestId, operation });
+      } catch (reason) {
+        window.clearTimeout(timeout);
+        window.removeEventListener('picmanager:garmin-prepared', prepared);
+        garminNotice = `无法请求 Mac 准备 Garmin 凭据：${reason instanceof Error ? reason.message : String(reason)}`;
+        resolve(false);
+      }
+    });
   }
 
   async function open(activity: ActivitySummary) {

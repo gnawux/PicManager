@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
 import type { ApiClient } from '../api/client';
 import type { ActivitySummary } from '../api/types';
@@ -12,6 +12,53 @@ const activity: ActivitySummary = {
 };
 
 describe('ActivitiesView', () => {
+  it('requests native credentials only after an explicit authenticate action', async () => {
+    const postMessage = vi.fn();
+    Object.defineProperty(window, 'webkit', {
+      configurable: true,
+      value: { messageHandlers: { picmanager: { postMessage } } },
+    });
+    const authenticateGarmin = vi.fn(async () => ({
+      configured: true, authenticated: true, status: 'authenticated', error_code: null,
+      retryable: false, downloaded: 0, imported: 0, skipped: 0, failed: 0,
+    }));
+    const syncGarmin = vi.fn(async () => ({
+      configured: true, authenticated: true, status: 'completed', error_code: null,
+      retryable: false, downloaded: 0, imported: 0, skipped: 0, failed: 0,
+    }));
+    const api = {
+      activities: {
+        list: vi.fn(async () => ({ activities: [], total: 0, page: 1, per_page: 100 })),
+        garminStatus: vi.fn(async () => ({ configured: false, authenticated: false, status: 'not_configured', error_code: 'not_configured', retryable: false, downloaded: 0, imported: 0, skipped: 0, failed: 0 })),
+        authenticateGarmin,
+        syncGarmin,
+      },
+    } as unknown as ApiClient;
+
+    render(ActivitiesView, { api });
+    await screen.findByText('Garmin 状态：not_configured');
+    expect(postMessage).not.toHaveBeenCalled();
+
+    await fireEvent.click(screen.getByRole('button', { name: '验证登录' }));
+    expect(authenticateGarmin).not.toHaveBeenCalled();
+    const request = postMessage.mock.calls[0][0] as { action: string; request_id: string; operation: string };
+    expect(request).toMatchObject({ action: 'prepareGarmin', operation: 'authenticate' });
+    window.dispatchEvent(new CustomEvent('picmanager:garmin-prepared', {
+      detail: { request_id: request.request_id, outcome: 'ready' },
+    }));
+    await waitFor(() => expect(authenticateGarmin).toHaveBeenCalledOnce());
+
+    await fireEvent.click(screen.getByRole('button', { name: '同步 Garmin 数据' }));
+    expect(syncGarmin).not.toHaveBeenCalled();
+    const syncRequest = postMessage.mock.calls[1][0] as { action: string; request_id: string; operation: string };
+    expect(syncRequest).toMatchObject({ action: 'prepareGarmin', operation: 'sync' });
+    window.dispatchEvent(new CustomEvent('picmanager:garmin-prepared', {
+      detail: { request_id: syncRequest.request_id, outcome: 'ready' },
+    }));
+    await waitFor(() => expect(syncGarmin).toHaveBeenCalledOnce());
+    Object.defineProperty(window, 'webkit', { configurable: true, value: undefined });
+  });
+
   it('consumes native credential outcomes and guides classified Garmin authentication failures', async () => {
     const api = {
       activities: {

@@ -45,11 +45,11 @@ final class AppModel: ObservableObject {
     private let readinessPolicy = ServiceReadinessPolicy()
     private var libraryOwnership: LibraryOwnershipLock?
     private let launchAtLogin = LaunchAtLoginController()
-    private let garminCredentials: any GarminCredentialStore
+    private let garminCredentialActivation: GarminCredentialActivation
     private var garminCredentialContinuation: CheckedContinuation<GarminCredentialPresentationResult, Never>?
 
     init(garminCredentials: any GarminCredentialStore = GarminKeychain()) {
-        self.garminCredentials = garminCredentials
+        garminCredentialActivation = GarminCredentialActivation(store: garminCredentials)
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
         configuration = saved ?? .default
         onboardingRequired = saved == nil
@@ -72,6 +72,9 @@ final class AppModel: ObservableObject {
                 || previous?.host != configuration.host
                 || previous?.port != configuration.port
                 || previous?.garminEmail != configuration.garminEmail {
+                if previous?.garminEmail != configuration.garminEmail {
+                    garminCredentialActivation.deactivate()
+                }
                 stopService()
                 libraryOwnership = nil
                 dashboard = nil
@@ -136,6 +139,39 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func prepareGarminForExplicitRequest(requestID: String) async -> GarminPreparationResult {
+        let email = configuration.garminEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !email.isEmpty {
+            do {
+                if garminCredentialActivation.passwordForService(account: email) != nil {
+                    return .ready(requestID: requestID)
+                }
+                if try garminCredentialActivation.activateSavedCredential(for: email) {
+                    guard await restartServiceForGarminCredentials() else {
+                        return .error(
+                            requestID: requestID,
+                            message: lastError ?? "The local service could not apply Garmin credentials."
+                        )
+                    }
+                    return .ready(requestID: requestID)
+                }
+            } catch {
+                return .error(requestID: requestID, message: error.localizedDescription)
+            }
+        }
+
+        let presentation = await presentGarminCredentials()
+        switch presentation.outcome {
+        case "saved": return .ready(requestID: requestID)
+        case "cancelled": return .cancelled(requestID: requestID)
+        default:
+            return .error(
+                requestID: requestID,
+                message: presentation.message ?? "Garmin credentials are unavailable."
+            )
+        }
+    }
+
     func saveGarminCredentials(account: String, password: String) async {
         guard !garminCredentialSaveInProgress else { return }
         garminCredentialSaveInProgress = true
@@ -147,14 +183,14 @@ final class AppModel: ObservableObject {
                 return
             }
             configuration.garminEmail = email
-            try garminCredentials.save(password: password, for: email)
+            try garminCredentialActivation.saveAndActivate(password: password, for: email)
             try configuration.save(to: MacAppConfiguration.applicationSupportURL)
             let restarted = await restartServiceForGarminCredentials()
             if restarted {
                 resolveGarminCredentialPrompt(.saved("Credentials saved and local service restarted."))
             } else {
                 let restartMessage = lastError ?? "Open Status for diagnostics."
-                resolveGarminCredentialPrompt(.saved("Credentials saved, but the local service could not restart. \(restartMessage)"))
+                resolveGarminCredentialPrompt(.error("Credentials were saved, but the local service could not restart. \(restartMessage)"))
             }
         } catch {
             garminCredentialSaveError = error.localizedDescription
@@ -321,18 +357,11 @@ final class AppModel: ObservableObject {
                 // No compatible service is listening, so start the owned service below.
             }
         }
-        let garminPassword: String?
-        if let email = configuration.garminEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
-            do {
-                garminPassword = try garminCredentials.password(for: email)
-            } catch {
-                serviceStatus = "Garmin credentials unavailable"
-                lastError = "The saved Garmin credential could not be read: \(error.localizedDescription)"
-                return false
-            }
-        } else {
-            garminPassword = nil
-        }
+        // Startup only uses credentials activated by an explicit activity-page action.
+        // This in-memory lookup never accesses Keychain.
+        let garminPassword = garminCredentialActivation.passwordForService(
+            account: configuration.garminEmail
+        )
         serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration, garminPassword: garminPassword)
         serviceStatus = "Preparing library"
         lastError = nil
