@@ -58,11 +58,12 @@ final class ServiceProcessController {
 
     /// Credential changes alter the child process environment. Do not start a replacement
     /// until the previous owned service has actually exited, or `start` will retain it.
-    func waitUntilStopped() async {
+    func waitUntilStopped() async -> Bool {
         for _ in 0..<50 {
-            if process == nil { return }
+            if process == nil { return true }
             try? await Task.sleep(for: .milliseconds(100))
         }
+        return process == nil
     }
 
     private func launch() {
@@ -82,6 +83,11 @@ final class ServiceProcessController {
             environment["PICMANAGER_GARMIN_PASSWORD"] = garminPassword
             environment["PICMANAGER_GARMIN_HELPER"] = Bundle.main.resourceURL!.appendingPathComponent("garmin_sync.py").path
             environment["PICMANAGER_GARMIN_PYTHON"] = Bundle.main.resourceURL!.appendingPathComponent("python/bin/python3").path
+            // A sealed app bundle is executable code, never a Python cache directory.
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            environment["PYTHONPYCACHEPREFIX"] = MacAppConfiguration.applicationSupportURL
+                .deletingLastPathComponent()
+                .appendingPathComponent("Caches/python-bytecode", isDirectory: true).path
         }
         process.environment = environment
         let outputPipe = Pipe()

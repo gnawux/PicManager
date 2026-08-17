@@ -7,6 +7,7 @@ suite("PhotoBridge package") {
 
 // Step 39b
 runAuthTests()
+runGarminCredentialStoreTests()
 
 // Step 40a
 runAssetFilterTests()

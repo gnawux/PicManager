@@ -94,6 +94,54 @@ private struct LibraryShellView: View {
         }
         .onAppear { activation.setLibraryWindowVisible(true) }
         .onDisappear { activation.setLibraryWindowVisible(false) }
+        .sheet(item: $model.garminCredentialPrompt) { _ in
+            GarminCredentialsSheet(model: model)
+        }
+    }
+}
+
+private struct GarminCredentialsSheet: View {
+    @ObservedObject var model: AppModel
+    @State private var account: String
+    @State private var password = ""
+
+    init(model: AppModel) {
+        self.model = model
+        _account = State(initialValue: model.configuration.garminEmail ?? "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Connect Garmin China").font(.title2.bold())
+            Text("Your credentials are saved only in this Mac's Keychain. PicManager verifies them locally and asks for a one-time code only when Garmin requires MFA.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Form {
+                TextField("Garmin account", text: $account)
+                    .textContentType(.username)
+                SecureField("Garmin password", text: $password)
+                    .textContentType(.password)
+            }
+            if let error = model.garminCredentialSaveError {
+                Text(error).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel") { model.cancelGarminCredentials() }
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(model.garminCredentialSaveInProgress)
+                Button(model.garminCredentialSaveInProgress ? "Saving…" : "Save and restart service") {
+                    Task { await model.saveGarminCredentials(account: account, password: password) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.garminCredentialSaveInProgress)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+        .frame(minHeight: 300)
+        .interactiveDismissDisabled(model.garminCredentialSaveInProgress)
+        .onDisappear { model.cancelGarminCredentials() }
     }
 }
 
@@ -314,7 +362,6 @@ private struct OnboardingAssistant: View {
 
 private struct ConfigurationView: View {
     @ObservedObject var model: AppModel
-    @State private var garminPassword = ""
 
     var body: some View {
         Form {
@@ -334,12 +381,10 @@ private struct ConfigurationView: View {
             }
             Toggle("Launch PicManager at login", isOn: $model.configuration.launchAtLogin)
             Section("Garmin Connect China") {
-                TextField("Garmin account", text: Binding(get: { model.configuration.garminEmail ?? "" }, set: { model.configuration.garminEmail = $0.isEmpty ? nil : $0 }))
-                SecureField("Garmin password", text: $garminPassword)
-                Text("密码仅保存到 macOS Keychain。同步活动时，如 Garmin 要求验证，请在活动页填写一次性 MFA 验证码。")
+                Text("Credentials are saved only in macOS Keychain. PicManager asks for a one-time MFA code on the activity page only when Garmin requires it.")
                     .font(.caption).foregroundStyle(.secondary)
-                Button("Save Garmin credentials") {
-                    Task { await model.saveGarminCredentials(password: garminPassword); garminPassword = "" }
+                Button("Edit Garmin credentials…") {
+                    Task { _ = await model.presentGarminCredentials() }
                 }
             }
             Picker("Apple Photos sync", selection: $model.configuration.applePhotosSyncPolicy) {

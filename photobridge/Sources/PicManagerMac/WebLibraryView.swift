@@ -49,9 +49,12 @@ struct WebLibraryView: NSViewRepresentable {
             if action == "configureGarmin" {
                 Task { @MainActor in
                     NSApplication.shared.activate(ignoringOtherApps: true)
-                    let saved = await model.presentGarminCredentials()
-                    let result = saved ? "saved" : "cancelled"
-                    _ = try? await self.webView?.evaluateJavaScript("window.dispatchEvent(new CustomEvent('picmanager:garmin-credentials', { detail: '\(result)' }))")
+                    let result = await model.presentGarminCredentials()
+                    guard let data = try? JSONEncoder().encode(result),
+                          let detail = String(data: data, encoding: .utf8) else { return }
+                    _ = try? await self.webView?.evaluateJavaScript(
+                        "window.dispatchEvent(new CustomEvent('picmanager:garmin-credentials', { detail: \(detail) }))"
+                    )
                 }
             }
         }

@@ -5,6 +5,19 @@ import UniformTypeIdentifiers
 import OSLog
 import PhotoBridgeLib
 
+struct GarminCredentialPrompt: Identifiable {
+    let id = UUID()
+}
+
+struct GarminCredentialPresentationResult: Codable {
+    let outcome: String
+    let message: String?
+
+    static let cancelled = Self(outcome: "cancelled", message: nil)
+    static func saved(_ message: String) -> Self { Self(outcome: "saved", message: message) }
+    static func error(_ message: String) -> Self { Self(outcome: "error", message: message) }
+}
+
 @MainActor
 final class AppModel: ObservableObject {
     private let appleSyncLog = Logger(subsystem: "io.picmanager.mac", category: "apple-sync")
@@ -21,6 +34,9 @@ final class AppModel: ObservableObject {
     @Published var inventorySyncInProgress = false
     @Published var inventorySyncProgress = ""
     @Published var launchAtLoginStatus = "Disabled"
+    @Published var garminCredentialPrompt: GarminCredentialPrompt?
+    @Published var garminCredentialSaveError: String?
+    @Published var garminCredentialSaveInProgress = false
     private let serviceProcess = ServiceProcessController()
     private let notifications = NativeNotifications()
     private var healthMonitorTask: Task<Void, Never>?
@@ -29,8 +45,11 @@ final class AppModel: ObservableObject {
     private let readinessPolicy = ServiceReadinessPolicy()
     private var libraryOwnership: LibraryOwnershipLock?
     private let launchAtLogin = LaunchAtLoginController()
+    private let garminCredentials: any GarminCredentialStore
+    private var garminCredentialContinuation: CheckedContinuation<GarminCredentialPresentationResult, Never>?
 
-    init() {
+    init(garminCredentials: any GarminCredentialStore = GarminKeychain()) {
+        self.garminCredentials = garminCredentials
         let saved = try? MacAppConfiguration.load(from: MacAppConfiguration.applicationSupportURL)
         configuration = saved ?? .default
         onboardingRequired = saved == nil
@@ -106,55 +125,67 @@ final class AppModel: ObservableObject {
         photoAccess = Self.photoAccessReadiness()
     }
 
-    func presentGarminCredentials() async -> Bool {
-        let alert = NSAlert(); alert.messageText = "Connect Garmin China"; alert.informativeText = "Credentials are saved only in macOS Keychain."
-        let stack = NSStackView(); stack.orientation = .vertical
-        let email = NSTextField(string: configuration.garminEmail ?? ""); email.placeholderString = "Garmin account"
-        let password = NSSecureTextField(); password.placeholderString = "Garmin password"
-        stack.addArrangedSubview(email); stack.addArrangedSubview(password); alert.accessoryView = stack
-        alert.addButton(withTitle: "Save and sync"); alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else { return false }
-        do {
-            configuration.garminEmail = email.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !configuration.garminEmail.orEmpty.isEmpty, !password.stringValue.isEmpty else {
-                lastError = "Garmin account and password are required."
-                return false
-            }
-            try GarminKeychain.save(password: password.stringValue)
-            try configuration.save(to: MacAppConfiguration.applicationSupportURL)
-            await restartServiceForGarminCredentials()
-            return lastError == nil
-        } catch {
-            lastError = error.localizedDescription
-            return false
+    func presentGarminCredentials() async -> GarminCredentialPresentationResult {
+        guard garminCredentialContinuation == nil else {
+            return .error("Garmin credential form is already open.")
+        }
+        return await withCheckedContinuation { continuation in
+            garminCredentialContinuation = continuation
+            garminCredentialSaveError = nil
+            garminCredentialPrompt = GarminCredentialPrompt()
         }
     }
 
-    func saveGarminCredentials(password: String) async {
+    func saveGarminCredentials(account: String, password: String) async {
+        guard !garminCredentialSaveInProgress else { return }
+        garminCredentialSaveInProgress = true
+        defer { garminCredentialSaveInProgress = false }
         do {
-            let email = configuration.garminEmail?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let email = account.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !email.isEmpty, !password.isEmpty else {
-                lastError = "Garmin account and password are required."
+                garminCredentialSaveError = "Garmin account and password are required."
                 return
             }
             configuration.garminEmail = email
-            try GarminKeychain.save(password: password)
+            try garminCredentials.save(password: password, for: email)
             try configuration.save(to: MacAppConfiguration.applicationSupportURL)
-            await restartServiceForGarminCredentials()
+            let restarted = await restartServiceForGarminCredentials()
+            if restarted {
+                resolveGarminCredentialPrompt(.saved("Credentials saved and local service restarted."))
+            } else {
+                let restartMessage = lastError ?? "Open Status for diagnostics."
+                resolveGarminCredentialPrompt(.saved("Credentials saved, but the local service could not restart. \(restartMessage)"))
+            }
         } catch {
-            lastError = error.localizedDescription
+            garminCredentialSaveError = error.localizedDescription
         }
     }
 
-    private func restartServiceForGarminCredentials() async {
+    func cancelGarminCredentials() {
+        resolveGarminCredentialPrompt(.cancelled)
+    }
+
+    private func resolveGarminCredentialPrompt(_ result: GarminCredentialPresentationResult) {
+        garminCredentialPrompt = nil
+        garminCredentialSaveError = nil
+        guard let continuation = garminCredentialContinuation else { return }
+        garminCredentialContinuation = nil
+        continuation.resume(returning: result)
+    }
+
+    private func restartServiceForGarminCredentials() async -> Bool {
         stopService()
-        await serviceProcess.waitUntilStopped()
+        guard await serviceProcess.waitUntilStopped() else {
+            lastError = "The previous local service did not stop; credentials were saved but not yet applied."
+            return false
+        }
         libraryOwnership = nil
         dashboard = nil
-        guard await ensureServiceRunning() else { return }
+        guard await ensureServiceRunning() else { return false }
         await refreshDashboard()
         startHealthMonitoring()
         startAppleSyncMonitoring()
+        return true
     }
 
     func finishOnboarding() {
@@ -290,8 +321,19 @@ final class AppModel: ObservableObject {
                 // No compatible service is listening, so start the owned service below.
             }
         }
-        let garminPassword = try? GarminKeychain.password()
-        serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration, garminPassword: garminPassword ?? nil)
+        let garminPassword: String?
+        if let email = configuration.garminEmail?.trimmingCharacters(in: .whitespacesAndNewlines), !email.isEmpty {
+            do {
+                garminPassword = try garminCredentials.password(for: email)
+            } catch {
+                serviceStatus = "Garmin credentials unavailable"
+                lastError = "The saved Garmin credential could not be read: \(error.localizedDescription)"
+                return false
+            }
+        } else {
+            garminPassword = nil
+        }
+        serviceProcess.start(executableURL: serviceExecutable.url, configuration: configuration, garminPassword: garminPassword)
         serviceStatus = "Preparing library"
         lastError = nil
         return await waitForServiceReadiness(at: configuration.serviceURL)
@@ -522,8 +564,4 @@ final class AppModel: ObservableObject {
         @unknown default: .restricted
         }
     }
-}
-
-private extension Optional where Wrapped == String {
-    var orEmpty: String { self ?? "" }
 }
