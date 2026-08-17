@@ -158,8 +158,13 @@ def write_atomic(path, data):
     os.replace(name, path)
 
 
+# garminconnect 0.3.10 treats a directory token store as this exact filename.
+# Keep this explicit: the Rust status endpoint uses the same provider contract.
+TOKEN_STORE_FILENAME = "garmin_tokens.json"
+
+
 def token_file(token_dir):
-    return token_dir / "garminconnect.json"
+    return token_dir / TOKEN_STORE_FILENAME
 
 
 def tokens_exist(token_dir):

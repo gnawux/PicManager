@@ -158,6 +158,10 @@ struct GarminRuntime {
     root: PathBuf,
 }
 
+// garminconnect 0.3.10 writes this file when given a directory token store.
+// The helper owns token contents; Rust only uses the name for status reporting.
+const GARMIN_TOKEN_STORE_FILENAME: &str = "garmin_tokens.json";
+
 impl GarminRuntime {
     fn from_state(state: &AppState) -> Result<Self, GarminStatusResponse> {
         let configured = std::env::var("PICMANAGER_GARMIN_EMAIL").ok()
@@ -207,7 +211,7 @@ pub async fn get_garmin_status(State(state): State<AppState>) -> Json<GarminStat
     match GarminRuntime::from_state(&state) {
         Ok(runtime) => Json(GarminStatusResponse {
             configured: true,
-            authenticated: runtime.tokens().join("garminconnect.json").is_file(),
+            authenticated: runtime.tokens().join(GARMIN_TOKEN_STORE_FILENAME).is_file(),
             status: "ready_to_authenticate".to_owned(),
             error_code: None,
             retryable: false,

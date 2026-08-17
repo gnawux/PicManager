@@ -6,6 +6,7 @@ import sys
 
 
 EXPECTED_GARMIN_VERSION = "0.3.10"
+EXPECTED_TOKEN_FILENAME = "garmin_tokens.json"
 MAX_GARMIN_PAYLOAD_BYTES = 32 * 1024 * 1024
 REQUIRED_DISTRIBUTIONS = ("curl_cffi", "requests", "ua-generator")
 
@@ -38,6 +39,13 @@ def main():
         legacy = None
     if legacy is not None:
         raise SystemExit(f"obsolete garth {legacy} is present in the Garmin runtime")
+
+    from garminconnect.client import token_file_path
+    token_contract_dir = app_path / "Contents" / "Resources" / "garmin-token-contract"
+    if token_file_path(str(token_contract_dir)).name != EXPECTED_TOKEN_FILENAME:
+        raise SystemExit(
+            "garminconnect directory token-store filename changed; update the helper and Rust status contract"
+        )
 
     required = [metadata.distribution(name) for name in REQUIRED_DISTRIBUTIONS]
     payload_bytes = sum(distribution_size(distribution) for distribution in [garmin, *required])

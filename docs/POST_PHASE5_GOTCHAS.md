@@ -119,7 +119,7 @@ accessory could collapse its account/password controls, while bundled Python cre
   diagnostics; discard provider-controlled messages and unknown diagnostic values before
   logging or returning an API response.
 - Garmin China uses the reviewed public-PyPI `garminconnect` 0.3.10 wheel and its client-owned
-  `garminconnect.json` token store; the bundled macOS Python closure is hash locked and must not
+  `garmin_tokens.json` token store; the bundled macOS Python closure is hash locked and must not
   bundle the obsolete `garth` dependency. The first credential probe may return the explicit
   `needs_mfa` challenge. A submitted code starts a fresh, short-lived SSO exchange through the
   current prompt API and must load the profile

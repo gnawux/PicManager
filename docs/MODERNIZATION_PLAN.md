@@ -659,6 +659,16 @@ Status: complete.
 - M32.3: complete — verify the pinned runtime dependency manifest, embedded production assets,
   offline Garmin helper lifecycle after signing, and the Rust, Web, Swift, and macOS release gates.
 
+### M33 - Garmin token-store contract correction
+
+Status: complete.
+
+- M33.1: complete — align the Python helper and Rust authentication-status endpoint with
+  `garminconnect` 0.3.10's directory token filename, `garmin_tokens.json`, so a successful
+  MFA login is reused by the following activity synchronization rather than triggering MFA again.
+- M33.2: complete — assert the provider filename contract in the bundled-runtime gate and the
+  isolated fake-provider suite.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

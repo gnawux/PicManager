@@ -50,6 +50,7 @@ class GarminHelperTests(unittest.TestCase):
         self.assertIn("curl-cffi==0.16.0", requirements)
         self.assertNotIn("git+", requirements)
         self.assertNotIn("garth", requirements)
+        self.assertEqual(HELPER.TOKEN_STORE_FILENAME, "garmin_tokens.json")
 
     def test_extracts_the_single_fit_from_an_original_archive(self):
         archive = io.BytesIO()
@@ -79,7 +80,7 @@ class GarminHelperTests(unittest.TestCase):
             def dump(self, directory):
                 target = pathlib.Path(directory)
                 target.mkdir(parents=True, exist_ok=True)
-                (target / "garminconnect.json").write_text('{"fixture":"private-token"}')
+                (target / HELPER.TOKEN_STORE_FILENAME).write_text('{"fixture":"private-token"}')
 
         class FakeGarmin:
             stale_tokens = False
@@ -148,7 +149,7 @@ class GarminHelperTests(unittest.TestCase):
             def dump(self, directory):
                 target = pathlib.Path(directory)
                 target.mkdir(parents=True, exist_ok=True)
-                (target / "garminconnect.json").write_text("{}")
+                (target / HELPER.TOKEN_STORE_FILENAME).write_text("{}")
 
         class FakeGarmin:
             ActivityDownloadFormat = types.SimpleNamespace(ORIGINAL="original")
