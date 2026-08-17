@@ -26,5 +26,25 @@ func runAppleInventoryIngestTests() {
             try expect(!(try task("completed").canRetry))
             try expect(!(try task("completed").canCancel))
         }
+
+        test("waits for the packaged export helper and observes its exit status") {
+            try runApplePackageHelper(
+                URL(fileURLWithPath: "/usr/bin/true"), identifier: "asset",
+                destination: URL(fileURLWithPath: "/tmp/package")
+            )
+            do {
+                try runApplePackageHelper(
+                    URL(fileURLWithPath: "/usr/bin/false"), identifier: "asset",
+                    destination: URL(fileURLWithPath: "/tmp/package")
+                )
+                throw TestFailure.conditionFailed("failing helper unexpectedly succeeded")
+            } catch let error as ServiceExecutableError {
+                if case .versionCheckFailed(let status, _) = error {
+                    try expect(status, equals: 1)
+                } else {
+                    throw error
+                }
+            }
+        }
     }
 }

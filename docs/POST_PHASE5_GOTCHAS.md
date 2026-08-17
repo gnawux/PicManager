@@ -37,6 +37,15 @@ refreshing normally. Run PhotoKit export work in a detached utility task, preser
 durable lease heartbeat, and surface a retryable failure rather than treating a
 repainting web page as evidence of progress.
 
+### Bundled helpers need retained process ownership and explicit signing
+
+An async wrapper that creates `Process` only inside a continuation can lose reliable
+termination delivery after a short-lived helper exits. Keep the process strongly owned
+until `waitUntilExit()` returns from a detached utility task, then translate its exit
+status into the durable retry state. Sign the bundled PhotoBridge helper explicitly with
+its Photos entitlement and verify it in the bundle release gate; sealing a linker-signed
+resource inside the outer app is not an adequate nested-code contract.
+
 ### A menu-bar app still needs normal window semantics
 
 `LSUIElement` accessory applications do not appear in Dock or Command-Tab. PicManager

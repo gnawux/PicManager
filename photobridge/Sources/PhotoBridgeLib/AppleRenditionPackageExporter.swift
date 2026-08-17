@@ -4,16 +4,30 @@ import ImageIO
 import Photos
 
 public func exportApplePackageWithHelper(_ helper: URL, identifier: String, destination: URL) async throws {
-    try await withCheckedThrowingContinuation { continuation in
-        let process = Process(); let errors = Pipe()
-        process.executableURL = helper
-        process.arguments = ["export-asset", "--identifier", identifier, "--output", destination.path]
-        process.standardError = errors
-        process.terminationHandler = { process in
-            if process.terminationStatus == 0 { continuation.resume() }
-            else { continuation.resume(throwing: ServiceExecutableError.versionCheckFailed(process.terminationStatus, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))) }
-        }
-        do { try process.run() } catch { continuation.resume(throwing: error) }
+    try await Task.detached(priority: .utility) {
+        try runApplePackageHelper(helper, identifier: identifier, destination: destination)
+    }.value
+}
+
+public func runApplePackageHelper(_ helper: URL, identifier: String, destination: URL) throws {
+    guard FileManager.default.isExecutableFile(atPath: helper.path) else {
+        throw ServiceExecutableError.versionCheckFailed(-1, "The bundled PhotoBridge helper is unavailable.")
+    }
+    let process = Process()
+    let output = Pipe()
+    let errors = Pipe()
+    process.executableURL = helper
+    process.arguments = ["export-asset", "--identifier", identifier, "--output", destination.path]
+    process.standardOutput = output
+    process.standardError = errors
+    try process.run()
+    process.waitUntilExit()
+    let stdout = output.fileHandleForReading.readDataToEndOfFile()
+    let stderr = errors.fileHandleForReading.readDataToEndOfFile()
+    guard process.terminationStatus == 0 else {
+        let detail = String(decoding: stderr.isEmpty ? stdout : stderr, as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        throw ServiceExecutableError.versionCheckFailed(process.terminationStatus, detail)
     }
 }
 
