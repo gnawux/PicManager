@@ -12,6 +12,31 @@ const activity: ActivitySummary = {
 };
 
 describe('ActivitiesView', () => {
+  it('consumes native credential outcomes and guides classified Garmin authentication failures', async () => {
+    const api = {
+      activities: {
+        list: vi.fn(async () => ({ activities: [], total: 0, page: 1, per_page: 100 })),
+        garminStatus: vi.fn(async () => ({ configured: true, authenticated: false, status: 'ready_to_authenticate', error_code: null, retryable: false, downloaded: 0, imported: 0, skipped: 0, failed: 0 })),
+        authenticateGarmin: vi.fn(async () => ({ configured: true, authenticated: false, status: 'network_error', error_code: 'network_error', retryable: true, downloaded: 0, imported: 0, skipped: 0, failed: 0 })),
+        syncGarmin: vi.fn(),
+      },
+    } as unknown as ApiClient;
+    render(ActivitiesView, { api });
+
+    window.dispatchEvent(new CustomEvent('picmanager:garmin-credentials', {
+      detail: { outcome: 'cancelled' },
+    }));
+    expect(await screen.findByText('已取消 Garmin 凭据编辑。')).toBeVisible();
+
+    window.dispatchEvent(new CustomEvent('picmanager:garmin-credentials', {
+      detail: { outcome: 'saved', message: 'Credentials saved and local service restarted.' },
+    }));
+    expect(await screen.findByText('Credentials saved and local service restarted.')).toBeVisible();
+
+    await fireEvent.click(screen.getByRole('button', { name: '验证登录' }));
+    expect(await screen.findByText('无法连接 Garmin Connect；请检查网络或系统代理后重试。')).toBeVisible();
+  });
+
   it('opens an activity route, metrics, and matched photos', async () => {
     const api = {
       activities: {

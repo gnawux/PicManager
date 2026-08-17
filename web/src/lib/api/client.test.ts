@@ -112,7 +112,7 @@ describe('API client', () => {
 
   it('posts Garmin authentication and sync JSON with the required content type', async () => {
     const fetcher = vi.fn(async () => new Response(JSON.stringify({
-      configured: true, authenticated: false, status: 'mfa_required', downloaded: 0, imported: 0, skipped: 0, failed: 0,
+      configured: true, authenticated: false, status: 'mfa_required', error_code: 'mfa_required', retryable: false, downloaded: 0, imported: 0, skipped: 0, failed: 0,
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
     const client = createApiClient({ fetch: fetcher as typeof fetch });
     await client.activities.authenticateGarmin('123456');

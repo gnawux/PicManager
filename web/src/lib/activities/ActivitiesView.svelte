@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { ApiClient } from '../api/client';
+  import type { ApiClient, GarminStatus } from '../api/client';
   import type { ActivityPhotos, ActivitySummary, ActivityTrack } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
@@ -29,10 +29,26 @@
   let garminNeedsMfa = $state(false);
 
   onMount(() => {
-    const credentialsSaved = () => { garminNotice = 'Garmin 凭据已保存，本地服务正在刷新；随后点击“验证登录”。'; void loadGarminStatus(); };
-    window.addEventListener('picmanager:garmin-credentials', credentialsSaved);
+    const credentialsFinished = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      if (!detail || typeof detail !== 'object' || !('outcome' in detail)) {
+        garminNotice = 'Garmin 原生凭据窗口返回了无效结果。';
+        return;
+      }
+      const result = detail as { outcome?: unknown; message?: unknown };
+      const message = typeof result.message === 'string' ? result.message : null;
+      if (result.outcome === 'saved') {
+        garminNotice = message ?? 'Garmin 凭据已保存，本地服务已刷新；现在可以验证登录。';
+        void loadGarminStatus();
+      } else if (result.outcome === 'cancelled') {
+        garminNotice = '已取消 Garmin 凭据编辑。';
+      } else {
+        garminNotice = message ?? '无法保存 Garmin 凭据。';
+      }
+    };
+    window.addEventListener('picmanager:garmin-credentials', credentialsFinished);
     void reload(); void loadGarminStatus();
-    return () => window.removeEventListener('picmanager:garmin-credentials', credentialsSaved);
+    return () => window.removeEventListener('picmanager:garmin-credentials', credentialsFinished);
   });
 
   async function reload() {
@@ -76,12 +92,22 @@
     try {
       const result = await api.activities.garminStatus();
       if (result.status !== 'ready_to_authenticate') garminNotice = result.message ?? garminMessage(result);
-    } catch { /* Activity browsing must not fail if an optional local helper is unavailable. */ }
+    } catch (reason) {
+      garminNotice = `无法读取 Garmin 状态：${reason instanceof Error ? reason.message : String(reason)}`;
+    }
   }
-  function garminMessage(result: { status: string; downloaded: number; imported: number; skipped: number; failed: number }) {
+  function garminMessage(result: GarminStatus) {
     if (result.status === 'authenticated') return 'Garmin Connect 已认证，可以开始同步。';
     if (result.status === 'completed') return `Garmin 同步完成：下载 ${result.downloaded} 条，导入 ${result.imported} 条，跳过 ${result.skipped} 条。`;
     if (result.status === 'partial_failed') return `Garmin 同步部分完成：导入 ${result.imported} 条，失败 ${result.failed} 条；失败项会保留以便重试。`;
+    switch (result.error_code ?? result.status) {
+      case 'mfa_required': return 'Garmin 需要一次性 MFA 验证码；输入验证码后再次验证登录。';
+      case 'invalid_credentials': return 'Garmin 未接受保存的账号或密码；请重新配置凭据。';
+      case 'network_error': return '无法连接 Garmin Connect；请检查网络或系统代理后重试。';
+      case 'stale_token': return 'Garmin 登录令牌已过期；请重新验证登录。';
+      case 'sso_contract_error': return 'Garmin 登录协议或客户端兼容性发生变化；请导出诊断信息。';
+      case 'dependency_error': return '本地 Garmin 同步组件不可用；请重新安装 PicManager。';
+    }
     return `Garmin 状态：${result.status}`;
   }
   function configureGarmin() {
