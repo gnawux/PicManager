@@ -22,7 +22,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = "io.
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")" = "PicManagerMac"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$PLIST")" = "APPL"
 "$SERVICE_EXECUTABLE" --version | grep -Eq '^picmanager [0-9]+\.[0-9]+\.[0-9]+'
-"$PHOTO_HELPER" --version | grep -Eq '^photobridge '
+"$PHOTO_HELPER" --version | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'
 
 if find "$CONTENTS" -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' | grep -q .; then
     echo "Application bundle must not contain a user catalog" >&2
