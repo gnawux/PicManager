@@ -656,7 +656,7 @@ Status: in progress.
 - M32.2: complete — retain and validate redacted helper diagnostics across the Python/Rust/Web boundary,
   including a private stdin MFA handoff and literal contract fixtures for challenge, invalid code, network,
   rate-limit, protocol, dependency and token-store outcomes.
-- M32.3: planned — verify the updated runtime dependency manifest, signed bundle lifecycle, and release gates.
+- M32.3: in progress — verify the updated runtime dependency manifest, signed bundle lifecycle, and release gates.
 
 ## 9. Testing and commit protocol
 

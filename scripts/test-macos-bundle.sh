@@ -9,6 +9,7 @@ SERVICE_EXECUTABLE="$CONTENTS/Resources/picmanager"
 PHOTO_HELPER="$CONTENTS/Resources/photobridge"
 GARMIN_PYTHON="$CONTENTS/Resources/python/bin/python3"
 GARMIN_HELPER="$CONTENTS/Resources/garmin_sync.py"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 test -d "$APP_PATH"
 plutil -lint "$PLIST" >/dev/null
@@ -17,7 +18,8 @@ test -x "$SERVICE_EXECUTABLE"
 test -x "$PHOTO_HELPER"
 test -x "$GARMIN_PYTHON"
 test -f "$GARMIN_HELPER"
-PYTHONDONTWRITEBYTECODE=1 "$GARMIN_PYTHON" -B -c 'import garminconnect, garth'
+PYTHONDONTWRITEBYTECODE=1 "$GARMIN_PYTHON" -B -c 'import garminconnect, curl_cffi, requests, ua_generator'
+PYTHONDONTWRITEBYTECODE=1 "$GARMIN_PYTHON" -B "$SCRIPT_DIR/check-garmin-bundle-dependencies.py" "$APP_PATH"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = "io.picmanager.mac"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")" = "PicManagerMac"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$PLIST")" = "APPL"
@@ -29,6 +31,6 @@ if find "$CONTENTS" -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' | grep 
     exit 1
 fi
 
-"$(cd "$(dirname "$0")" && pwd)/test-macos-garmin-bundle.sh" "$APP_PATH"
+"$SCRIPT_DIR/test-macos-garmin-bundle.sh" "$APP_PATH"
 
 echo "Validated $APP_PATH"
