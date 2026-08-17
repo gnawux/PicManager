@@ -137,7 +137,9 @@ pub(crate) async fn commit_apple_export(State(state): State<AppState>, Path(sour
     let staging = std::fs::canonicalize(state.config.library_path.join(".sync-staging/apple")).map_err(|_| AppError::Metadata("Apple export staging is unavailable".into()))?;
     let package = std::fs::canonicalize(&body.package_path).map_err(|_| AppError::Metadata("Apple export package is unavailable".into()))?;
     if !package.starts_with(&staging) { return Err(AppError::Metadata("Apple export package is outside the managed staging area".into()).into()); }
-    Ok(Json(apple::commit_rendition_package_for_lease(&state.pool, source_id, &package, Some(&body.worker_id)).await?))
+    Ok(Json(apple::commit_rendition_package_for_lease_in_library(
+        &state.pool, source_id, &package, &state.config.library_path, &body.worker_id,
+    ).await?))
 }
 
 pub(crate) async fn list_apple_candidates(

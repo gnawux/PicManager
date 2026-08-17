@@ -1,6 +1,6 @@
 use serde::Serialize;
 use sqlx::{FromRow, SqlitePool};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::Path};
 
 use crate::error::{AppError, Result};
 
@@ -132,7 +132,7 @@ pub async fn list_recently_synchronized(pool: &SqlitePool, hours: u32, limit: u3
                 EXISTS(SELECT 1 FROM asset_variants current WHERE current.asset_id = a.id AND current.role = 'current') AS has_current \
          FROM sync_items i JOIN asset_sources s ON s.id = i.source_id \
          JOIN assets a ON a.id = s.asset_id JOIN photos p ON p.id = a.photo_id \
-         WHERE s.provider = 'apple_photos' AND i.operation = 'export_original' \
+         WHERE s.provider = 'apple_photos' AND s.sync_status = 'ready' AND i.operation = 'export_original' \
            AND i.status = 'succeeded' AND i.finished_at IS NOT NULL \
            AND i.finished_at >= datetime('now', ?) AND p.import_status = 'imported' \
          GROUP BY p.id, s.original_filename, p.taken_at, a.id \
@@ -201,6 +201,46 @@ pub async fn reconcile_export_source_statuses(pool: &SqlitePool) -> Result<u64> 
     }
     tx.commit().await?;
     Ok(changed)
+}
+
+pub async fn queue_missing_synchronized_exports(pool: &SqlitePool) -> Result<u64> {
+    let candidates: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT DISTINCT s.id, s.external_id, p.path, display.path \
+         FROM asset_sources s JOIN assets a ON a.id = s.asset_id \
+         JOIN photos p ON p.id = a.photo_id \
+         LEFT JOIN asset_variants display ON display.id = a.display_variant_id \
+         WHERE s.provider = 'apple_photos' AND s.external_id IS NOT NULL \
+           AND EXISTS(SELECT 1 FROM sync_items done WHERE done.source_id = s.id \
+                      AND done.operation = 'export_original' AND done.status = 'succeeded') \
+           AND NOT EXISTS(SELECT 1 FROM sync_items active WHERE active.source_id = s.id \
+                          AND active.operation = 'export_original' AND active.status IN ('queued', 'leased'))",
+    ).fetch_all(pool).await?;
+    let missing: Vec<(i64, String)> = candidates.into_iter()
+        .filter(|(_, _, photo, display)| {
+            !Path::new(photo).is_file()
+                || display.as_deref().is_some_and(|path| !Path::new(path).is_file())
+        })
+        .map(|(source_id, external_id, _, _)| (source_id, external_id))
+        .collect();
+    if missing.is_empty() { return Ok(0); }
+
+    let mut tx = pool.begin().await?;
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO sync_jobs (kind, provider, total_items) \
+         VALUES ('apple_missing_media_recovery', 'apple_photos', ?) RETURNING id",
+    ).bind(missing.len() as i64).fetch_one(&mut *tx).await?;
+    for (source_id, external_id) in &missing {
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation, payload_json) \
+             VALUES (?, ?, ?, 'export_original', '{\"reason\":\"missing_archived_media\"}')",
+        ).bind(job_id).bind(source_id).bind(external_id).execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE asset_sources SET sync_status = 'queued', last_error = NULL, \
+             updated_at = datetime('now') WHERE id = ?",
+        ).bind(source_id).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(missing.len() as u64)
 }
 
 pub async fn retry_source(pool: &SqlitePool, source_id: i64) -> Result<(i64, AppleSourceView)> {
@@ -494,6 +534,35 @@ mod tests {
         let repaired = get_source(&pool, source_id).await.unwrap();
         assert_eq!(repaired.sync_status, "failed");
         assert!(repaired.last_error.unwrap().contains("lease expired"));
+    }
+
+    #[tokio::test]
+    async fn missing_successful_exports_are_queued_once_for_recovery() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, format, import_status) \
+             VALUES (1, '/missing/export.jpg', 'missing-export', 'jpeg', 'imported')",
+        ).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO assets (id, photo_id) VALUES (1, 1)").execute(&pool).await.unwrap();
+        let source_id = source(&pool, "recover-one", "IMG_RECOVER.JPG", "ready").await;
+        sqlx::query("UPDATE asset_sources SET asset_id = 1 WHERE id = ?")
+            .bind(source_id).execute(&pool).await.unwrap();
+        let old_job: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, status, total_items, completed_items) \
+             VALUES ('apple_full_inventory', 'apple_photos', 'completed', 1, 1) RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation, status, finished_at) \
+             VALUES (?, ?, 'recover-one', 'export_original', 'succeeded', datetime('now'))",
+        ).bind(old_job).bind(source_id).execute(&pool).await.unwrap();
+
+        assert_eq!(queue_missing_synchronized_exports(&pool).await.unwrap(), 1);
+        assert_eq!(queue_missing_synchronized_exports(&pool).await.unwrap(), 0);
+        let state: (String, String) = sqlx::query_as(
+            "SELECT s.sync_status, i.status FROM asset_sources s JOIN sync_items i ON i.source_id = s.id \
+             WHERE s.id = ? ORDER BY i.id DESC LIMIT 1",
+        ).bind(source_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(state, ("queued".into(), "queued".into()));
     }
 
     #[tokio::test]

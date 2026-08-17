@@ -62,6 +62,55 @@ pub async fn commit_rendition_package(
 ) -> Result<RenditionCommit> {
     commit_rendition_package_for_lease(pool, source_id, package_dir, None).await
 }
+
+pub async fn commit_rendition_package_in_library(
+    pool: &SqlitePool,
+    source_id: i64,
+    package_dir: &Path,
+    library_path: &Path,
+) -> Result<RenditionCommit> {
+    let durable = persist_rendition_package(source_id, package_dir, library_path)?;
+    commit_rendition_package_for_lease(pool, source_id, &durable, None).await
+}
+
+pub async fn commit_rendition_package_for_lease_in_library(
+    pool: &SqlitePool,
+    source_id: i64,
+    package_dir: &Path,
+    library_path: &Path,
+    lease_owner: &str,
+) -> Result<RenditionCommit> {
+    let durable = persist_rendition_package(source_id, package_dir, library_path)?;
+    commit_rendition_package_for_lease(pool, source_id, &durable, Some(lease_owner)).await
+}
+
+fn persist_rendition_package(source_id: i64, package_dir: &Path, library_path: &Path) -> Result<PathBuf> {
+    let manifest_text = std::fs::read_to_string(package_dir.join("manifest.json"))?;
+    let manifest: RenditionPackageManifest = serde_json::from_str(&manifest_text)
+        .map_err(|error| AppError::Metadata(format!("invalid rendition manifest: {error}")))?;
+    validate_manifest(&manifest)?;
+    validate_file(package_dir, &manifest.original)?;
+    if let Some(current) = &manifest.current { validate_file(package_dir, current)?; }
+    let current_hash = manifest.current.as_ref().map(|item| item.sha256.as_str()).unwrap_or("original");
+    let package_key = format!("{}-{}", &manifest.original.sha256[..16], &current_hash[..16.min(current_hash.len())]);
+    let parent = library_path.join(".managed-media/apple").join(format!("source-{source_id}"));
+    let destination = parent.join(package_key);
+    std::fs::create_dir_all(&parent)?;
+    if destination.exists() {
+        let existing_text = std::fs::read_to_string(destination.join("manifest.json"))?;
+        let existing: RenditionPackageManifest = serde_json::from_str(&existing_text)
+            .map_err(|error| AppError::Metadata(format!("invalid durable rendition manifest: {error}")))?;
+        let same_identity = existing.source_identifier == manifest.source_identifier
+            && existing.original.sha256 == manifest.original.sha256
+            && existing.current.as_ref().map(|item| &item.sha256) == manifest.current.as_ref().map(|item| &item.sha256);
+        if !same_identity { return Err(AppError::Metadata("durable rendition package identity conflict".into())); }
+        validate_file(&destination, &existing.original)?;
+        if let Some(current) = &existing.current { validate_file(&destination, current)?; }
+        return Ok(destination);
+    }
+    std::fs::rename(package_dir, &destination)?;
+    Ok(destination)
+}
 pub async fn commit_rendition_package_for_lease(pool: &SqlitePool, source_id: i64, package_dir: &Path, lease_owner: Option<&str>) -> Result<RenditionCommit> {
     let manifest_text = std::fs::read_to_string(package_dir.join("manifest.json"))?;
     let manifest: RenditionPackageManifest = serde_json::from_str(&manifest_text)
@@ -165,6 +214,8 @@ pub async fn commit_rendition_package_for_lease(pool: &SqlitePool, source_id: i6
         if hash.as_deref() != Some(manifest.original.sha256.as_str()) {
             return Err(AppError::Metadata("immutable original hash changed".into()));
         }
+        sqlx::query("UPDATE asset_variants SET path = ?, updated_at = datetime('now') WHERE id = ?")
+            .bind(path_string(&original_path)).bind(variant_id).execute(&mut *tx).await?;
         variant_id
     } else {
         insert_variant(
@@ -198,6 +249,8 @@ pub async fn commit_rendition_package_for_lease(pool: &SqlitePool, source_id: i6
                     "current rendition generation changed bytes".into(),
                 ));
             }
+            sqlx::query("UPDATE asset_variants SET path = ?, updated_at = datetime('now') WHERE id = ?")
+                .bind(path_string(path)).bind(variant_id).execute(&mut *tx).await?;
             variant_id
         } else {
             insert_variant(
@@ -215,6 +268,11 @@ pub async fn commit_rendition_package_for_lease(pool: &SqlitePool, source_id: i6
     } else {
         None
     };
+
+    sqlx::query("UPDATE photos SET path = ?, format = ?, width = ?, height = ? WHERE id = ?")
+        .bind(path_string(&original_path)).bind(format_for_mime(&manifest.original.mime_type))
+        .bind(positive(manifest.original.width)).bind(positive(manifest.original.height))
+        .bind(photo_id).execute(&mut *tx).await?;
 
     let candidates = rendition_candidates(&mut tx, asset_id).await?;
     let master_variant_id = select_master(&candidates)
@@ -606,6 +664,36 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(state_revision, 2);
+    }
+
+    #[tokio::test]
+    async fn library_commit_survives_callers_cleaning_the_staging_package() {
+        let pool = test_pool().await;
+        let source_id: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_sources (provider, external_id, original_filename, sync_status) \
+             VALUES ('apple_photos', 'asset/L0/durable', 'IMG_0001.HEIC', 'downloaded') RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        let library = tempfile::tempdir().unwrap();
+        let staging = library.path().join(".sync-staging/apple/source-durable");
+        std::fs::create_dir_all(&staging).unwrap();
+        write_package(&staging, "asset/L0/durable", b"durable original", Some(b"durable current"));
+
+        let committed = commit_rendition_package_in_library(&pool, source_id, &staging, library.path())
+            .await.unwrap();
+        assert!(!staging.exists(), "the package should move out of transient staging");
+        let paths: (String, String) = sqlx::query_as(
+            "SELECT p.path, v.path FROM photos p JOIN assets a ON a.photo_id = p.id \
+             JOIN asset_variants v ON v.id = a.display_variant_id WHERE p.id = ?",
+        ).bind(committed.photo_id).fetch_one(&pool).await.unwrap();
+        assert!(Path::new(&paths.0).is_file());
+        assert!(Path::new(&paths.1).is_file());
+        assert!(paths.0.contains(".managed-media/apple"));
+
+        // This mirrors the native caller's post-commit cleanup. The durable
+        // paths must remain readable after the old staging URL is gone.
+        if staging.exists() { std::fs::remove_dir_all(&staging).unwrap(); }
+        assert_eq!(std::fs::read(paths.0).unwrap(), b"durable original");
+        assert_eq!(std::fs::read(paths.1).unwrap(), b"durable current");
     }
 
     #[tokio::test]

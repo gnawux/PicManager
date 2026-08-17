@@ -161,6 +161,13 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
     if repaired_apple_sources > 0 {
         tracing::warn!(count = repaired_apple_sources, "reconciled Apple export source states");
     }
+    let missing_apple_exports = crate::apple::queue_missing_synchronized_exports(&pool).await?;
+    if missing_apple_exports > 0 {
+        tracing::warn!(
+            count = missing_apple_exports,
+            "queued Apple exports whose committed media is missing"
+        );
+    }
     let application = Application::new(pool.clone(), config);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     let reconciliation_context = application.request_context(CallerKind::InternalWorker);

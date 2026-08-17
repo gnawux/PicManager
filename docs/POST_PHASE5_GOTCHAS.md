@@ -237,6 +237,25 @@ Schema migration may mark existing data as needing maintenance, but startup migr
 must not call external providers or erase usable cached values. Provide status, an
 explicit action, durable progress, safe retry, and copied-library rehearsal.
 
+### A committed database path must outlive staging cleanup
+
+The native Apple exporter originally committed paths that still pointed into
+`.sync-staging/apple`, then deleted the package after the server returned success. The transaction,
+job state and source count all looked correct while thumbnails and full media immediately became
+unreadable. Component tests missed this because their temporary package remained alive until the
+test ended.
+
+- Define ownership and lifetime for every path crossing a process boundary: transient input,
+  durable media or regenerable cache.
+- Move a verified package atomically into its durable library location before publishing any path
+  in SQLite. A database commit must never be the only thing making transient bytes appear durable.
+- Test the caller's complete lifecycle, including its documented post-success cleanup, and verify
+  both the compatibility photo path and selected rendition path remain readable afterward.
+- Make persistence idempotent. A database rollback after an atomic filesystem move may leave an
+  orphan package; retries must recognize and safely reuse the same content identity.
+- Recovery should inspect only records owned by the affected workflow, avoid a whole-library walk,
+  and requeue missing originals without deleting or overwriting unrelated media.
+
 ## Development workflow traps
 
 - Run frontend commands from `web/`; the repository root has no `package.json`.

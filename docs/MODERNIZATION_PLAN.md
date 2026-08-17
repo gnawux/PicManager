@@ -600,6 +600,9 @@ Status: in progress.
 - M29.6: complete — expose photos whose durable Apple export completed during the previous 24 hours,
   ordered by synchronization completion rather than mutable inventory timestamps, with direct access
   to the shared photo viewer.
+- M29.7: complete — move committed PhotoKit packages out of transient staging before publishing media
+  paths, repair existing variant paths on retry, and automatically requeue successful Apple exports
+  whose archived files were removed by the former staging cleanup lifecycle.
 
 ### M30 - Garmin activity synchronization and map detail
 
