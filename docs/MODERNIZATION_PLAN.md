@@ -12,6 +12,10 @@ Current stabilization milestones:
   queue exit reason.
 - M20 — Apple smart-album consistency: completed. Maintain month membership during
   rendition commits and backfill missing derived relationships additively.
+- M21 — Apple cancellation recovery: completed. Keep source and item terminal states
+  consistent so a cancelled export can be discovered and queued by the next sync.
+- M22 — Apple post-import parity: in progress. Recover EXIF/GPS metadata and schedule
+  revision-safe thumbnails through durable background work.
 
 ## 1. Product direction
 

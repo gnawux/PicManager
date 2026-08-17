@@ -152,6 +152,13 @@ pub async fn cancel_job(pool: &SqlitePool, job_id: i64) -> Result<SyncJobDetail>
          lease_expires_at = NULL, finished_at = datetime('now'), updated_at = datetime('now') \
          WHERE job_id = ? AND status IN ('queued', 'leased', 'failed')",
     ).bind(job_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE asset_sources SET \
+             sync_status = CASE WHEN asset_id IS NULL THEN 'discovered' ELSE 'ready' END, \
+             last_error = NULL, updated_at = datetime('now') \
+         WHERE id IN (SELECT source_id FROM sync_items WHERE job_id = ? AND source_id IS NOT NULL) \
+           AND sync_status IN ('queued', 'downloading', 'downloaded', 'importing', 'failed')",
+    ).bind(job_id).execute(&mut *tx).await?;
     let completed: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sync_items WHERE job_id = ? \
          AND status IN ('succeeded', 'excluded', 'cancelled')",
@@ -625,12 +632,23 @@ mod tests {
     async fn cancellation_releases_leases_and_is_not_retryable() {
         let pool = test_pool().await;
         let job = persist_discovery(&pool, &batch(None, Some(b"token-1"))).await.unwrap();
+        let source_id: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_sources (provider, external_id, sync_status) \
+             VALUES ('apple_photos', 'asset-1', 'queued') RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "UPDATE sync_items SET source_id = ? WHERE job_id = ? AND external_id = 'asset-1'",
+        ).bind(source_id).bind(job.id).execute(&pool).await.unwrap();
         claim_next_item(&pool, "worker", 60).await.unwrap().unwrap();
         let cancelled = cancel_job(&pool, job.id).await.unwrap();
         assert_eq!(cancelled.job.status, "cancelled");
         assert_eq!(cancelled.job.completed_items, 2);
         assert!(cancelled.items.iter().all(|item| item.status == "cancelled"));
         assert!(cancelled.items.iter().all(|item| item.lease_owner.is_none()));
+        let source_status: String = sqlx::query_scalar(
+            "SELECT sync_status FROM asset_sources WHERE id = ?",
+        ).bind(source_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(source_status, "discovered");
         assert!(retry_job(&pool, job.id).await.is_err());
         assert!(cancel_job(&pool, job.id).await.is_err());
     }

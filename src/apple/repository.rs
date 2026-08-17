@@ -204,6 +204,8 @@ pub async fn reconcile_export_source_statuses(pool: &SqlitePool) -> Result<u64> 
             "leased" => Some("downloading"),
             "failed" => Some("failed"),
             "succeeded" if asset_id.is_some() => Some("ready"),
+            "cancelled" if asset_id.is_some() => Some("ready"),
+            "cancelled" => Some("discovered"),
             _ => None,
         };
         let Some(desired) = desired else { continue };
@@ -592,6 +594,23 @@ mod tests {
         let repaired = get_source(&pool, source_id).await.unwrap();
         assert_eq!(repaired.sync_status, "failed");
         assert!(repaired.last_error.unwrap().contains("lease expired"));
+    }
+
+    #[tokio::test]
+    async fn reconciliation_makes_cancelled_unsynchronized_sources_discoverable_again() {
+        let pool = test_pool().await;
+        let source_id = source(&pool, "cancelled-one", "IMG_0004.HEIC", "queued").await;
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, status, total_items, completed_items) \
+             VALUES ('apple_full_inventory', 'apple_photos', 'cancelled', 1, 1) RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation, status) \
+             VALUES (?, ?, 'cancelled-one', 'export_original', 'cancelled')",
+        ).bind(job_id).bind(source_id).execute(&pool).await.unwrap();
+
+        assert_eq!(reconcile_export_source_statuses(&pool).await.unwrap(), 1);
+        assert_eq!(get_source(&pool, source_id).await.unwrap().sync_status, "discovered");
     }
 
     #[tokio::test]
