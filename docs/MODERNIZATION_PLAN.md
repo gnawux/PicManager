@@ -621,14 +621,17 @@ Status: in progress.
 
 ### M30 - Garmin activity synchronization and map detail
 
-Status: in progress.
+Status: complete.
 
 - M30.1: complete — replace the schematic activity route with an OpenStreetMap view that renders the
   bounded route and matched photo markers locally.
 - M30.2: complete — show parsed FIT sensors and non-device equipment metadata without conflating those
   identities with the recording watch or head unit.
-- M30.3: in progress — add a local `garmin-connect` adapter with Keychain-backed Mac credentials, explicit
+- M30.3: complete — add a local `garmin-connect` adapter with Keychain-backed Mac credentials, explicit
   account verification and durable, idempotent FIT downloads.
+- M30.4: complete — make authentication and MFA observable in the shared activity UI; persist OAuth
+  tokens privately; validate and extract Garmin ORIGINAL archives; and advance the resume checkpoint
+  only after the Rust catalog has accepted each FIT file.
 
 ## 9. Testing and commit protocol
 
