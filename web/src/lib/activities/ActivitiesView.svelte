@@ -25,8 +25,10 @@
   let syncing = $state(false);
   let mfaCode = $state('');
   let loginNotice = $state<string | null>(null);
+  let garminNotice = $state<string | null>(null);
+  let garminNeedsMfa = $state(false);
 
-  onMount(() => { void reload(); });
+  onMount(() => { void reload(); void loadGarminStatus(); });
 
   async function reload() {
     status = 'loading';
@@ -42,10 +44,40 @@
     }
   }
   async function syncGarmin() {
-    syncing = true; error = null;
-    try { const result = await api.activities.syncGarmin(mfaCode || undefined); mfaCode = ''; await reload(); alert(`Garmin 同步完成：导入 ${result.downloaded} 条，跳过 ${result.skipped} 条。`); }
-    catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
+    syncing = true; error = null; garminNotice = null;
+    try {
+      const result = await api.activities.syncGarmin(mfaCode || undefined);
+      garminNeedsMfa = result.status === 'mfa_required';
+      garminNotice = result.message ?? garminMessage(result);
+      if (result.status === 'completed' || result.status === 'partial_failed') {
+        mfaCode = '';
+        await reload();
+      }
+    }
+    catch (reason) { garminNotice = reason instanceof Error ? reason.message : String(reason); }
     finally { syncing = false; }
+  }
+  async function authenticateGarmin() {
+    syncing = true; error = null; garminNotice = null;
+    try {
+      const result = await api.activities.authenticateGarmin(mfaCode || undefined);
+      garminNeedsMfa = result.status === 'mfa_required';
+      garminNotice = result.message ?? garminMessage(result);
+      if (result.status === 'authenticated') mfaCode = '';
+    } catch (reason) { garminNotice = reason instanceof Error ? reason.message : String(reason); }
+    finally { syncing = false; }
+  }
+  async function loadGarminStatus() {
+    try {
+      const result = await api.activities.garminStatus();
+      if (result.status !== 'ready_to_authenticate') garminNotice = result.message ?? garminMessage(result);
+    } catch { /* Activity browsing must not fail if an optional local helper is unavailable. */ }
+  }
+  function garminMessage(result: { status: string; downloaded: number; imported: number; skipped: number; failed: number }) {
+    if (result.status === 'authenticated') return 'Garmin Connect 已认证，可以开始同步。';
+    if (result.status === 'completed') return `Garmin 同步完成：下载 ${result.downloaded} 条，导入 ${result.imported} 条，跳过 ${result.skipped} 条。`;
+    if (result.status === 'partial_failed') return `Garmin 同步部分完成：导入 ${result.imported} 条，失败 ${result.failed} 条；失败项会保留以便重试。`;
+    return `Garmin 状态：${result.status}`;
   }
   function configureGarmin() {
     const bridge = (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager;
@@ -178,9 +210,10 @@
   <section aria-labelledby="activities-title">
     <div class="view-heading">
       <div><p>Motion</p><h2 id="activities-title">运动与活动</h2><span>{total} 条记录</span></div>
-      <div class="activity-actions"><Button onclick={configureGarmin}>登录 Garmin</Button><input aria-label="Garmin MFA 验证码" placeholder="MFA 验证码（按需填写）" bind:value={mfaCode} /><Button disabled={syncing} onclick={() => void syncGarmin()}>{syncing ? '正在同步 Garmin…' : '同步 Garmin 数据'}</Button><label>类型<select bind:value={typeFilter} onchange={() => { void reload(); }}><option value="">全部</option><option value="running">跑步</option><option value="cycling">骑行</option><option value="walking">步行</option><option value="hiking">徒步</option><option value="swimming">游泳</option></select></label></div>
+      <div class="activity-actions"><Button onclick={configureGarmin}>配置 Garmin</Button>{#if garminNeedsMfa}<input aria-label="Garmin MFA 验证码" placeholder="输入 MFA 验证码" bind:value={mfaCode} />{/if}<Button disabled={syncing} onclick={() => void authenticateGarmin()}>{syncing ? '正在验证…' : '验证登录'}</Button><Button disabled={syncing} onclick={() => void syncGarmin()}>{syncing ? '正在同步 Garmin…' : '同步 Garmin 数据'}</Button><label>类型<select bind:value={typeFilter} onchange={() => { void reload(); }}><option value="">全部</option><option value="running">跑步</option><option value="cycling">骑行</option><option value="walking">步行</option><option value="hiking">徒步</option><option value="swimming">游泳</option></select></label></div>
     </div>
     {#if loginNotice}<p class="login-notice" role="status">{loginNotice}</p>{/if}
+    {#if garminNotice}<p class="login-notice" role="status">{garminNotice}</p>{/if}
     {#if status === 'loading'}<PageState kind="loading" title="正在载入活动" />
     {:else if status === 'error'}<PageState kind="error" title="无法读取活动" message={error ?? undefined} />
     {:else if activities.length === 0}<PageState kind="empty" title="还没有活动记录" message="可通过命令行导入 GPX 或 FIT 文件。" />

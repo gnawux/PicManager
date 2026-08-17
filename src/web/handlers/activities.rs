@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use crate::activities::{importer, rdp};
 use crate::web::AppState;
-use std::process::Stdio;
+use std::{path::{PathBuf}, process::Stdio, time::Duration};
 use tokio::process::Command;
 
 const RDP_THRESHOLD: usize = 7200;
@@ -97,19 +97,287 @@ pub struct ActivityPhotosQuery {
     #[serde(default = "default_per_page")]
     per_page: u32,
 }
-#[derive(Debug, Deserialize)]
-pub struct GarminSyncRequest { pub mfa_code: Option<String> }
+#[derive(Debug, Deserialize, Default)]
+pub struct GarminRequest {
+    pub mfa_code: Option<String>,
+}
 
-pub async fn sync_garmin_activities(State(state): State<AppState>, Json(request): Json<GarminSyncRequest>) -> Result<Json<serde_json::Value>, StatusCode> {
-    let email = std::env::var("PICMANAGER_GARMIN_EMAIL").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
-    let password = std::env::var("PICMANAGER_GARMIN_PASSWORD").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
-    let python = std::env::var("PICMANAGER_GARMIN_PYTHON").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
-    let helper = std::env::var("PICMANAGER_GARMIN_HELPER").map_err(|_| StatusCode::PRECONDITION_FAILED)?;
-    let root = state.config.activities_dir().join(".garmin"); let downloads = root.join("downloads"); let journal = root.join("journal.json");
-    let output = Command::new(python).arg(helper).arg("--output").arg(&downloads).arg("--state").arg(&journal).arg("--email").arg(email).arg("--password").arg(password).args(request.mfa_code.as_deref().map(|code| vec!["--mfa", code]).unwrap_or_default()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    if !output.status.success() { return Err(StatusCode::UNAUTHORIZED); }
-    let summary = importer::import_dir_activities(&state.pool, &downloads, &state.config.activities_dir(), false).await;
-    Ok(Json(serde_json::json!({"downloaded": summary.imported, "skipped": summary.skipped})))
+#[derive(Debug, Serialize)]
+pub struct GarminStatusResponse {
+    pub configured: bool,
+    pub authenticated: bool,
+    pub status: String,
+    pub message: Option<String>,
+    pub downloaded: usize,
+    pub imported: usize,
+    pub skipped: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct GarminHelperResult {
+    status: String,
+    #[serde(default)]
+    message: Option<String>,
+    #[serde(default)]
+    downloaded: usize,
+    #[serde(default)]
+    items: Vec<GarminHelperItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GarminHelperItem {
+    id: String,
+    file: String,
+    #[allow(dead_code)]
+    start_time: Option<String>,
+}
+
+struct GarminRuntime {
+    email: String,
+    password: String,
+    python: String,
+    helper: String,
+    root: PathBuf,
+}
+
+impl GarminRuntime {
+    fn from_state(state: &AppState) -> Result<Self, GarminStatusResponse> {
+        let configured = std::env::var("PICMANAGER_GARMIN_EMAIL").ok()
+            .filter(|value| !value.trim().is_empty());
+        let password = std::env::var("PICMANAGER_GARMIN_PASSWORD").ok()
+            .filter(|value| !value.is_empty());
+        let (Some(email), Some(password)) = (configured, password) else {
+            return Err(garmin_response("not_configured", Some("请先在 PicManager Mac 应用中保存 Garmin Connect 中国账号和密码。")));
+        };
+        let python = std::env::var("PICMANAGER_GARMIN_PYTHON").map_err(|_| {
+            garmin_response("unavailable", Some("此 PicManager 服务未包含 Garmin 同步组件。"))
+        })?;
+        let helper = std::env::var("PICMANAGER_GARMIN_HELPER").map_err(|_| {
+            garmin_response("unavailable", Some("此 PicManager 服务未包含 Garmin 同步组件。"))
+        })?;
+        Ok(Self { email, password, python, helper, root: state.config.activities_dir().join(".garmin") })
+    }
+
+    fn downloads(&self) -> PathBuf { self.root.join("downloads") }
+    fn journal(&self) -> PathBuf { self.root.join("journal.json") }
+    fn tokens(&self) -> PathBuf { self.root.join("tokens") }
+}
+
+fn garmin_response(status: &str, message: Option<&str>) -> GarminStatusResponse {
+    GarminStatusResponse {
+        configured: status != "not_configured" && status != "unavailable",
+        authenticated: status == "authenticated" || status == "ready" || status == "completed",
+        status: status.to_owned(),
+        message: message.map(str::to_owned),
+        downloaded: 0,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    }
+}
+
+pub async fn get_garmin_status(State(state): State<AppState>) -> Json<GarminStatusResponse> {
+    match GarminRuntime::from_state(&state) {
+        Ok(runtime) => Json(GarminStatusResponse {
+            configured: true,
+            authenticated: runtime.tokens().join("oauth1_token.json").is_file()
+                && runtime.tokens().join("oauth2_token.json").is_file(),
+            status: "ready_to_authenticate".to_owned(),
+            message: None,
+            downloaded: 0,
+            imported: 0,
+            skipped: 0,
+            failed: 0,
+        }),
+        Err(response) => Json(response),
+    }
+}
+
+pub async fn authenticate_garmin(
+    State(state): State<AppState>,
+    Json(request): Json<GarminRequest>,
+) -> Json<GarminStatusResponse> {
+    let runtime = match GarminRuntime::from_state(&state) {
+        Ok(runtime) => runtime,
+        Err(response) => return Json(response),
+    };
+    Json(match run_garmin_helper_raw(&runtime, "auth", request.mfa_code.as_deref(), None, &[]).await {
+        Ok(result) => response_from_helper(result),
+        Err(response) => response,
+    })
+}
+
+pub async fn sync_garmin_activities(
+    State(state): State<AppState>,
+    Json(request): Json<GarminRequest>,
+) -> Json<GarminStatusResponse> {
+    let runtime = match GarminRuntime::from_state(&state) {
+        Ok(runtime) => runtime,
+        Err(response) => return Json(response),
+    };
+    let after: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(start_time) FROM activities WHERE import_status = 'imported'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .ok()
+    .flatten();
+    let helper = match run_garmin_helper_raw(&runtime, "sync", request.mfa_code.as_deref(), after.as_deref(), &[]).await {
+        Ok(result) => result,
+        Err(response) => return Json(response),
+    };
+    if helper.status != "ready" { return Json(response_from_helper(helper)); }
+
+    let mut response = GarminStatusResponse {
+        configured: true,
+        authenticated: true,
+        status: "completed".to_owned(),
+        message: None,
+        downloaded: helper.downloaded,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    };
+    let mut acknowledged = Vec::new();
+    for item in helper.items {
+        let Some(filename) = std::path::Path::new(&item.file).file_name() else {
+            response.status = "partial_failed".to_owned();
+            response.message = Some("Garmin 同步组件提供了不安全的暂存文件路径。".to_owned());
+            response.failed += 1;
+            break;
+        };
+        if filename.to_str() != Some(item.file.as_str()) || !item.file.ends_with(".fit") {
+            response.status = "partial_failed".to_owned();
+            response.message = Some("Garmin 同步组件提供了无效的 FIT 暂存文件。".to_owned());
+            response.failed += 1;
+            break;
+        }
+        let staged = runtime.downloads().join(filename);
+        if !staged.is_file() {
+            response.status = "partial_failed".to_owned();
+            response.message = Some("Garmin 暂存文件不存在，未推进同步检查点。".to_owned());
+            response.failed += 1;
+            break;
+        }
+        match importer::import_one(&state.pool, &staged, &state.config.activities_dir()).await {
+            Ok(importer::ImportOutcome::Imported(_)) => {
+                response.imported += 1;
+                acknowledged.push(item.id);
+            }
+            Ok(importer::ImportOutcome::Skipped) => {
+                response.skipped += 1;
+                acknowledged.push(item.id);
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Garmin staged FIT import failed");
+                response.status = "partial_failed".to_owned();
+                response.message = Some("一条 Garmin FIT 文件无法导入；已保留暂存文件，修复后可安全重试。".to_owned());
+                response.failed += 1;
+                break;
+            }
+        }
+    }
+    if !acknowledged.is_empty()
+        && let Err(error) = run_garmin_helper_raw(&runtime, "ack", None, None, &acknowledged).await
+    {
+        tracing::error!(status = %error.status, "Garmin import acknowledgement failed");
+        response.status = "acknowledgement_failed".to_owned();
+        response.message = Some("活动已导入，但同步检查点尚未确认；下次会安全重试。".to_owned());
+    }
+    Json(response)
+}
+
+fn response_from_helper(result: GarminHelperResult) -> GarminStatusResponse {
+    GarminStatusResponse {
+        configured: result.status != "not_configured",
+        authenticated: matches!(result.status.as_str(), "authenticated" | "ready" | "completed"),
+        status: result.status,
+        message: result.message,
+        downloaded: result.downloaded,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    }
+}
+
+async fn run_garmin_helper_raw(
+    runtime: &GarminRuntime,
+    command: &str,
+    mfa_code: Option<&str>,
+    after: Option<&str>,
+    ids: &[String],
+) -> Result<GarminHelperResult, GarminStatusResponse> {
+    std::fs::create_dir_all(runtime.downloads()).map_err(|_| {
+        garmin_response("staging_unavailable", Some("无法创建 Garmin 同步暂存目录。"))
+    })?;
+    std::fs::create_dir_all(runtime.tokens()).map_err(|_| {
+        garmin_response("token_store_unavailable", Some("无法创建 Garmin 认证令牌目录。"))
+    })?;
+    let mut process = Command::new(&runtime.python);
+    process
+        .arg(&runtime.helper)
+        .arg(command)
+        .arg("--output").arg(runtime.downloads())
+        .arg("--state").arg(runtime.journal())
+        .arg("--tokens").arg(runtime.tokens())
+        .arg("--email").arg(&runtime.email)
+        .env("PICMANAGER_GARMIN_PASSWORD", &runtime.password)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(code) = mfa_code { process.arg("--mfa").arg(code); }
+    if let Some(value) = after { process.arg("--after").arg(value); }
+    if !ids.is_empty() { process.arg("--ids").args(ids); }
+    let output = tokio::time::timeout(Duration::from_secs(120), process.output())
+        .await
+        .map_err(|_| garmin_response("timed_out", Some("Garmin 同步超过两分钟未响应，未推进检查点。")))?
+        .map_err(|_| garmin_response("helper_unavailable", Some("无法启动 Garmin 同步组件。")))?;
+    if !output.status.success() {
+        tracing::warn!(exit_code = ?output.status.code(), "Garmin helper exited unsuccessfully");
+        return Err(garmin_response("helper_failed", Some("Garmin 同步组件失败；请查看诊断日志。")));
+    }
+    serde_json::from_slice::<GarminHelperResult>(&output.stdout).map_err(|_| {
+        tracing::warn!("Garmin helper emitted invalid JSON");
+        garmin_response("helper_protocol_error", Some("Garmin 同步组件返回了无效结果。"))
+    })
+}
+
+#[cfg(test)]
+mod garmin_helper_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn fake_helper_exercises_structured_auth_and_mfa_contracts() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("fake-garmin-helper.sh");
+        std::fs::write(&helper, r#"#!/bin/sh
+case "$1" in
+  auth) case " $* " in *" --mfa "*) printf '%s\n' '{"status":"authenticated"}' ;; *) printf '%s\n' '{"status":"mfa_required","message":"code needed"}' ;; esac ;;
+  sync) printf '%s\n' '{"status":"ready","downloaded":1,"items":[]}' ;;
+  ack) printf '%s\n' '{"status":"acknowledged"}' ;;
+esac
+"#).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let runtime = GarminRuntime {
+            email: "test@example.invalid".to_owned(),
+            password: "not-a-real-password".to_owned(),
+            python: "/bin/sh".to_owned(),
+            helper: helper.to_string_lossy().into_owned(),
+            root: temp.path().join("state"),
+        };
+        let mfa = run_garmin_helper_raw(&runtime, "auth", None, None, &[]).await.unwrap();
+        assert_eq!(mfa.status, "mfa_required");
+        let authenticated = run_garmin_helper_raw(&runtime, "auth", Some("123456"), None, &[]).await.unwrap();
+        assert_eq!(authenticated.status, "authenticated");
+        let sync = run_garmin_helper_raw(&runtime, "sync", None, None, &[]).await.unwrap();
+        assert_eq!(sync.status, "ready");
+        assert_eq!(sync.downloaded, 1);
+    }
 }
 
 pub async fn list_activities(

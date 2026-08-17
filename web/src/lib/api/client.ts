@@ -194,7 +194,13 @@ export function createApiClient(options: ApiClientOptions = {}) {
       track: (id: number) => request<ActivityTrack>(`/api/activities/${id}/track`),
       photos: (id: number, page = 1, perPage = 100) =>
         request<ActivityPhotos>(`/api/activities/${id}/photos?page=${page}&per_page=${perPage}`),
-      syncGarmin: (mfaCode?: string) => request<{ downloaded: number; skipped: number }>('/api/activities/garmin/sync', { method: 'POST', body: JSON.stringify({ mfa_code: mfaCode }) }),
+      garminStatus: () => request<{ configured: boolean; authenticated: boolean; status: string; message?: string | null; downloaded: number; imported: number; skipped: number; failed: number }>('/api/activities/garmin/status'),
+      authenticateGarmin: (mfaCode?: string) => request<{ configured: boolean; authenticated: boolean; status: string; message?: string | null; downloaded: number; imported: number; skipped: number; failed: number }>('/api/activities/garmin/auth', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mfa_code: mfaCode }),
+      }),
+      syncGarmin: (mfaCode?: string) => request<{ configured: boolean; authenticated: boolean; status: string; message?: string | null; downloaded: number; imported: number; skipped: number; failed: number }>('/api/activities/garmin/sync', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mfa_code: mfaCode }),
+      }),
     },
     request,
   };

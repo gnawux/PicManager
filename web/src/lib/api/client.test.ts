@@ -110,6 +110,23 @@ describe('API client', () => {
     }));
   });
 
+  it('posts Garmin authentication and sync JSON with the required content type', async () => {
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      configured: true, authenticated: false, status: 'mfa_required', downloaded: 0, imported: 0, skipped: 0, failed: 0,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.activities.authenticateGarmin('123456');
+    await client.activities.syncGarmin('123456');
+    for (const [path, init] of fetcher.mock.calls as unknown as [RequestInfo | URL, RequestInit][]) {
+      expect(path).toMatch(/\/api\/activities\/garmin\/(auth|sync)$/);
+      expect(init).toEqual(expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ mfa_code: '123456' }),
+      }));
+    }
+  });
+
   it('encodes geographic filters without manual string concatenation', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify({ photos: [], total: 0, page: 1, per_page: 200 }), {
