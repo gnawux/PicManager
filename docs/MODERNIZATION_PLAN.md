@@ -10,7 +10,7 @@ Current stabilization milestones:
 - M19 — Apple export claim resilience: completed. Retry transient SQLite contention in
   the service, retry bounded HTTP/network failures in the Mac shell, and log every
   queue exit reason.
-- M20 — Apple smart-album consistency: in progress. Maintain month membership during
+- M20 — Apple smart-album consistency: completed. Maintain month membership during
   rendition commits and backfill missing derived relationships additively.
 
 ## 1. Product direction

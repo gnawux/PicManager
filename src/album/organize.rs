@@ -1,5 +1,43 @@
-use sqlx::SqlitePool;
+use sqlx::{Sqlite, SqlitePool, Transaction};
 use crate::error::Result;
+
+/// Attach one imported photo to its derived month album inside the caller's transaction.
+/// This keeps provider-specific incremental commits consistent without rescanning the library.
+pub(crate) async fn assign_month_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    photo_id: i64,
+) -> Result<()> {
+    let month: Option<String> = sqlx::query_scalar(
+        "SELECT substr(taken_at, 1, 7) FROM photos \
+         WHERE id = ? AND import_status = 'imported' AND taken_at IS NOT NULL \
+           AND length(taken_at) >= 7",
+    )
+    .bind(photo_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(month) = month else { return Ok(()); };
+
+    let album_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM albums WHERE name = ? AND kind = 'time' ORDER BY id LIMIT 1",
+    )
+    .bind(&month)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let album_id = match album_id {
+        Some(id) => id,
+        None => sqlx::query("INSERT INTO albums (name, kind) VALUES (?, 'time')")
+            .bind(&month)
+            .execute(&mut **tx)
+            .await?
+            .last_insert_rowid(),
+    };
+    sqlx::query("INSERT OR IGNORE INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(photo_id)
+        .bind(album_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
 
 /// Group all imported photos into monthly time albums (e.g. "2024-06").
 pub async fn group_by_month(pool: &SqlitePool) -> Result<()> {
@@ -164,5 +202,27 @@ mod tests {
         let count: (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM albums").fetch_one(&pool).await.unwrap();
         assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn month_membership_repair_is_additive_and_idempotent() {
+        let pool = test_pool().await;
+        insert_photo(&pool, "/repair.jpg", Some("2026-08-17T10:30:00"), None).await;
+        insert_photo(&pool, "/undated.jpg", None, None).await;
+
+        let repair = include_str!("../../migrations/0030_backfill_month_album_membership.sql");
+        sqlx::raw_sql(repair).execute(&pool).await.unwrap();
+        sqlx::raw_sql(repair).execute(&pool).await.unwrap();
+
+        let memberships: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photo_albums pa JOIN albums a ON a.id = pa.album_id \
+             WHERE a.kind = 'time' AND a.name = '2026-08'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(memberships, 1);
+        let undated: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photo_albums pa JOIN photos p ON p.id = pa.photo_id \
+             WHERE p.path = '/undated.jpg'",
+        ).fetch_one(&pool).await.unwrap();
+        assert_eq!(undated, 0);
     }
 }

@@ -315,6 +315,7 @@ pub async fn commit_rendition_package_for_lease(pool: &SqlitePool, source_id: i6
         "UPDATE asset_sources SET sync_status = 'ready', exclusion_reason = NULL, last_error = NULL, \
          updated_at = datetime('now') WHERE id = ?",
     ).bind(source_id).execute(&mut *tx).await?;
+    crate::album::organize::assign_month_in_transaction(&mut tx, photo_id).await?;
     if let Some(worker) = lease_owner {
         let result = sqlx::query("UPDATE sync_items SET status = 'succeeded', lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, finished_at = datetime('now'), updated_at = datetime('now') WHERE source_id = ? AND operation = 'export_original' AND status = 'leased' AND lease_owner = ?").bind(source_id).bind(worker).execute(&mut *tx).await?;
         if result.rows_affected() != 1 { return Err(AppError::Metadata("Apple export lease is no longer active".into())); }
@@ -664,6 +665,27 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(state_revision, 2);
+    }
+
+    #[tokio::test]
+    async fn commit_assigns_the_photo_to_its_month_album_idempotently() {
+        let pool = test_pool().await;
+        let source_id: i64 = sqlx::query_scalar(
+            "INSERT INTO asset_sources (provider, external_id, original_filename, taken_at, sync_status) \
+             VALUES ('apple_photos', 'asset/L0/month', 'IMG_0001.HEIC', \
+                     '2026-08-17T10:30:00', 'downloaded') RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        let package = tempfile::tempdir().unwrap();
+        write_package(package.path(), "asset/L0/month", b"month original", None);
+
+        let committed = commit_rendition_package(&pool, source_id, package.path()).await.unwrap();
+        commit_rendition_package(&pool, source_id, package.path()).await.unwrap();
+
+        let memberships: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM photo_albums pa JOIN albums a ON a.id = pa.album_id \
+             WHERE pa.photo_id = ? AND a.kind = 'time' AND a.name = '2026-08'",
+        ).bind(committed.photo_id).fetch_one(&pool).await.unwrap();
+        assert_eq!(memberships, 1);
     }
 
     #[tokio::test]

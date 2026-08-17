@@ -55,9 +55,25 @@ async fn copied_legacy_catalog_upgrades_without_changing_existing_records() {
     let upgraded = open_database(&copied_path).await;
     sqlx::migrate!("./migrations").run(&upgraded).await.unwrap();
     let after_schema_upgrade = snapshot(&upgraded).await;
+    assert_eq!(after_schema_upgrade.photos, before.photos);
+    assert_eq!(after_schema_upgrade.face_links, before.face_links);
+    assert_eq!(after_schema_upgrade.person_links, before.person_links);
+    assert_eq!(after_schema_upgrade.activity_count, before.activity_count);
+    assert!(before.album_links.iter().all(|link| after_schema_upgrade.album_links.contains(link)));
+    assert_eq!(after_schema_upgrade.album_links.len(), before.album_links.len() + 3);
+    let repaired_months: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT pa.photo_id, a.name FROM photo_albums pa JOIN albums a ON a.id = pa.album_id \
+         JOIN photos p ON p.id = pa.photo_id WHERE a.kind = 'time' \
+           AND a.name = substr(p.taken_at, 1, 7) ORDER BY pa.photo_id",
+    ).fetch_all(&upgraded).await.unwrap();
     assert_eq!(
-        after_schema_upgrade, before,
-        "additive schema migrations changed legacy data"
+        repaired_months,
+        vec![
+            (101, "2023-05".to_owned()),
+            (205, "2021-11".to_owned()),
+            (990, "1998-02".to_owned()),
+        ],
+        "schema upgrade added relationships other than the expected derived month albums"
     );
 
     let dry_run = backfill_legacy_local(&upgraded, true).await.unwrap();
@@ -65,7 +81,7 @@ async fn copied_legacy_catalog_upgrades_without_changing_existing_records() {
     assert_eq!(dry_run.total_photos, before.photos.len() as i64);
     assert_eq!(
         snapshot(&upgraded).await,
-        before,
+        after_schema_upgrade,
         "dry-run changed legacy data"
     );
     assert_catalog_counts(&upgraded, 0).await;
@@ -77,7 +93,7 @@ async fn copied_legacy_catalog_upgrades_without_changing_existing_records() {
     assert_eq!(first.created_links, before.photos.len() as u64);
     assert_eq!(
         snapshot(&upgraded).await,
-        before,
+        after_schema_upgrade,
         "backfill changed legacy data"
     );
     assert_catalog_counts(&upgraded, before.photos.len() as i64).await;
@@ -95,7 +111,7 @@ async fn copied_legacy_catalog_upgrades_without_changing_existing_records() {
     assert_eq!(second.created_links, 0);
     assert_eq!(
         snapshot(&upgraded).await,
-        before,
+        after_schema_upgrade,
         "idempotent rerun changed legacy data"
     );
 
