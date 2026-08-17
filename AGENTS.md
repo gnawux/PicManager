@@ -29,6 +29,36 @@ These repository-wide instructions apply to every automated coding session.
 - Do not run `cargo fmt --all`; legacy files contain unrelated formatting. Format only
   files changed by the milestone when safe.
 
+## Cross-component contracts and naming
+
+- Treat every Rust/API, TypeScript/Web and Swift/macOS boundary as one shared contract,
+  not as three independently named implementations. The producing component owns the
+  wire schema; consumers must follow it explicitly.
+- Use `snake_case` on JSON and database wires (`item_id`, `external_id`), idiomatic
+  names inside each language, and an explicit boundary mapping when language casing
+  differs. For Swift acronyms, prefer wire DTO properties such as `itemId` and map them
+  to domain properties such as `itemID`, or declare tested coding keys. Never assume an
+  automatic snake-case converter preserves `ID`, `URL`, `UUID` or similar acronyms.
+- Keep one vocabulary for each concept across components. A provider identity, source
+  ID, asset ID, photo ID, filename, path, display label and task ID are distinct types
+  and names; do not rename or reuse them according to local preference.
+- Any contract change must update the producer, every consumer, literal wire fixtures
+  and contract documentation in the same milestone. Do not defer consumer verification
+  until manual cross-component testing.
+- Test clients against literal serialized responses from the real producer, including
+  nulls, legacy enum values, acronym-bearing keys and extra fields. Generated/synthetic
+  fixtures that merely mirror the consumer model are insufficient.
+- For side-effecting APIs such as claim, lease, commit, retry and cancel, tests must
+  prove the complete boundary: the server performs the mutation, the client decodes the
+  response, and the next operation starts. A successful server mutation alone is not
+  acceptance evidence.
+- Do not use `try?`, empty catches or best-effort logging on critical cross-component
+  paths. Persist and surface errors so a claimed lease cannot look like active I/O when
+  the client actually failed to decode or dispatch it.
+- Before integrating components, run a minimal end-to-end contract smoke test for each
+  new path. For Apple export this is `claim -> decode -> helper launch -> package ->
+  commit`, using an isolated test library or controlled fake provider.
+
 ## Git integration
 
 - Prefer fast-forward integration from development branches into `main` so the primary
