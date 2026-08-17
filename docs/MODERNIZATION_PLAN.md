@@ -690,7 +690,7 @@ rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this mi
   protocol, MFA verification, DI service-ticket exchange, token validation and refresh. Preserve
   the existing stable Web error vocabulary and never log credentials, MFA codes, provider bodies,
   service tickets or token values. Test every protocol transition against a controlled fake server.
-- M35.2: implement owner-only atomic token storage compatible with the existing
+- M35.2: complete — implement owner-only atomic token storage compatible with the existing
   `garmin_tokens.json` fields so the migration reuses authenticated sessions without rewriting or
   deleting the Python client's token file. Reject symlinked stores and malformed/unsigned JWT
   metadata used for expiry decisions.

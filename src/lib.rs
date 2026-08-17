@@ -9,6 +9,7 @@ pub mod config;
 pub mod dedup;
 pub mod derived;
 pub mod error;
+pub mod garmin;
 pub mod image_open;
 pub mod importer;
 pub mod jobs;
