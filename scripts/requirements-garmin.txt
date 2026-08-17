@@ -1,2 +1,6 @@
+# This pair is intentionally retained after offline contract review: Garmin 0.2.8
+# exposes the China `is_cn` constructor argument and the `.garth.login(...,
+# prompt_mfa=...)` / token-store surface used by garmin_sync.py. Do not upgrade one
+# package independently; update the fake provider contract tests at the same time.
 garminconnect==0.2.8
 garth==0.4.47

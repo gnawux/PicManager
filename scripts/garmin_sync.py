@@ -11,10 +11,17 @@ import io
 import json
 import os
 import pathlib
+import socket
+import sys
 import tempfile
 import zipfile
 
-from garminconnect import Garmin
+try:
+    from garminconnect import Garmin
+    DEPENDENCY_IMPORT_ERROR = None
+except ImportError as error:  # reported as safe JSON after argparse has initialized
+    Garmin = None
+    DEPENDENCY_IMPORT_ERROR = error
 
 
 class MfaRequired(Exception):
@@ -23,6 +30,60 @@ class MfaRequired(Exception):
 
 def emit(status, **fields):
     print(json.dumps({"status": status, **fields}, sort_keys=True))
+
+
+def safe_exception_class(error):
+    """Return only a bounded exception class name, never provider response text."""
+    return "".join(char for char in type(error).__name__ if char.isalnum() or char == "_")[:80] or "UnknownError"
+
+
+def safe_http_status(error):
+    response = getattr(error, "response", None)
+    status = getattr(response, "status_code", None) or getattr(error, "status_code", None)
+    return status if isinstance(status, int) and 100 <= status <= 599 else None
+
+
+def authentication_error_status(error):
+    """Map provider failures to stable, user-safe codes without leaking exception text."""
+    name = safe_exception_class(error).lower()
+    text = str(error).lower()
+    http_status = safe_http_status(error)
+    if "mfa" in name or "verification" in name or "mfa" in text:
+        return "mfa_required"
+    if "token" in name and any(word in name for word in ("expired", "invalid", "stale")):
+        return "stale_token"
+    if http_status in (401, 403) or "credential" in name or "authentication" in name or "unauthorized" in name:
+        return "invalid_credentials"
+    if http_status == 429 or (http_status is not None and http_status >= 500):
+        return "network_error"
+    if isinstance(error, (socket.timeout, TimeoutError, ConnectionError, OSError)):
+        return "network_error"
+    if any(word in name or word in text for word in ("proxy", "connect", "timeout", "dns", "ssl")):
+        return "network_error"
+    if isinstance(error, (AttributeError, KeyError, TypeError, ImportError, ModuleNotFoundError)):
+        return "sso_contract_error"
+    return "authentication_failed"
+
+
+def log_authentication_failure(error, phase):
+    """Diagnostics deliberately exclude email, response body, URL, and exception message."""
+    status = authentication_error_status(error)
+    http_status = safe_http_status(error)
+    fields = [f"phase={phase}", f"status={status}", f"class={safe_exception_class(error)}"]
+    if http_status is not None:
+        fields.append(f"http_status={http_status}")
+    print("garmin_auth_failure " + " ".join(fields), file=sys.stderr)
+
+
+def authentication_message(status):
+    return {
+        "invalid_credentials": "Garmin Connect rejected the saved account or password",
+        "mfa_required": "Garmin Connect requires a one-time verification code",
+        "network_error": "Garmin Connect could not be reached; check network or proxy settings",
+        "stale_token": "The saved Garmin sign-in token has expired; verify the account again",
+        "sso_contract_error": "The Garmin sign-in protocol changed or this bundled client is incompatible",
+        "dependency_error": "The bundled Garmin client dependency is unavailable",
+    }.get(status, "Garmin Connect could not complete authentication")
 
 
 def load(path):
@@ -80,6 +141,10 @@ def tokens_exist(token_dir):
 
 
 def authenticate(args):
+    if DEPENDENCY_IMPORT_ERROR is not None or Garmin is None:
+        log_authentication_failure(DEPENDENCY_IMPORT_ERROR, "dependency_import")
+        emit("dependency_error", error_code="dependency_error", message=authentication_message("dependency_error"), diagnostic=safe_exception_class(DEPENDENCY_IMPORT_ERROR))
+        return None
     password = args.password or os.environ.get("PICMANAGER_GARMIN_PASSWORD")
     if not password:
         emit("not_configured", message="Garmin credentials are not available to the local service")
@@ -89,10 +154,10 @@ def authenticate(args):
         try:
             api.login(tokenstore=str(args.tokens))
             return api
-        except Exception:
+        except Exception as error:
             # A stale token is not a usable authentication result. Preserve no secrets
             # and let the normal sign-in path obtain a fresh token below.
-            pass
+            log_authentication_failure(error, "token_refresh")
 
     def prompt_mfa():
         if args.mfa:
@@ -108,10 +173,12 @@ def authenticate(args):
             os.chmod(token, 0o600)
         return api
     except MfaRequired:
-        emit("mfa_required", message="Garmin Connect requires a one-time verification code")
+        emit("mfa_required", error_code="mfa_required", message=authentication_message("mfa_required"))
         return None
-    except Exception:
-        emit("authentication_failed", message="Garmin Connect could not verify these credentials")
+    except Exception as error:
+        status = authentication_error_status(error)
+        log_authentication_failure(error, "password_login")
+        emit(status, error_code=status, message=authentication_message(status), diagnostic=safe_exception_class(error), http_status=safe_http_status(error))
         return None
 
 

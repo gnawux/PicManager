@@ -24,6 +24,30 @@ def fit_bytes():
 
 
 class GarminHelperTests(unittest.TestCase):
+    def test_authentication_errors_are_classified_without_provider_text(self):
+        class UnauthorizedError(Exception):
+            status_code = 401
+
+        class ProviderContractError(AttributeError):
+            pass
+
+        class ProxyFailure(ConnectionError):
+            pass
+
+        self.assertEqual(HELPER.authentication_error_status(UnauthorizedError("account=private@example.invalid")), "invalid_credentials")
+        self.assertEqual(HELPER.authentication_error_status(ProviderContractError("missing private response")), "sso_contract_error")
+        self.assertEqual(HELPER.authentication_error_status(ProxyFailure("proxy password=secret")), "network_error")
+        self.assertEqual(HELPER.safe_exception_class(UnauthorizedError("private@example.invalid")), "UnauthorizedError")
+
+    def test_mfa_and_dependency_messages_are_stable(self):
+        self.assertEqual(HELPER.authentication_error_status(HELPER.MfaRequired()), "mfa_required")
+        self.assertEqual(HELPER.authentication_message("network_error"), "Garmin Connect could not be reached; check network or proxy settings")
+
+    def test_pinned_dependency_pair_matches_the_fake_provider_contract(self):
+        requirements = pathlib.Path(__file__).with_name("requirements-garmin.txt").read_text()
+        self.assertIn("garminconnect==0.2.8", requirements)
+        self.assertIn("garth==0.4.47", requirements)
+
     def test_extracts_the_single_fit_from_an_original_archive(self):
         archive = io.BytesIO()
         with zipfile.ZipFile(archive, "w") as output:

@@ -107,6 +107,8 @@ pub struct GarminStatusResponse {
     pub configured: bool,
     pub authenticated: bool,
     pub status: String,
+    pub error_code: Option<String>,
+    pub retryable: bool,
     pub message: Option<String>,
     pub downloaded: usize,
     pub imported: usize,
@@ -117,6 +119,12 @@ pub struct GarminStatusResponse {
 #[derive(Debug, Deserialize)]
 struct GarminHelperResult {
     status: String,
+    #[serde(default)]
+    error_code: Option<String>,
+    #[serde(default)]
+    diagnostic: Option<String>,
+    #[serde(default)]
+    http_status: Option<u16>,
     #[serde(default)]
     message: Option<String>,
     #[serde(default)]
@@ -169,6 +177,12 @@ fn garmin_response(status: &str, message: Option<&str>) -> GarminStatusResponse 
         configured: status != "not_configured" && status != "unavailable",
         authenticated: status == "authenticated" || status == "ready" || status == "completed",
         status: status.to_owned(),
+        error_code: if matches!(status, "authenticated" | "ready" | "completed" | "ready_to_authenticate") {
+            None
+        } else {
+            Some(status.to_owned())
+        },
+        retryable: matches!(status, "network_error" | "timed_out" | "helper_failed" | "helper_unavailable" | "staging_unavailable" | "token_store_unavailable"),
         message: message.map(str::to_owned),
         downloaded: 0,
         imported: 0,
@@ -184,6 +198,8 @@ pub async fn get_garmin_status(State(state): State<AppState>) -> Json<GarminStat
             authenticated: runtime.tokens().join("oauth1_token.json").is_file()
                 && runtime.tokens().join("oauth2_token.json").is_file(),
             status: "ready_to_authenticate".to_owned(),
+            error_code: None,
+            retryable: false,
             message: None,
             downloaded: 0,
             imported: 0,
@@ -233,6 +249,8 @@ pub async fn sync_garmin_activities(
         configured: true,
         authenticated: true,
         status: "completed".to_owned(),
+        error_code: None,
+        retryable: false,
         message: None,
         downloaded: helper.downloaded,
         imported: 0,
@@ -289,10 +307,21 @@ pub async fn sync_garmin_activities(
 }
 
 fn response_from_helper(result: GarminHelperResult) -> GarminStatusResponse {
+    if let Some(error_code) = result.error_code.as_deref() {
+        tracing::warn!(
+            error_code,
+            diagnostic = ?result.diagnostic,
+            http_status = ?result.http_status,
+            "Garmin helper reported a classified authentication failure"
+        );
+    }
+    let retryable = matches!(result.status.as_str(), "network_error" | "stale_token");
     GarminStatusResponse {
         configured: result.status != "not_configured",
         authenticated: matches!(result.status.as_str(), "authenticated" | "ready" | "completed"),
         status: result.status,
+        error_code: result.error_code,
+        retryable,
         message: result.message,
         downloaded: result.downloaded,
         imported: 0,
@@ -316,6 +345,7 @@ async fn run_garmin_helper_raw(
     })?;
     let mut process = Command::new(&runtime.python);
     process
+        .arg("-B")
         .arg(&runtime.helper)
         .arg(command)
         .arg("--output").arg(runtime.downloads())
@@ -323,6 +353,8 @@ async fn run_garmin_helper_raw(
         .arg("--tokens").arg(runtime.tokens())
         .arg("--email").arg(&runtime.email)
         .env("PICMANAGER_GARMIN_PASSWORD", &runtime.password)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .env("PYTHONPYCACHEPREFIX", runtime.root.join("python-bytecode-cache"))
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -334,11 +366,11 @@ async fn run_garmin_helper_raw(
         .map_err(|_| garmin_response("timed_out", Some("Garmin 同步超过两分钟未响应，未推进检查点。")))?
         .map_err(|_| garmin_response("helper_unavailable", Some("无法启动 Garmin 同步组件。")))?;
     if !output.status.success() {
-        tracing::warn!(exit_code = ?output.status.code(), "Garmin helper exited unsuccessfully");
+        tracing::warn!(exit_code = ?output.status.code(), stderr_bytes = output.stderr.len(), "Garmin helper exited unsuccessfully");
         return Err(garmin_response("helper_failed", Some("Garmin 同步组件失败；请查看诊断日志。")));
     }
     serde_json::from_slice::<GarminHelperResult>(&output.stdout).map_err(|_| {
-        tracing::warn!("Garmin helper emitted invalid JSON");
+        tracing::warn!(stdout_bytes = output.stdout.len(), stderr_bytes = output.stderr.len(), "Garmin helper emitted invalid JSON");
         garmin_response("helper_protocol_error", Some("Garmin 同步组件返回了无效结果。"))
     })
 }
@@ -377,6 +409,18 @@ esac
         let sync = run_garmin_helper_raw(&runtime, "sync", None, None, &[]).await.unwrap();
         assert_eq!(sync.status, "ready");
         assert_eq!(sync.downloaded, 1);
+    }
+
+    #[test]
+    fn helper_error_contract_preserves_literal_safe_fields() {
+        let helper: GarminHelperResult = serde_json::from_str(
+            r#"{"status":"network_error","error_code":"network_error","message":"Garmin Connect could not be reached","diagnostic":"ProxyError","http_status":502}"#,
+        ).unwrap();
+        let response = response_from_helper(helper);
+        assert_eq!(response.status, "network_error");
+        assert_eq!(response.error_code.as_deref(), Some("network_error"));
+        assert!(response.retryable);
+        assert!(!response.authenticated);
     }
 }
 
