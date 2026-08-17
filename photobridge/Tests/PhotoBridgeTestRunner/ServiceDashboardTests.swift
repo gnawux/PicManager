@@ -39,5 +39,16 @@ func runServiceDashboardTests() {
             try expect(dashboard.pendingSourceCount, equals: 12)
             try expect(dashboard.failedWorkCount, equals: 3)
         }
+
+        test("decodes Apple export claims with acronym identifiers") {
+            let data = Data(#"{"item_id":42,"source":{"id":7,"external_id":"asset/L0/001","original_filename":"IMG_0001.HEIC","sync_status":"downloading"}}"#.utf8)
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            let claim = try decoder.decode(AppleExportClaim.self, from: data)
+            try expect(claim.itemID, equals: 42)
+            try expect(claim.source.externalID, equals: "asset/L0/001")
+            try expect(claim.source.originalFilename, equals: "IMG_0001.HEIC")
+            try expect(claim.source.syncStatus, equals: "downloading")
+        }
     }
 }

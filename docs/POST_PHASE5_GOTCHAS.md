@@ -46,6 +46,14 @@ status into the durable retry state. Sign the bundled PhotoBridge helper explici
 its Photos entitlement and verify it in the bundle release gate; sealing a linker-signed
 resource inside the outer app is not an adequate nested-code contract.
 
+### Snake-case conversion does not preserve Swift acronym spelling
+
+`JSONDecoder.KeyDecodingStrategy.convertFromSnakeCase` maps `item_id` to `itemId`,
+not `itemID` (and likewise `external_id` to `externalId`). A service can therefore
+commit a lease successfully while the native client fails to decode the response and
+never starts the work. Give acronym-bearing wire properties explicit coding keys and
+test them against literal server JSON, including side-effecting claim responses.
+
 ### A menu-bar app still needs normal window semantics
 
 `LSUIElement` accessory applications do not appear in Dock or Command-Tab. PicManager

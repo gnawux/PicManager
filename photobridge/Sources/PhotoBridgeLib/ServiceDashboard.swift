@@ -69,6 +69,13 @@ public struct AppleSource: Decodable, Equatable, Sendable, Identifiable {
     public let externalID: String
     public let originalFilename: String?
     public let syncStatus: String
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case externalID = "externalId"
+        case originalFilename
+        case syncStatus
+    }
 }
 
 public struct AppleSourcePage: Decodable, Equatable, Sendable {
@@ -79,6 +86,11 @@ public struct AppleSourcePage: Decodable, Equatable, Sendable {
 public struct AppleExportClaim: Decodable, Equatable, Sendable {
     public let itemID: Int
     public let source: AppleSource
+
+    private enum CodingKeys: String, CodingKey {
+        case itemID = "itemId"
+        case source
+    }
 }
 
 public struct ApplePhotoInventory: Equatable, Sendable {
