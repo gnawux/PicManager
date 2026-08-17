@@ -593,6 +593,10 @@ Status: in progress.
   packages into recoverable staging, and atomically commit package plus durable work state.
 - M29.3: complete — expose policy, progress and recovery behavior in the Mac application; rehearse
   interrupted transfers and a subsequent application restart against an isolated library.
+- M29.4: complete — stabilize the native claim contract with literal wire fixtures, explicitly sign
+  and supervise the packaged exporter, and document the boundary-first incident workflow.
+- M29.5: in progress — reconcile stale Apple source states and let explicit user synchronization drain
+  the durable queue while retaining bounded automatic foreground batches.
 
 ### M30 - Garmin activity synchronization and map detail
 

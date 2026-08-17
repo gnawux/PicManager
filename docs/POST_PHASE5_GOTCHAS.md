@@ -54,6 +54,31 @@ commit a lease successfully while the native client fails to decode the response
 never starts the work. Give acronym-bearing wire properties explicit coding keys and
 test them against literal server JSON, including side-effecting claim responses.
 
+### Debug cross-component state transitions before subsystem internals
+
+The Apple export incident looked like a PhotoKit or iCloud stall because the source row
+said `downloading`. In fact, the Rust service had committed the claim and the Swift
+client had failed to decode its response, so no helper or media I/O had started. The
+following evidence order found the fault quickly and should be the default incident
+workflow:
+
+1. Hash the installed and newly built executables, including managed services and
+   helpers, so stale binaries are excluded first.
+2. Inspect durable source and item state separately. A lease proves only that the server
+   mutated its database; it does not prove that the client decoded the response or began
+   I/O.
+3. Check the expected process, staging package and lease heartbeat. Their simultaneous
+   absence places the break before export without speculating about network speed.
+4. Sample the live process to distinguish a blocked thread from an async path that
+   already failed or disappeared.
+5. Test the first unproven boundary with literal producer data. For a side-effecting API,
+   verify both the server mutation and consumer decoding before investigating downstream
+   frameworks.
+
+Prefer timestamped durable facts and falsifiable boundary checks over adding broad logs
+or changing several layers at once. Keep hypotheses separate: package permissions,
+PhotoKit access, helper lifecycle and wire decoding require different evidence.
+
 ### A menu-bar app still needs normal window semantics
 
 `LSUIElement` accessory applications do not appear in Dock or Command-Tab. PicManager
