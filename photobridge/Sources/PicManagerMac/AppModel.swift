@@ -383,6 +383,7 @@ final class AppModel: ObservableObject {
             appleSyncLog.info("claimed Apple export item \(claim.itemID, privacy: .public)")
             let package = staging.appendingPathComponent("source-\(claim.source.id)", isDirectory: true)
             inventorySyncProgress = "Downloading Apple Photo \(index + 1) of up to \(maximum)…"
+            try? await client.reportAppleExportStage(itemID: claim.itemID, workerID: workerID, stage: "claimed")
             let heartbeat = Task {
                 while !Task.isCancelled {
                     try? await Task.sleep(for: .seconds(45))
@@ -391,18 +392,20 @@ final class AppModel: ObservableObject {
             }
             do {
                 appleSyncLog.info("checking Apple Photos authorization")
+                try? await client.reportAppleExportStage(itemID: claim.itemID, workerID: workerID, stage: "authorization_checking")
                 let authorization = try await requestPhotoLibraryAccess()
                 if case .limited = authorization { throw AuthError.limited }
+                try? await client.reportAppleExportStage(itemID: claim.itemID, workerID: workerID, stage: "authorization_granted")
                 appleSyncLog.info("starting Apple resource export")
+                try? await client.reportAppleExportStage(itemID: claim.itemID, workerID: workerID, stage: "photokit_export_started")
                 // PhotoKit's synchronous asset lookup must not inherit the app
                 // main actor. The command-line exporter runs off the main actor;
                 // keeping the same execution context here avoids a stalled
                 // lookup while the WebKit UI continues to repaint.
-                let identifier = claim.source.externalID
-                try await Task.detached(priority: .utility) {
-                    try await exportAppleRenditionPackage(identifier: identifier, destination: package)
-                }.value
+                let helper = Bundle.main.resourceURL!.appendingPathComponent("photobridge")
+                try await exportApplePackageWithHelper(helper, identifier: claim.source.externalID, destination: package)
                 try await client.commitAppleExport(sourceID: claim.source.id, workerID: workerID, packageURL: package)
+                try? await client.reportAppleExportStage(itemID: claim.itemID, workerID: workerID, stage: "committed")
                 appleSyncLog.info("committed Apple rendition package")
                 try? FileManager.default.removeItem(at: package)
             } catch {

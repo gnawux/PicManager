@@ -23,17 +23,19 @@ npm run build
 cd "$REPO_ROOT"
 cargo build --release --bin picmanager
 swift build --package-path photobridge -c release --product PicManagerMac
+swift build --package-path photobridge -c release --product PhotoBridge
 
 rm -rf "$APP_PATH"
 mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$INFO_PLIST" "$CONTENTS/Info.plist"
 cp "$REPO_ROOT/photobridge/.build/release/PicManagerMac" "$MACOS_DIR/PicManagerMac"
+cp "$REPO_ROOT/photobridge/.build/release/PhotoBridge" "$RESOURCES_DIR/photobridge"
 cp "$REPO_ROOT/target/release/picmanager" "$RESOURCES_DIR/picmanager"
 cp "$REPO_ROOT/scripts/garmin_sync.py" "$RESOURCES_DIR/garmin_sync.py"
 PYTHON_RUNTIME="${PICMANAGER_PYTHON_RUNTIME:-$(dirname "$(dirname "$(uv python find 3.12)")")}"
 rsync -aL --delete "$PYTHON_RUNTIME/" "$RESOURCES_DIR/python/"
 "$RESOURCES_DIR/python/bin/python3" -m pip install --break-system-packages --disable-pip-version-check --no-cache-dir -r "$REPO_ROOT/scripts/requirements-garmin.txt"
-chmod 755 "$MACOS_DIR/PicManagerMac" "$RESOURCES_DIR/picmanager"
+chmod 755 "$MACOS_DIR/PicManagerMac" "$RESOURCES_DIR/picmanager" "$RESOURCES_DIR/photobridge"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 
 "$SCRIPT_DIR/test-macos-bundle.sh" "$APP_PATH"

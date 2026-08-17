@@ -3,6 +3,20 @@ import Foundation
 import ImageIO
 import Photos
 
+public func exportApplePackageWithHelper(_ helper: URL, identifier: String, destination: URL) async throws {
+    try await withCheckedThrowingContinuation { continuation in
+        let process = Process(); let errors = Pipe()
+        process.executableURL = helper
+        process.arguments = ["export-asset", "--identifier", identifier, "--output", destination.path]
+        process.standardError = errors
+        process.terminationHandler = { process in
+            if process.terminationStatus == 0 { continuation.resume() }
+            else { continuation.resume(throwing: ServiceExecutableError.versionCheckFailed(process.terminationStatus, String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))) }
+        }
+        do { try process.run() } catch { continuation.resume(throwing: error) }
+    }
+}
+
 public enum AppleRenditionPackageError: Error, LocalizedError {
     case assetNotFound(String)
     case noOriginalResource
