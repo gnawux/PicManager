@@ -683,7 +683,7 @@ Status: complete.
 
 ### M35 - Native Rust Garmin China client
 
-Status: in progress. The Python-backed baseline is tagged `v1.0.1-garmin-python`; its signed
+Status: complete. The Python-backed baseline is tagged `v1.0.1-garmin-python`; its signed
 rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this milestone runs.
 
 - M35.1: complete — implement a domain-allowlisted Rust Garmin transport for the China mobile SSO JSON
@@ -704,7 +704,7 @@ rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this mi
 - M35.5: complete — remove the bundled Python runtime, `garminconnect`, `curl_cffi`, helper and dependency
   installation scripts from the new App. Update bundle/license gates to prove no Python Garmin
   payload remains and compare the new package size with the preserved rollback bundle.
-- M35.6: run all Rust, Web and Swift suites plus production/release builds, offline protocol tests,
+- M35.6: complete — run all Rust, Web and Swift suites plus production/release builds, offline protocol tests,
   bundle inspection and strict deep signature verification. Produce a new `dist/PicManager.app`
   while leaving `dist/PicManager-Python-Garmin.app` unchanged and valid for rollback.
 
