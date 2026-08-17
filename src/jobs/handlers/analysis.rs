@@ -202,7 +202,9 @@ impl JobHandler for GeocodeJobHandler {
                         &execution_pool,
                         execution_progress,
                     )
-                    .await
+                    .await?;
+                    crate::activities::refresh_generated_titles(&execution_pool, false).await?;
+                    Ok(())
                 } else {
                     crate::album::location::group_by_location_with_progress(
                         &execution_pool,

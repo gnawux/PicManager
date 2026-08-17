@@ -716,6 +716,18 @@ Acceptance criteria:
 - The new application contains no Python interpreter or Garmin Python package.
 - Both the new and rollback applications pass strict deep signature verification.
 
+### M36 - Activity and geographic association correctness
+
+Status: complete.
+
+- M36.1: complete — preserve RFC3339 photo instants that already carry an explicit UTC offset when
+  matching photos to activities, while continuing to apply catalog timezone offsets to naive local
+  timestamps. Cover both timestamp forms with API-level regression tests.
+- M36.2: complete — add geocache provenance, restrict proximity reuse to current direct-provider
+  anchors within a true 100 m radius, prevent derived-row relay chains, migrate old cache rows as
+  repairable legacy data, and refresh only PicManager-generated activity titles after geographic
+  normalization. Cover migration safety, API policy reporting, boundary distance and relay behavior.
+
 ## 9. Testing and commit protocol
 
 For every milestone:

@@ -191,29 +191,76 @@ pub(crate) fn format_distance(meters: f64) -> String {
 }
 
 pub(crate) async fn geocache_city(pool: &SqlitePool, lat: f64, lon: f64) -> Option<String> {
-    let row: (Option<String>, Option<String>, Option<String>, Option<String>) =
-        sqlx::query_as(
-            "SELECT city, county, state, country FROM geocache
-             WHERE CAST(lat_key AS REAL) BETWEEN ? AND ?
-               AND CAST(lon_key AS REAL) BETWEEN ? AND ?
-             ORDER BY
-               (CAST(lat_key AS REAL) - ?) * (CAST(lat_key AS REAL) - ?) +
-               (CAST(lon_key AS REAL) - ?) * (CAST(lon_key AS REAL) - ?) ASC
-             LIMIT 1",
-        )
-        .bind(lat - 0.01).bind(lat + 0.01)
-        .bind(lon - 0.01).bind(lon + 0.01)
-        .bind(lat).bind(lat).bind(lon).bind(lon)
-        .fetch_optional(pool)
+    crate::album::location::provider_anchor_label(pool, lat, lon)
         .await
         .ok()
-        .flatten()?;
+        .flatten()
+}
 
-    let (city, county, state, country) = row;
-    city.filter(|s| !s.is_empty())
-        .or_else(|| county.filter(|s| !s.is_empty()))
-        .or_else(|| state.filter(|s| !s.is_empty()))
-        .or_else(|| country.filter(|s| !s.is_empty()))
+/// Refresh titles that still exactly match PicManager's generated title shape.
+/// User-authored titles are preserved even when they contain an `@` suffix.
+pub async fn refresh_generated_titles(
+    pool: &SqlitePool,
+    dry_run: bool,
+) -> sqlx::Result<(usize, usize)> {
+    let rows: Vec<(i64, String, String, Option<String>, Option<f64>)> = sqlx::query_as(
+        "SELECT id, title, activity_type, start_time, distance_meters
+         FROM activities
+         WHERE title IS NOT NULL AND import_status = 'imported'",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut updated = 0;
+    let mut preserved = 0;
+    for (id, title, activity_type, start_time, distance_meters) in rows {
+        let Some(date) = start_time
+            .as_deref()
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.format("%m-%d").to_string())
+        else {
+            preserved += 1;
+            continue;
+        };
+        let mut base = format!("{}-{date}", activity_type_zh(&activity_type));
+        if let Some(distance) = distance_meters {
+            base.push('-');
+            base.push_str(&format_distance(distance));
+        }
+        if title != base && !title.starts_with(&format!("{base}@")) {
+            preserved += 1;
+            continue;
+        }
+        let first_gps: Option<(f64, f64)> = sqlx::query_as(
+            "SELECT lat, lon FROM activity_track_points WHERE activity_id = ? ORDER BY ts LIMIT 1",
+        )
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+        let Some(refreshed) = generate_title(
+            pool,
+            &activity_type,
+            start_time.as_deref(),
+            distance_meters,
+            first_gps,
+        )
+        .await
+        else {
+            preserved += 1;
+            continue;
+        };
+        if refreshed != title {
+            if !dry_run {
+                sqlx::query("UPDATE activities SET title = ? WHERE id = ?")
+                    .bind(&refreshed)
+                    .bind(id)
+                    .execute(pool)
+                    .await?;
+            }
+            updated += 1;
+        }
+    }
+    Ok((updated, preserved))
 }
 
 pub(crate) async fn generate_title(
@@ -520,9 +567,13 @@ mod tests {
         let lat_key = format!("{:.4}", lat);
         let lon_key = format!("{:.4}", lon);
         sqlx::query(
-            "INSERT OR IGNORE INTO geocache (lat_key, lon_key, city, county, state, country) VALUES (?,?,?,?,?,?)"
+            "INSERT OR IGNORE INTO geocache
+             (lat_key, lon_key, city, county, state, country, name_policy_revision,
+              resolution_method, anchor_lat, anchor_lon)
+             VALUES (?,?,?,?,?,?,?, 'provider', ?, ?)"
         )
         .bind(lat_key).bind(lon_key).bind(city).bind(county).bind(state).bind(country)
+        .bind(crate::album::location::GEO_NAME_POLICY_REVISION).bind(lat).bind(lon)
         .execute(pool).await.unwrap();
     }
 
@@ -608,6 +659,38 @@ mod tests {
         let title = title.expect("title should be generated");
         assert!(title.contains("06-20"), "date should be in title, got {title}");
         assert!(title.ends_with("@北京"), "city should be in title, got {title}");
+    }
+
+    #[tokio::test]
+    async fn refresh_generated_titles_repairs_location_but_preserves_custom_title() {
+        let pool = test_pool().await;
+        let src_dir = TempDir::new().unwrap();
+        let act_dir = TempDir::new().unwrap();
+        insert_geocache(&pool, 39.9, 116.4, "旧城区", "", "北京市", "中国").await;
+        let first_path = make_gpx_untitled(
+            "generated.gpx", &src_dir,
+            "2024-06-15T02:00:00Z", "2024-06-15T03:00:00Z",
+        );
+        import_one(&pool, &first_path, act_dir.path()).await.unwrap();
+        let generated_id: i64 = sqlx::query_scalar("SELECT id FROM activities")
+            .fetch_one(&pool).await.unwrap();
+        let custom_path = make_gpx("custom.gpx", &src_dir);
+        import_one(&pool, &custom_path, act_dir.path()).await.unwrap();
+        let custom_id: i64 = sqlx::query_scalar("SELECT MAX(id) FROM activities")
+            .fetch_one(&pool).await.unwrap();
+        sqlx::query("UPDATE activities SET title = '我的周末跑步' WHERE id = ?")
+            .bind(custom_id).execute(&pool).await.unwrap();
+        sqlx::query("UPDATE geocache SET city = '新城区' WHERE anchor_lat = ? AND anchor_lon = ?")
+            .bind(39.9).bind(116.4).execute(&pool).await.unwrap();
+
+        let (updated, _) = refresh_generated_titles(&pool, false).await.unwrap();
+        assert_eq!(updated, 1);
+        let generated: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = ?")
+            .bind(generated_id).fetch_one(&pool).await.unwrap();
+        let custom: String = sqlx::query_scalar("SELECT title FROM activities WHERE id = ?")
+            .bind(custom_id).fetch_one(&pool).await.unwrap();
+        assert!(generated.ends_with("@新城区"));
+        assert_eq!(custom, "我的周末跑步");
     }
 
     #[test]

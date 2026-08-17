@@ -357,6 +357,22 @@ the running job table, process CPU and slow-query log separately before blaming 
   HTTP 429 responses should trip the circuit breaker and stop safely; they must not trigger busy
   retries that consume local CPU or disguise a rate limit as database contention.
 
+### Derived geocache rows must never become proximity anchors
+
+A proximity result is a convenience copy, not independent geographic evidence. Treating every
+cached row as a new anchor allowed a label to move about one kilometre at each step through a dense,
+coordinate-sorted photo set. The resulting Xicheng label reached Haidian coordinates several
+kilometres from the original lookup even though every individual reuse appeared locally valid.
+
+- Persist cache provenance and the original provider anchor coordinates.
+- Only current-policy `provider` rows may satisfy proximity lookups; `proximity` and migrated
+  `legacy` rows may serve their exact coordinate only.
+- Specify the limit in metres, use a latitude-aware bounding box for the index, and enforce the
+  final 100 m radius with a geographic distance calculation.
+- Policy upgrades must expose legacy rows as outdated, preserve their names as offline fallback,
+  and repair derived album relationships plus generated activity titles after normalization.
+- Regression tests must include a relay chain and a bounding-box corner outside the radial limit.
+
 ## Refactor review checklist
 
 Before merging related work, answer all of the following:

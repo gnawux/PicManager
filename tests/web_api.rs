@@ -1434,12 +1434,17 @@ async fn geo_name_policy_reports_and_normalizes_legacy_cache_entries() {
         &pool, lat, lon, Some("中国 China"), Some("香港 Hong Kong"), Some("香港 Hong Kong"),
     ).await;
     seed_geocache(
-        &pool, lat, lon + 0.005, Some("中国"), Some("香港"), Some("香港"),
+        &pool, lat, lon + 0.0005, Some("中国"), Some("香港"), Some("香港"),
     ).await;
     sqlx::query(
-        "UPDATE geocache SET name_policy_revision = 1 WHERE lon_key = ?",
+        "UPDATE geocache
+         SET name_policy_revision = 2, resolution_method = 'provider',
+             anchor_lat = ?, anchor_lon = ?
+         WHERE lon_key = ?",
     )
-    .bind(format!("{:.4}", lon + 0.005))
+    .bind(lat)
+    .bind(lon + 0.0005)
+    .bind(format!("{:.4}", lon + 0.0005))
     .execute(&pool).await.unwrap();
 
     let policy = app.clone().oneshot(
@@ -1448,7 +1453,7 @@ async fn geo_name_policy_reports_and_normalizes_legacy_cache_entries() {
     assert_eq!(policy.status(), StatusCode::OK);
     let bytes = axum::body::to_bytes(policy.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(json["revision"], 1);
+    assert_eq!(json["revision"], 2);
     assert_eq!(json["outdated_photos"], 1);
     assert!(json["language_preference"].as_str().unwrap().starts_with("zh-CN,zh-Hans"));
 
@@ -1471,7 +1476,7 @@ async fn geo_name_policy_reports_and_normalizes_legacy_cache_entries() {
             .bind(format!("{lat:.4}"))
             .bind(format!("{lon:.4}"))
             .fetch_one(&pool).await.unwrap();
-            if row.1 == 1 {
+            if row.1 == 2 {
                 assert_eq!(row.0.as_deref(), Some("香港"));
                 break;
             }

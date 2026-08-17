@@ -274,7 +274,7 @@ HEIC 方向修正原理：`writeAssetResourceOrientationFixed` 调用 `requestIm
 
 **自动分组维度：**
 - 时间（`kind='time'`）：按 `taken_at` 年月，形如 `2024-06`；`latest_photo_at` 字段记录最新照片时间，供前端排序
-- 地点（`kind='location'`）：调用 OSM Nominatim 反地理编码将 GPS 坐标解析为城市名；结果缓存到 `geocache` 表，限速 1 req/s；精确 key 未命中时先在 ±0.01°（约 1 km）范围内查邻近缓存（proximity lookup），命中则写入精确 key 并返回；无 GPS 的照片跳过；导入时通过 `group_by_location_scoped` 仅处理本次新导入的照片
+- 地点（`kind='location'`）：调用 OSM Nominatim 反地理编码将 GPS 坐标解析为城市名；结果缓存到 `geocache` 表，限速 1 req/s；精确 key 未命中时只复用真实距离 100 m 内的直接 provider 锚点，派生 proximity 条目不会再次传播；无 GPS 的照片跳过；导入时通过 `group_by_location_scoped` 仅处理本次新导入的照片
 - 相机（`kind='camera'`）：按 EXIF Make+Model；无相机信息的照片跳过
 - 精选集（`kind='curated'`）：用户手动创建，照片可自由加入/移除，复用 `albums` 表
 

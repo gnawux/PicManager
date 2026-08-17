@@ -8,15 +8,80 @@ use std::time::Duration;
 use crate::error::Result;
 
 const GEO_COORD_PRECISION: usize = 4; // ≈11 m precision at equator
-const PROXIMITY_DEG: f64 = 0.01; // ≈1 km; used to reuse nearby geocache entries
+const PROXIMITY_METERS: f64 = 100.0;
 const MAX_CONSECUTIVE_PROVIDER_FAILURES: usize = 3;
 const DEFAULT_NOMINATIM_URL: &str = "https://nominatim.openstreetmap.org/reverse";
-pub const GEO_NAME_POLICY_REVISION: i64 = 1;
+pub const GEO_NAME_POLICY_REVISION: i64 = 2;
 pub const GEO_LANGUAGE_PREFERENCE: &str =
     "zh-CN,zh-Hans,zh-SG,zh-HK,zh-TW,zh-Hant,zh,en-US,en-GB,en";
 
 fn coord_key(v: f64) -> String {
     format!("{:.prec$}", v, prec = GEO_COORD_PRECISION)
+}
+
+fn distance_meters(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let earth_radius_m = 6_371_000.0;
+    let dlat = (lat2 - lat1).to_radians();
+    let dlon = (lon2 - lon1).to_radians();
+    let a = (dlat / 2.0).sin().powi(2)
+        + lat1.to_radians().cos() * lat2.to_radians().cos() * (dlon / 2.0).sin().powi(2);
+    earth_radius_m * 2.0 * a.sqrt().asin()
+}
+
+pub(crate) async fn provider_anchor_label(
+    pool: &SqlitePool,
+    lat: f64,
+    lon: f64,
+) -> Result<Option<String>> {
+    let lat_delta = PROXIMITY_METERS / 110_574.0;
+    let lon_scale = (lat.to_radians().cos().abs() * 111_320.0).max(1.0);
+    let lon_delta = PROXIMITY_METERS / lon_scale;
+    let row: Option<(
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        f64,
+        f64,
+    )> = sqlx::query_as(
+        "SELECT city, county, state, country, anchor_lat, anchor_lon FROM geocache
+         WHERE resolution_method = 'provider'
+           AND name_policy_revision >= ?
+           AND anchor_lat BETWEEN ? AND ?
+           AND anchor_lon BETWEEN ? AND ?
+         ORDER BY
+           ((anchor_lat - ?) * ?) * ((anchor_lat - ?) * ?) +
+           ((anchor_lon - ?) * ?) * ((anchor_lon - ?) * ?)
+         LIMIT 1",
+    )
+    .bind(GEO_NAME_POLICY_REVISION)
+    .bind(lat - lat_delta)
+    .bind(lat + lat_delta)
+    .bind(lon - lon_delta)
+    .bind(lon + lon_delta)
+    .bind(lat)
+    .bind(110_574.0)
+    .bind(lat)
+    .bind(110_574.0)
+    .bind(lon)
+    .bind(lon_scale)
+    .bind(lon)
+    .bind(lon_scale)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(
+        row.and_then(|(city, county, state, country, anchor_lat, anchor_lon)| {
+            (distance_meters(lat, lon, anchor_lat, anchor_lon) <= PROXIMITY_METERS)
+                .then(|| {
+                    city.filter(|value| !value.is_empty())
+                        .or_else(|| county.filter(|value| !value.is_empty()))
+                        .or_else(|| state.filter(|value| !value.is_empty()))
+                        .or_else(|| country.filter(|value| !value.is_empty()))
+                })
+                .flatten()
+        }),
+    )
 }
 
 /// Returns the count of imported photos that have GPS coordinates but whose geocoding
@@ -49,7 +114,8 @@ pub async fn count_missing_geo(pool: &SqlitePool) -> Result<i64> {
     Ok(n)
 }
 
-/// Count imported GPS photos whose cached names predate the current language policy.
+/// Count imported GPS photos whose cached names predate the current policy or whose
+/// provenance predates anchor tracking.
 pub async fn count_outdated_geo_names(pool: &SqlitePool) -> Result<i64> {
     let n = sqlx::query_scalar(
         "SELECT COUNT(*) FROM photos ph
@@ -57,7 +123,7 @@ pub async fn count_outdated_geo_names(pool: &SqlitePool) -> Result<i64> {
            ON PRINTF('%.4f', ph.gps_lat) = gc.lat_key
           AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
          WHERE ph.import_status = 'imported'
-           AND gc.name_policy_revision < ?",
+           AND (gc.name_policy_revision < ? OR gc.resolution_method = 'legacy')",
     )
     .bind(GEO_NAME_POLICY_REVISION)
     .fetch_one(pool)
@@ -125,7 +191,7 @@ async fn group_by_location_with_policy_and_provider(
           AND PRINTF('%.4f', ph.gps_lon) = gc.lon_key
          WHERE ph.import_status = 'imported'
            AND ph.gps_lat IS NOT NULL AND ph.gps_lon IS NOT NULL
-           AND gc.name_policy_revision < ?
+           AND (gc.name_policy_revision < ? OR gc.resolution_method = 'legacy')
          GROUP BY PRINTF('%.4f', ph.gps_lat), PRINTF('%.4f', ph.gps_lon)
          ORDER BY MIN(ph.gps_lat), MIN(ph.gps_lon)"
     } else {
@@ -278,8 +344,9 @@ async fn cached_or_fetch(
         Option<String>,
         Option<String>,
         i64,
+        String,
     )> = sqlx::query_as(
-        "SELECT city, state, county, country, name_policy_revision
+        "SELECT city, state, county, country, name_policy_revision, resolution_method
          FROM geocache WHERE lat_key = ? AND lon_key = ?",
     )
     .bind(&lat_key)
@@ -288,8 +355,8 @@ async fn cached_or_fetch(
     .await?;
 
     let mut stale_fallback = None;
-    if let Some((city, state, county, country, revision)) = row {
-        if revision < minimum_revision {
+    if let Some((city, state, county, country, revision, resolution_method)) = row {
+        if revision < minimum_revision || resolution_method == "legacy" {
             if city.is_some() || state.is_some() || county.is_some() || country.is_some() {
                 stale_fallback = Some(GeoInfo {
                     city: city.clone(),
@@ -320,47 +387,61 @@ async fn cached_or_fetch(
         }
     }
 
-    // Proximity lookup: reuse the nearest valid geocache entry within ±PROXIMITY_DEG.
-    // Excludes the exact key itself (which may be stale) and all-NULL entries.
-    // Avoids a Nominatim API call when a nearby coordinate has already been resolved.
+    // Reuse only direct provider results. A proximity-derived row must never become
+    // another anchor: doing so relays one label along dense coordinates for kilometres.
+    // The 100 m radius bounds the remaining administrative-boundary uncertainty.
+    let lat_delta = PROXIMITY_METERS / 110_574.0;
+    let lon_scale = (lat.to_radians().cos().abs() * 111_320.0).max(1.0);
+    let lon_delta = PROXIMITY_METERS / lon_scale;
     let nearby: Option<(
         Option<String>,
         Option<String>,
         Option<String>,
         Option<String>,
         i64,
+        f64,
+        f64,
     )> = sqlx::query_as(
-        "SELECT city, state, county, country, name_policy_revision FROM geocache
-             WHERE CAST(lat_key AS REAL) BETWEEN ? AND ?
-               AND CAST(lon_key AS REAL) BETWEEN ? AND ?
+        "SELECT city, state, county, country, name_policy_revision, anchor_lat, anchor_lon
+             FROM geocache
+             WHERE resolution_method = 'provider'
+               AND anchor_lat BETWEEN ? AND ?
+               AND anchor_lon BETWEEN ? AND ?
                AND NOT (lat_key = ? AND lon_key = ?)
                AND name_policy_revision >= ?
                AND (city IS NOT NULL OR state IS NOT NULL OR country IS NOT NULL)
              ORDER BY
-               (CAST(lat_key AS REAL) - ?) * (CAST(lat_key AS REAL) - ?) +
-               (CAST(lon_key AS REAL) - ?) * (CAST(lon_key AS REAL) - ?)
+               ((anchor_lat - ?) * ?) * ((anchor_lat - ?) * ?) +
+               ((anchor_lon - ?) * ?) * ((anchor_lon - ?) * ?)
              LIMIT 1",
     )
-    .bind(lat - PROXIMITY_DEG)
-    .bind(lat + PROXIMITY_DEG)
-    .bind(lon - PROXIMITY_DEG)
-    .bind(lon + PROXIMITY_DEG)
+    .bind(lat - lat_delta)
+    .bind(lat + lat_delta)
+    .bind(lon - lon_delta)
+    .bind(lon + lon_delta)
     .bind(&lat_key)
     .bind(&lon_key)
     .bind(minimum_revision)
     .bind(lat)
+    .bind(110_574.0)
     .bind(lat)
+    .bind(110_574.0)
     .bind(lon)
+    .bind(lon_scale)
     .bind(lon)
+    .bind(lon_scale)
     .fetch_optional(pool)
     .await?;
 
-    if let Some((city, state, county, country, source_revision)) = nearby {
+    if let Some((city, state, county, country, source_revision, anchor_lat, anchor_lon)) = nearby
+        && distance_meters(lat, lon, anchor_lat, anchor_lon) <= PROXIMITY_METERS
+    {
         // Write back to exact key so future lookups skip this proximity scan.
         sqlx::query(
             "INSERT OR REPLACE INTO geocache
-             (lat_key, lon_key, city, state, county, country, name_policy_revision)
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (lat_key, lon_key, city, state, county, country, name_policy_revision,
+              resolution_method, anchor_lat, anchor_lon)
+             VALUES (?, ?, ?, ?, ?, ?, ?, 'proximity', ?, ?)",
         )
         .bind(&lat_key)
         .bind(&lon_key)
@@ -369,6 +450,8 @@ async fn cached_or_fetch(
         .bind(&county)
         .bind(&country)
         .bind(source_revision)
+        .bind(anchor_lat)
+        .bind(anchor_lon)
         .execute(pool)
         .await?;
         session_cache.insert((lat_key, lon_key), city.clone());
@@ -417,8 +500,9 @@ async fn cached_or_fetch(
     // INSERT OR REPLACE so that stale entries (state was NULL) are updated.
     sqlx::query(
         "INSERT OR REPLACE INTO geocache
-         (lat_key, lon_key, city, state, county, country, name_policy_revision)
-         VALUES (?, ?, ?, ?, ?, ?, ?)",
+         (lat_key, lon_key, city, state, county, country, name_policy_revision,
+          resolution_method, anchor_lat, anchor_lon)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'provider', ?, ?)",
     )
     .bind(&lat_key)
     .bind(&lon_key)
@@ -427,6 +511,8 @@ async fn cached_or_fetch(
     .bind(&county)
     .bind(&country)
     .bind(GEO_NAME_POLICY_REVISION)
+    .bind(lat)
+    .bind(lon)
     .execute(pool)
     .await?;
 
@@ -782,14 +868,22 @@ mod tests {
         city: Option<&str>,
         state: Option<&str>,
     ) {
-        sqlx::query("INSERT INTO geocache (lat_key, lon_key, city, state) VALUES (?, ?, ?, ?)")
-            .bind(coord_key(lat))
-            .bind(coord_key(lon))
-            .bind(city)
-            .bind(state)
-            .execute(pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "INSERT INTO geocache
+             (lat_key, lon_key, city, state, name_policy_revision,
+              resolution_method, anchor_lat, anchor_lon)
+             VALUES (?, ?, ?, ?, ?, 'provider', ?, ?)",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(lon))
+        .bind(city)
+        .bind(state)
+        .bind(0_i64)
+        .bind(lat)
+        .bind(lon)
+        .execute(pool)
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -874,11 +968,17 @@ mod tests {
         let lon = 113.5408;
         insert_photo(&pool, "/macau.jpg", Some(lat), Some(lon)).await;
         sqlx::query(
-            "INSERT INTO geocache (lat_key, lon_key, city, state, country) VALUES (?, ?, NULL, NULL, ?)",
+            "INSERT INTO geocache
+             (lat_key, lon_key, city, state, country, name_policy_revision,
+              resolution_method, anchor_lat, anchor_lon)
+             VALUES (?, ?, NULL, NULL, ?, ?, 'provider', ?, ?)",
         )
         .bind(coord_key(lat))
         .bind(coord_key(lon))
         .bind("Macau")
+        .bind(GEO_NAME_POLICY_REVISION)
+        .bind(lat)
+        .bind(lon)
         .execute(&pool)
         .await
         .unwrap();
@@ -924,13 +1024,13 @@ mod tests {
             Some("香港 Hong Kong"),
         )
         .await;
-        seed_geocache(&pool, lat, lon + 0.005, Some("香港"), Some("香港")).await;
+        seed_geocache(&pool, lat, lon + 0.0005, Some("香港"), Some("香港")).await;
         sqlx::query(
             "UPDATE geocache SET country = '中国', name_policy_revision = ?
              WHERE lon_key = ?",
         )
         .bind(GEO_NAME_POLICY_REVISION)
-        .bind(coord_key(lon + 0.005))
+        .bind(coord_key(lon + 0.0005))
         .execute(&pool)
         .await
         .unwrap();
@@ -986,12 +1086,12 @@ mod tests {
             Some("香港 Hong Kong"),
         )
         .await;
-        seed_geocache(&pool, lat, lon + 0.005, Some("香港"), Some("香港")).await;
+        seed_geocache(&pool, lat, lon + 0.0005, Some("香港"), Some("香港")).await;
         sqlx::query(
             "UPDATE geocache SET country = '中国', name_policy_revision = ? WHERE lon_key = ?",
         )
         .bind(GEO_NAME_POLICY_REVISION)
-        .bind(coord_key(lon + 0.005))
+        .bind(coord_key(lon + 0.0005))
         .execute(&pool)
         .await
         .unwrap();
@@ -1130,15 +1230,15 @@ mod tests {
             Some("上海市"),
         )
         .await;
-        seed_geocache(&pool, 22.3193, 114.1744, Some("香港"), Some("香港")).await;
-        seed_geocache(&pool, 31.2304, 121.4787, Some("上海"), Some("上海市")).await;
+        seed_geocache(&pool, 22.3193, 114.1699, Some("香港"), Some("香港")).await;
+        seed_geocache(&pool, 31.2304, 121.4742, Some("上海"), Some("上海市")).await;
         sqlx::query(
             "UPDATE geocache SET country = '中国', name_policy_revision = ?
              WHERE lon_key IN (?, ?)",
         )
         .bind(GEO_NAME_POLICY_REVISION)
-        .bind(coord_key(114.1744))
-        .bind(coord_key(121.4787))
+        .bind(coord_key(114.1699))
+        .bind(coord_key(121.4742))
         .execute(&pool)
         .await
         .unwrap();
@@ -1358,11 +1458,17 @@ mod tests {
         insert_photo(&pool, "/macau.jpg", Some(lat), Some(lon)).await;
         // Seed with country set but no city/state — simulates "country-only" geocache result.
         sqlx::query(
-            "INSERT INTO geocache (lat_key, lon_key, city, state, country) VALUES (?, ?, NULL, NULL, ?)",
+            "INSERT INTO geocache
+             (lat_key, lon_key, city, state, country, name_policy_revision,
+              resolution_method, anchor_lat, anchor_lon)
+             VALUES (?, ?, NULL, NULL, ?, ?, 'provider', ?, ?)",
         )
         .bind(coord_key(lat))
         .bind(coord_key(lon))
         .bind("Macau")
+        .bind(GEO_NAME_POLICY_REVISION)
+        .bind(lat)
+        .bind(lon)
         .execute(&pool)
         .await
         .unwrap();
@@ -1415,7 +1521,7 @@ mod tests {
         let lat = 35.0;
         let lon = 139.0;
         insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon + 0.005, Some("Tokyo"), Some("Tokyo-to")).await;
+        seed_geocache(&pool, lat, lon + 0.0005, Some("Tokyo"), Some("Tokyo-to")).await;
 
         group_by_location(&pool).await.unwrap();
 
@@ -1435,7 +1541,7 @@ mod tests {
         let lat = 35.0;
         let lon = 139.0;
         insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon + 0.005, Some("Tokyo"), Some("Tokyo-to")).await;
+        seed_geocache(&pool, lat, lon + 0.0005, Some("Tokyo"), Some("Tokyo-to")).await;
 
         group_by_location(&pool).await.unwrap();
 
@@ -1474,7 +1580,7 @@ mod tests {
         let lat = 0.0;
         let lon = 0.0;
         insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon + 0.005, None, None).await; // all-NULL, invalid
+        seed_geocache(&pool, lat, lon + 0.0005, None, None).await; // all-NULL, invalid
 
         group_by_location(&pool).await.unwrap();
 
@@ -1495,7 +1601,7 @@ mod tests {
         let lat = 0.0;
         let lon = 0.0;
         insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon + 0.011, Some("ACity"), Some("AState")).await; // > 0.01°
+        seed_geocache(&pool, lat, lon + 0.0011, Some("ACity"), Some("AState")).await; // > 100 m
 
         group_by_location(&pool).await.unwrap();
 
@@ -1505,7 +1611,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             count, 0,
-            "entry beyond ±0.01° must not trigger proximity cache"
+            "entry beyond 100 m must not trigger proximity cache"
         );
     }
 
@@ -1515,8 +1621,8 @@ mod tests {
         let lat = 35.0;
         let lon = 139.0;
         insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
-        seed_geocache(&pool, lat, lon + 0.003, Some("Near City"), Some("S1")).await;
-        seed_geocache(&pool, lat, lon + 0.008, Some("Far City"), Some("S2")).await;
+        seed_geocache(&pool, lat, lon + 0.0003, Some("Near City"), Some("S1")).await;
+        seed_geocache(&pool, lat, lon + 0.0008, Some("Far City"), Some("S2")).await;
 
         group_by_location(&pool).await.unwrap();
 
@@ -1540,7 +1646,7 @@ mod tests {
         let lon = 139.0;
         insert_photo(&pool, "/p.jpg", Some(lat), Some(lon)).await;
         seed_geocache(&pool, lat, lon, Some("OldCity"), None).await; // stale: city set, state NULL
-        seed_geocache(&pool, lat, lon + 0.005, Some("NewCity"), Some("S")).await;
+        seed_geocache(&pool, lat, lon + 0.0005, Some("NewCity"), Some("S")).await;
 
         group_by_location(&pool).await.unwrap();
 
@@ -1554,5 +1660,126 @@ mod tests {
             vec!["NewCity"],
             "stale exact entry should fall through to proximity"
         );
+    }
+
+    #[tokio::test]
+    async fn provider_anchor_lookup_enforces_radial_100_meter_limit() {
+        let pool = test_pool().await;
+        let lat = 35.0;
+        let lon = 139.0;
+        let anchor_lat = lat + 0.00085;
+        let anchor_lon = lon + 0.00095;
+        seed_geocache(
+            &pool,
+            anchor_lat,
+            anchor_lon,
+            Some("Outside Circle"),
+            Some("State"),
+        )
+        .await;
+        sqlx::query(
+            "UPDATE geocache SET name_policy_revision = ? WHERE lat_key = ? AND lon_key = ?",
+        )
+        .bind(GEO_NAME_POLICY_REVISION)
+        .bind(coord_key(anchor_lat))
+        .bind(coord_key(anchor_lon))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(provider_anchor_label(&pool, lat, lon).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn current_revision_legacy_rows_still_require_normalization() {
+        let pool = test_pool().await;
+        let lat = 39.95;
+        let lon = 116.31;
+        insert_photo(&pool, "/legacy.jpg", Some(lat), Some(lon)).await;
+        sqlx::query(
+            "INSERT INTO geocache
+             (lat_key, lon_key, city, state, country, name_policy_revision)
+             VALUES (?, ?, '错误城区', '北京市', '中国', ?)",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(lon))
+        .bind(GEO_NAME_POLICY_REVISION)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(count_outdated_geo_names(&pool).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn proximity_result_cannot_relay_a_label_beyond_its_provider_anchor() {
+        use axum::{Json, Router, routing::get};
+        use tokio::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route("/reverse", get(|| async { Json(serde_json::json!({})) })),
+            )
+            .await
+            .unwrap();
+        });
+        let pool = test_pool().await;
+        let lat = 35.0;
+        let anchor_lon = 139.0;
+        seed_geocache(
+            &pool,
+            lat,
+            anchor_lon,
+            Some("Anchor City"),
+            Some("Anchor State"),
+        )
+        .await;
+        let provider = GeoProvider::for_test(format!("http://{address}/reverse"), Duration::ZERO);
+        let mut need_rate_limit = false;
+        let mut session_cache = HashMap::new();
+
+        let nearby = cached_or_fetch(
+            &pool,
+            &provider,
+            lat,
+            anchor_lon + 0.0006,
+            0,
+            &mut need_rate_limit,
+            &mut session_cache,
+        )
+        .await
+        .unwrap();
+        assert_eq!(nearby.city.as_deref(), Some("Anchor City"));
+        assert!(nearby.cache_hit);
+
+        // Roughly 109 m from the provider anchor but only 55 m from the copied
+        // row. The old implementation relayed the copied label here.
+        let relayed = cached_or_fetch(
+            &pool,
+            &provider,
+            lat,
+            anchor_lon + 0.0012,
+            0,
+            &mut need_rate_limit,
+            &mut session_cache,
+        )
+        .await
+        .unwrap();
+        server.abort();
+        assert_eq!(relayed.city, None);
+        assert!(!relayed.cache_hit);
+
+        let method: String = sqlx::query_scalar(
+            "SELECT resolution_method FROM geocache WHERE lat_key = ? AND lon_key = ?",
+        )
+        .bind(coord_key(lat))
+        .bind(coord_key(anchor_lon + 0.0006))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(method, "proximity");
     }
 }

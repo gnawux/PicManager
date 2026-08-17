@@ -38,6 +38,32 @@ struct LegacySnapshot {
 }
 
 #[tokio::test]
+async fn geocache_provenance_migration_marks_existing_rows_legacy() {
+    let fixture = tempfile::tempdir().unwrap();
+    let database = open_database(&fixture.path().join("geocache-provenance.db")).await;
+    migrator_through(31).run(&database).await.unwrap();
+    sqlx::query(
+        "INSERT INTO geocache
+         (lat_key, lon_key, city, state, country, name_policy_revision)
+         VALUES ('39.9557', '116.3133', '旧标签', '北京市', '中国', 1)",
+    )
+    .execute(&database)
+    .await
+    .unwrap();
+
+    sqlx::migrate!("./migrations").run(&database).await.unwrap();
+
+    let row: (String, Option<f64>, Option<f64>) = sqlx::query_as(
+        "SELECT resolution_method, anchor_lat, anchor_lon FROM geocache
+         WHERE lat_key = '39.9557' AND lon_key = '116.3133'",
+    )
+    .fetch_one(&database)
+    .await
+    .unwrap();
+    assert_eq!(row, ("legacy".to_owned(), None, None));
+}
+
+#[tokio::test]
 async fn copied_legacy_catalog_upgrades_without_changing_existing_records() {
     let fixture = tempfile::tempdir().unwrap();
     let original_path = fixture.path().join("legacy-original.db");
@@ -59,13 +85,24 @@ async fn copied_legacy_catalog_upgrades_without_changing_existing_records() {
     assert_eq!(after_schema_upgrade.face_links, before.face_links);
     assert_eq!(after_schema_upgrade.person_links, before.person_links);
     assert_eq!(after_schema_upgrade.activity_count, before.activity_count);
-    assert!(before.album_links.iter().all(|link| after_schema_upgrade.album_links.contains(link)));
-    assert_eq!(after_schema_upgrade.album_links.len(), before.album_links.len() + 3);
+    assert!(
+        before
+            .album_links
+            .iter()
+            .all(|link| after_schema_upgrade.album_links.contains(link))
+    );
+    assert_eq!(
+        after_schema_upgrade.album_links.len(),
+        before.album_links.len() + 3
+    );
     let repaired_months: Vec<(i64, String)> = sqlx::query_as(
         "SELECT pa.photo_id, a.name FROM photo_albums pa JOIN albums a ON a.id = pa.album_id \
          JOIN photos p ON p.id = pa.photo_id WHERE a.kind = 'time' \
            AND a.name = substr(p.taken_at, 1, 7) ORDER BY pa.photo_id",
-    ).fetch_all(&upgraded).await.unwrap();
+    )
+    .fetch_all(&upgraded)
+    .await
+    .unwrap();
     assert_eq!(
         repaired_months,
         vec![
@@ -140,11 +177,15 @@ async fn copied_legacy_catalog_upgrades_without_changing_existing_records() {
 }
 
 fn legacy_migrator() -> Migrator {
+    migrator_through(18)
+}
+
+fn migrator_through(version: i64) -> Migrator {
     let all = sqlx::migrate!("./migrations");
     Migrator {
         migrations: Cow::Owned(
             all.iter()
-                .filter(|migration| migration.version <= 18)
+                .filter(|migration| migration.version <= version)
                 .cloned()
                 .collect(),
         ),

@@ -42,9 +42,10 @@ L1  session_cache (in-memory HashMap)
     ↓ miss
 L2  geocache 表精确匹配（lat_key = PRINTF('%.4f', lat)）
     ↓ miss 或 全NULL（瞬时失败标记）或 stale（city 有值但 state 为 NULL）
-L3  邻近查找（±0.01°，≈1km）
-    仅返回 city/state/country 至少一项不为 NULL 的记录
-    命中后写回精确 key，更新 session_cache
+L3  邻近查找（真实距离 ≤100m）
+    只允许 resolution_method='provider' 的直接结果作为锚点
+    仅返回 city/state/country 至少一项不为 NULL 的当前规则记录
+    命中后以 resolution_method='proximity' 写回精确 key，更新 session_cache
     ↓ miss
     Nominatim API 调用（1 req/s 限速）
     结果写入 geocache（失败时写全 NULL 作为瞬时失败标记）
@@ -57,7 +58,8 @@ L3  邻近查找（±0.01°，≈1km）
 
 ### Stale Entry 检测
 
-geocache 中 `city IS NOT NULL AND state IS NULL AND country IS NOT NULL` 的记录被视为旧格式（migration 之前写入的记录缺少 state 字段），会跳过直接返回，重新走 L3/Nominatim。
+geocache 中 `city IS NOT NULL AND state IS NULL AND country IS NOT NULL` 的记录，或者
+`resolution_method='legacy'` 的无来源记录，会跳过直接返回，重新走 L3/Nominatim。
 
 **注意**：台湾、韩国等 Nominatim 本身不返回 state 的地区，每次导入都会触发一次邻近查找或 Nominatim 请求；因为邻近查找通常能命中，不会产生实际 API 调用。
 
@@ -69,6 +71,8 @@ geocache 中 `city IS NOT NULL AND state IS NULL AND country IS NOT NULL` 的记
 
 - 若照片 A（坐标 39.9001）的 Nominatim 调用成功，地理相邻的照片 B（坐标 39.9003）能通过 L3 邻近查找直接命中 A 的缓存记录，无需额外网络请求。
 - 若照片 A 的 Nominatim 调用失败（全 NULL），照片 B 仍需独立尝试；但 B 成功后，下次 fill geo 处理 A 时，A 的邻近查找能命中 B 的记录，快速补全。
+- B 的邻近结果不能再作为照片 C 的锚点。否则密集且有序的坐标会形成接力链，
+  把同一个行政区标签传播到距原始 provider 坐标数公里之外。
 
 若不按地理坐标排序，按 ID（插入）顺序处理，同一地点的照片分散在整个队列中，邻近缓存的有效性大幅降低。
 
@@ -133,7 +137,9 @@ accept-language=zh-CN,zh-Hans,zh-SG,zh-HK,zh-TW,zh-Hant,zh,en-US,en-GB,en
 → 英文地区或通用英文 → OSM 默认名称。Nominatim 会对国家、省州、城市等每个
 地址字段独立应用该优先级；PicManager 再清理提供方返回的并列分隔格式。
 
-`geocache.name_policy_revision` 记录生成缓存时使用的规则版本。升级不会自动联网
+`geocache.name_policy_revision` 记录生成缓存时使用的规则版本；当前版本为 2。
+`resolution_method` 区分 `provider`、`proximity` 和迁移前的 `legacy`，`anchor_lat` /
+`anchor_lon` 永远指向最初的 provider 坐标。升级不会自动联网
 重写旧缓存；地点页会显示“统一已有地名”，由用户显式启动后台任务。任务具有以下
 安全约束：
 
@@ -197,8 +203,12 @@ GROUP BY gc.country, gc.state, gc.city
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| `PROXIMITY_DEG` | 0.01° | 约 1 km，搜索半径 |
+| `PROXIMITY_METERS` | 100 m | 按 Haversine 真实距离验证的最大复用半径 |
 | `GEO_COORD_PRECISION` | 4 位小数 | 约 11 m 精度 |
+
+迁移前的缓存统一标记为 `legacy`，不会作为邻近锚点。运行“统一已有地名”后，任务会
+逐步用当前 provider 结果或 100 m 内的 provider 锚点替换旧条目，并同步修复地点相册
+关系以及仍保持 PicManager 自动生成格式的运动标题；用户自定义运动标题不会被覆盖。
 
 ---
 
