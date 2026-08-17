@@ -93,6 +93,27 @@ app bundle must then be rebuilt and signed, including the nested service. Valida
 bundle and clean-install/upgrade/uninstall lifecycle; copying an old `PicManager.app`
 does not exercise new code.
 
+### Credential sheets and bundled runtimes are cross-process contracts
+
+The Garmin sign-in regression had two independent symptoms: an unconstrained `NSAlert`
+accessory could collapse its account/password controls, while bundled Python created
+`__pycache__` beneath `Contents/Resources` and invalidated the outer code seal.
+
+- Use a sized native sheet for credentials and return an explicit `saved`, `cancelled`,
+  or `error` event object to WebKit. The Web UI must consume the outcome rather than
+  inferring success from the click that opened the form.
+- Keychain records are keyed by both service and provider account. Update an exact
+  record in place; migrate a former service-only lookup by copying it to the requested
+  account without broad deletion.
+- A credential save is not applied until the owned service has stopped and restarted
+  with the new environment. Surface a saved-but-restart-failed result explicitly.
+- Run bundled Python with `-B` and `PYTHONDONTWRITEBYTECODE=1`. The release gate must
+  execute an offline helper invocation after app signing and then run strict signature
+  verification; a successful pre-launch seal alone is not sufficient.
+- Provider errors cross Python, Rust, and Web as stable error codes. Log only redacted
+  exception class and HTTP status, never provider response text, account identifiers,
+  passwords, token bytes, or URLs containing credentials.
+
 ## Browser and API scalability
 
 ### Payload bounds do not automatically bound DOM work

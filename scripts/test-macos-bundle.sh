@@ -17,7 +17,7 @@ test -x "$SERVICE_EXECUTABLE"
 test -x "$PHOTO_HELPER"
 test -x "$GARMIN_PYTHON"
 test -f "$GARMIN_HELPER"
-"$GARMIN_PYTHON" -c 'import garminconnect, garth'
+PYTHONDONTWRITEBYTECODE=1 "$GARMIN_PYTHON" -B -c 'import garminconnect, garth'
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$PLIST")" = "io.picmanager.mac"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")" = "PicManagerMac"
 test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$PLIST")" = "APPL"
@@ -28,5 +28,7 @@ if find "$CONTENTS" -name '*.db' -o -name '*.db-wal' -o -name '*.db-shm' | grep 
     echo "Application bundle must not contain a user catalog" >&2
     exit 1
 fi
+
+"$(cd "$(dirname "$0")" && pwd)/test-macos-garmin-bundle.sh" "$APP_PATH"
 
 echo "Validated $APP_PATH"

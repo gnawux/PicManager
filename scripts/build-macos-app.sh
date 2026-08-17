@@ -33,8 +33,10 @@ cp "$REPO_ROOT/photobridge/.build/release/PhotoBridge" "$RESOURCES_DIR/photobrid
 cp "$REPO_ROOT/target/release/picmanager" "$RESOURCES_DIR/picmanager"
 cp "$REPO_ROOT/scripts/garmin_sync.py" "$RESOURCES_DIR/garmin_sync.py"
 PYTHON_RUNTIME="${PICMANAGER_PYTHON_RUNTIME:-$(dirname "$(dirname "$(uv python find 3.12)")")}"
-rsync -aL --delete "$PYTHON_RUNTIME/" "$RESOURCES_DIR/python/"
-"$RESOURCES_DIR/python/bin/python3" -m pip install --break-system-packages --disable-pip-version-check --no-cache-dir -r "$REPO_ROOT/scripts/requirements-garmin.txt"
+# Python bytecode is derived runtime state, not sealed application content. Exclude it
+# while assembling the bundle and require the helper to keep any later cache external.
+rsync -aL --delete --exclude '__pycache__/' --exclude '*.pyc' --exclude '*.pyo' "$PYTHON_RUNTIME/" "$RESOURCES_DIR/python/"
+PYTHONDONTWRITEBYTECODE=1 "$RESOURCES_DIR/python/bin/python3" -B -m pip install --break-system-packages --disable-pip-version-check --no-cache-dir --no-compile -r "$REPO_ROOT/scripts/requirements-garmin.txt"
 chmod 755 "$MACOS_DIR/PicManagerMac" "$RESOURCES_DIR/picmanager" "$RESOURCES_DIR/photobridge"
 printf 'APPL????' > "$CONTENTS/PkgInfo"
 

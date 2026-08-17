@@ -635,16 +635,16 @@ Status: complete.
 
 ### M31 - Garmin China credential-boundary stabilization
 
-Status: in progress.
+Status: complete.
 
 - M31.1: complete — replace the undersized alert accessory with a constrained native credentials
   sheet, scope Keychain records by service and Garmin account, migrate the former account-less
   lookup on read, and restart the owned local service only after its predecessor exits.
-- M31.2: classify helper authentication failures, retain redacted diagnostics, and ensure bundled
+- M31.2: complete — classify helper authentication failures, retain redacted diagnostics, and ensure bundled
   Python cannot write bytecode into the signed application.
-- M31.3: consume native save/cancel/error events in the shared Web activity UI and cover the
+- M31.3: complete — consume native save/cancel/error events in the shared Web activity UI and cover the
   literal API contract with fake provider and helper paths.
-- M31.4: run the installed-bundle helper lifecycle, re-verify every signature after execution,
+- M31.4: complete — run the installed-bundle helper lifecycle, re-verify every signature after execution,
   and document the supported Garmin dependency pair.
 
 ## 9. Testing and commit protocol

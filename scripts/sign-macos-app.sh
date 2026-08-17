@@ -19,5 +19,8 @@ fi
 codesign "${SIGN_ARGS[@]}" "$SERVICE"
 codesign "${SIGN_ARGS[@]}" --entitlements "$PHOTO_HELPER_ENTITLEMENTS" "$PHOTO_HELPER"
 codesign "${SIGN_ARGS[@]}" --entitlements "$ENTITLEMENTS" "$APP_PATH"
+# Exercise the offline Garmin helper after the outer seal is created. This catches
+# bytecode/cache writes that would invalidate an otherwise successful signing step.
+"$SCRIPT_DIR/test-macos-bundle.sh" "$APP_PATH"
 codesign --verify --deep --strict --verbose=2 "$APP_PATH"
 codesign --display --verbose=2 "$APP_PATH"
