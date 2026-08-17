@@ -44,10 +44,12 @@ class GarminHelperTests(unittest.TestCase):
         self.assertEqual(HELPER.authentication_message("invalid_mfa"), "Garmin Connect rejected the one-time verification code")
         self.assertEqual(HELPER.authentication_message("network_error"), "Garmin Connect could not be reached; check network or proxy settings")
 
-    def test_pinned_dependency_source_matches_the_fake_provider_contract(self):
+    def test_hash_locked_pypi_wheels_match_the_fake_provider_contract(self):
         requirements = pathlib.Path(__file__).with_name("requirements-garmin.txt").read_text()
-        self.assertIn("garminconnect @ git+https://github.com/cyberjunky/python-garminconnect.git@414b54023a31259232744bb67f00a2aa71065e09", requirements)
-        self.assertNotIn("garth==", requirements)
+        self.assertIn("garminconnect==0.3.10 --hash=sha256:a3fed44465df36981a6858f23e56417c6e7ac778550464440a5967007378ec88", requirements)
+        self.assertIn("curl-cffi==0.16.0", requirements)
+        self.assertNotIn("git+", requirements)
+        self.assertNotIn("garth", requirements)
 
     def test_extracts_the_single_fit_from_an_original_archive(self):
         archive = io.BytesIO()

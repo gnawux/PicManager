@@ -118,6 +118,18 @@ accessory could collapse its account/password controls, while bundled Python cre
   accept only known status/error codes and bounded phase, exception-class and HTTP-status
   diagnostics; discard provider-controlled messages and unknown diagnostic values before
   logging or returning an API response.
+- Garmin China uses the reviewed public-PyPI `garminconnect` 0.3.10 wheel and its client-owned
+  `garminconnect.json` token store; the bundled macOS Python closure is hash locked and must not
+  bundle the obsolete `garth` dependency. The first credential probe may return the explicit
+  `needs_mfa` challenge. A submitted code starts a fresh, short-lived SSO exchange through the
+  current prompt API and must load the profile
+  before the helper reports authentication. Restore cached tokens first, but a rejected cache
+  must fall back to this credential/MFA path rather than being presented as an authenticated
+  session.
+- The Garmin bundle lifecycle gate verifies the exact dependency metadata and absence of
+  `garth`, executes an offline no-credential helper invocation after the outer application is
+  signed, checks that no bytecode appeared under `Contents`, and then runs strict deep signature
+  verification. This is required whenever either the Python runtime or embedded web assets change.
 
 ## Browser and API scalability
 
