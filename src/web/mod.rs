@@ -187,6 +187,24 @@ pub async fn serve(pool: SqlitePool, config: Config) -> anyhow::Result<()> {
             "background library reconciliation could not be scheduled"
         ),
     }
+    let apple_postprocess_context = application.request_context(CallerKind::InternalWorker);
+    match crate::jobs::handlers::enqueue_apple_postprocess(
+        &application,
+        &apple_postprocess_context,
+        None,
+    )
+    .await
+    {
+        Ok(queued) => tracing::info!(
+            job_id = queued.job.id,
+            created = queued.created,
+            "Apple metadata and thumbnail recovery scheduled"
+        ),
+        Err(error) => tracing::warn!(
+            error = %error,
+            "Apple metadata and thumbnail recovery could not be scheduled"
+        ),
+    }
     let sync_recovery_pool = pool.clone();
     let sync_recovery = tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));

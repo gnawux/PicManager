@@ -256,6 +256,27 @@ test ended.
 - Recovery should inspect only records owned by the affected workflow, avoid a whole-library walk,
   and requeue missing originals without deleting or overwriting unrelated media.
 
+### Provider ingestion must finish the same post-import contract
+
+The Apple rendition path initially created a readable photo row but skipped the legacy importer's
+EXIF, GPS, camera-album and thumbnail work. A full-screen file response therefore succeeded while
+the timeline stayed blank and the metadata drawer remained sparse. Every provider-specific commit
+must schedule durable post-processing from the persisted original, not assume that creating the
+compatibility photo row completes ingestion. Recovery must target provider-owned variants and remain
+safe to repeat after an interrupted app session.
+
+Thumbnail idempotency keys identify one photo revision and size, but a failed job must not permanently
+poison that key after its underlying media path is repaired. Re-enqueue terminal failures explicitly,
+record terminal render state, and propagate catalog-state write failures instead of reporting a job as
+successful while `derived_media_state` remains pending.
+
+### Provider source state and item state form one transition
+
+Cancelling a sync job while leaving its sources marked `queued` creates work that the UI counts but no
+worker can claim. Update item and source states in the same transaction, and reconcile historical
+terminal items at startup. A cancelled unsynchronized source returns to `discovered`; a source that
+already owns a committed asset remains `ready`.
+
 ## Development workflow traps
 
 - Run frontend commands from `web/`; the repository root has no `package.json`.

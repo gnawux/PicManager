@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::RequestContext;
 use crate::derived::{
-    generate_thumbnail, mark_thumbnail_ready, sized_thumbnail_cache_path, thumbnail_cache_path,
+    generate_thumbnail, mark_thumbnail_failed, mark_thumbnail_ready, sized_thumbnail_cache_path,
+    thumbnail_cache_path,
 };
 use crate::jobs::{EnqueueResult, HandlerFuture, Job, JobControl, JobFailure, JobHandler, NewJob};
 use crate::orientation::OrientationMode;
@@ -43,9 +44,16 @@ pub async fn enqueue(
         "thumbnail:{}:r{}:{suffix}",
         payload.photo_id, payload.render_revision
     ));
-    jobs::enqueue(application.pool(), &job)
+    let queued = jobs::enqueue(application.pool(), &job)
         .await
-        .map_err(crate::application::ServiceError::from)
+        .map_err(crate::application::ServiceError::from)?;
+    if !queued.created && queued.job.status == "failed" {
+        let job = jobs::retry(application.pool(), queued.job.id)
+            .await
+            .map_err(crate::application::ServiceError::from)?;
+        return Ok(EnqueueResult { job, created: false });
+    }
+    Ok(queued)
 }
 
 impl JobHandler for ThumbnailJobHandler {
@@ -106,7 +114,7 @@ impl JobHandler for ThumbnailJobHandler {
                 .map_err(|error| {
                     JobFailure::retryable("progress_write_failed", error.to_string())
                 })?;
-            let bytes = tokio::task::spawn_blocking(move || {
+            let rendered = tokio::task::spawn_blocking(move || {
                 generate_thumbnail(
                     &path,
                     render_size,
@@ -119,8 +127,19 @@ impl JobHandler for ThumbnailJobHandler {
                 )
             })
             .await
-            .map_err(|error| JobFailure::retryable("renderer_interrupted", error.to_string()))?
-            .map_err(|error| JobFailure::terminal("thumbnail_render_failed", error.to_string()))?;
+            .map_err(|error| JobFailure::retryable("renderer_interrupted", error.to_string()))?;
+            let bytes = match rendered {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let message = error.to_string();
+                    mark_thumbnail_failed(
+                        application.pool(), payload.photo_id, payload.render_revision, &message,
+                    )
+                    .await
+                    .map_err(|error| JobFailure::retryable("thumbnail_state_failed", error.to_string()))?;
+                    return Err(JobFailure::terminal("thumbnail_render_failed", message));
+                }
+            };
             if let Some(parent) = cache_path.parent() {
                 std::fs::create_dir_all(parent).map_err(|error| {
                     JobFailure::retryable("cache_directory_failed", error.to_string())
@@ -173,7 +192,8 @@ impl JobHandler for ThumbnailJobHandler {
                 payload.photo_id,
                 payload.render_revision,
             )
-            .await;
+            .await
+            .map_err(|error| JobFailure::retryable("thumbnail_state_failed", error.to_string()))?;
             control
                 .progress(1, Some(1), Some("completed"))
                 .await
@@ -278,5 +298,36 @@ mod tests {
             sized_thumbnail_cache_path(directory.path().join("cache").as_path(), photo_id, 0, 128)
                 .exists()
         );
+    }
+
+    #[tokio::test]
+    async fn enqueue_retries_a_failed_revision_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let mut config = Config::default();
+        config.thumb_cache_dir = directory.path().join("cache");
+        let application = Application::new(pool.clone(), config);
+        let context = application.request_context(CallerKind::LocalWeb);
+        let payload = ThumbnailJobPayload {
+            photo_id: 42,
+            render_revision: 3,
+            size: Some(512),
+        };
+        let first = enqueue(&application, &context, payload.clone()).await.unwrap();
+        sqlx::query(
+            "UPDATE application_jobs SET status = 'failed', attempt_count = max_attempts, \
+             error_code = 'thumbnail_render_failed', finished_at = datetime('now') WHERE id = ?",
+        ).bind(first.job.id).execute(&pool).await.unwrap();
+
+        let retried = enqueue(&application, &context, payload).await.unwrap();
+        assert!(!retried.created);
+        assert_eq!(retried.job.id, first.job.id);
+        assert_eq!(retried.job.status, "queued");
+        assert!(retried.job.max_attempts > retried.job.attempt_count);
     }
 }

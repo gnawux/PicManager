@@ -106,8 +106,8 @@ pub fn generate_thumbnail(
     Ok(bytes)
 }
 
-pub async fn mark_thumbnail_ready(pool: &SqlitePool, photo_id: i64, revision: i64) {
-    let _ = sqlx::query(
+pub async fn mark_thumbnail_ready(pool: &SqlitePool, photo_id: i64, revision: i64) -> Result<()> {
+    sqlx::query(
         "INSERT INTO derived_media_state \
              (photo_id, render_revision, thumbnail_status, face_status, thumbnail_at) \
          SELECT id, render_revision, 'ready', 'pending', datetime('now') FROM photos \
@@ -120,7 +120,27 @@ pub async fn mark_thumbnail_ready(pool: &SqlitePool, photo_id: i64, revision: i6
     .bind(photo_id)
     .bind(revision)
     .execute(pool)
-    .await;
+    .await?;
+    Ok(())
+}
+
+pub async fn mark_thumbnail_failed(
+    pool: &SqlitePool,
+    photo_id: i64,
+    revision: i64,
+    error: &str,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE derived_media_state SET thumbnail_status = 'failed', last_error = ?, \
+         updated_at = datetime('now') WHERE photo_id = ? AND render_revision = ? \
+         AND thumbnail_status != 'ready'",
+    )
+    .bind(error)
+    .bind(photo_id)
+    .bind(revision)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 pub async fn mark_face_status(

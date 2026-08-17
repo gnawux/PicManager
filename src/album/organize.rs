@@ -39,6 +39,41 @@ pub(crate) async fn assign_month_in_transaction(
     Ok(())
 }
 
+/// Attach one imported photo to its derived camera album inside the caller's transaction.
+pub(crate) async fn assign_camera_in_transaction(
+    tx: &mut Transaction<'_, Sqlite>,
+    photo_id: i64,
+) -> Result<()> {
+    let camera: Option<String> = sqlx::query_scalar(
+        "SELECT camera FROM photos WHERE id = ? AND import_status = 'imported' \
+         AND camera IS NOT NULL AND trim(camera) != ''",
+    )
+    .bind(photo_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(camera) = camera else { return Ok(()); };
+    let album_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM albums WHERE name = ? AND kind = 'camera' ORDER BY id LIMIT 1",
+    )
+    .bind(&camera)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let album_id = match album_id {
+        Some(id) => id,
+        None => sqlx::query("INSERT INTO albums (name, kind) VALUES (?, 'camera')")
+            .bind(&camera)
+            .execute(&mut **tx)
+            .await?
+            .last_insert_rowid(),
+    };
+    sqlx::query("INSERT OR IGNORE INTO photo_albums (photo_id, album_id) VALUES (?, ?)")
+        .bind(photo_id)
+        .bind(album_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// Group all imported photos into monthly time albums (e.g. "2024-06").
 pub async fn group_by_month(pool: &SqlitePool) -> Result<()> {
     let months: Vec<(String,)> = sqlx::query_as(

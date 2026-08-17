@@ -1,3 +1,4 @@
+mod apple;
 mod analysis;
 mod import;
 mod maintenance;
@@ -22,6 +23,7 @@ pub fn registry(application: Application) -> WorkerRegistry {
             AnimalAnalysisJobHandler(application.clone()),
         )
         .register("geocode", GeocodeJobHandler(application.clone()))
+        .register("apple_postprocess", ApplePostprocessJobHandler(application.clone()))
         .register("dedup_scan", DedupScanJobHandler(application.clone()))
         .register(
             "derived_maintenance",
@@ -37,3 +39,4 @@ pub use analysis::{
     AnimalAnalysisJobHandler, FaceAnalysisJobHandler, GeocodeJobHandler, enqueue_animal_analysis,
     enqueue_face_analysis, enqueue_geocode, enqueue_geo_name_normalization,
 };
+pub use apple::{ApplePostprocessJobHandler, enqueue_apple_postprocess};
