@@ -113,6 +113,11 @@ accessory could collapse its account/password controls, while bundled Python cre
 - Provider errors cross Python, Rust, and Web as stable error codes. Log only redacted
   exception class and HTTP status, never provider response text, account identifiers,
   passwords, token bytes, or URLs containing credentials.
+- MFA codes are secrets too: pass them to a short-lived helper through private stdin,
+  never through a command-line argument. Treat helper stdout as an untrusted boundary:
+  accept only known status/error codes and bounded phase, exception-class and HTTP-status
+  diagnostics; discard provider-controlled messages and unknown diagnostic values before
+  logging or returning an API response.
 
 ## Browser and API scalability
 

@@ -192,7 +192,7 @@ def authenticate(args):
     if tokens_exist(args.tokens):
         try:
             api = Garmin(args.email, password, is_cn=True)
-            api.login(tokenstore=str(args.tokens))
+            api.login(str(args.tokens))
             dump_tokens(api, args.tokens)
             return api
         except Exception as error:
@@ -324,10 +324,14 @@ def main():
     parser.add_argument("--email", required=False, default="")
     parser.add_argument("--password")
     parser.add_argument("--mfa")
+    parser.add_argument("--mfa-stdin", action="store_true")
     parser.add_argument("--after")
     parser.add_argument("--max-pages", type=int, default=20)
     parser.add_argument("--ids", nargs="*", default=[])
     args = parser.parse_args()
+    if args.mfa_stdin:
+        # MFA must not appear in the child command line or diagnostic output.
+        args.mfa = sys.stdin.readline().strip()
     if args.command == "auth":
         command_auth(args)
     elif args.command == "sync":

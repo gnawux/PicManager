@@ -31,6 +31,9 @@ export interface GarminStatus {
   error_code?: string | null;
   retryable: boolean;
   message?: string | null;
+  phase?: string | null;
+  exception_class?: string | null;
+  http_status?: number | null;
   downloaded: number;
   imported: number;
   skipped: number;

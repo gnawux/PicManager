@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::activities::{importer, rdp};
 use crate::web::AppState;
 use std::{path::{PathBuf}, process::Stdio, time::Duration};
-use tokio::process::Command;
+use tokio::{io::AsyncWriteExt, process::Command};
 
 const RDP_THRESHOLD: usize = 7200;
 const RDP_EPSILON: f64 = 1e-5; // ~1 m in degrees
@@ -110,6 +110,12 @@ pub struct GarminStatusResponse {
     pub error_code: Option<String>,
     pub retryable: bool,
     pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exception_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
     pub downloaded: usize,
     pub imported: usize,
     pub skipped: usize,
@@ -122,11 +128,14 @@ struct GarminHelperResult {
     #[serde(default)]
     error_code: Option<String>,
     #[serde(default)]
-    diagnostic: Option<String>,
+    phase: Option<String>,
+    #[serde(default)]
+    exception_class: Option<String>,
     #[serde(default)]
     http_status: Option<u16>,
     #[serde(default)]
-    message: Option<String>,
+    #[serde(rename = "message")]
+    _message: Option<String>,
     #[serde(default)]
     downloaded: usize,
     #[serde(default)]
@@ -184,6 +193,9 @@ fn garmin_response(status: &str, message: Option<&str>) -> GarminStatusResponse 
         },
         retryable: matches!(status, "network_error" | "timed_out" | "helper_failed" | "helper_unavailable" | "staging_unavailable" | "token_store_unavailable"),
         message: message.map(str::to_owned),
+        phase: None,
+        exception_class: None,
+        http_status: None,
         downloaded: 0,
         imported: 0,
         skipped: 0,
@@ -195,12 +207,14 @@ pub async fn get_garmin_status(State(state): State<AppState>) -> Json<GarminStat
     match GarminRuntime::from_state(&state) {
         Ok(runtime) => Json(GarminStatusResponse {
             configured: true,
-            authenticated: runtime.tokens().join("oauth1_token.json").is_file()
-                && runtime.tokens().join("oauth2_token.json").is_file(),
+            authenticated: runtime.tokens().join("garminconnect.json").is_file(),
             status: "ready_to_authenticate".to_owned(),
             error_code: None,
             retryable: false,
             message: None,
+            phase: None,
+            exception_class: None,
+            http_status: None,
             downloaded: 0,
             imported: 0,
             skipped: 0,
@@ -252,6 +266,9 @@ pub async fn sync_garmin_activities(
         error_code: None,
         retryable: false,
         message: None,
+        phase: None,
+        exception_class: None,
+        http_status: None,
         downloaded: helper.downloaded,
         imported: 0,
         skipped: 0,
@@ -307,26 +324,131 @@ pub async fn sync_garmin_activities(
 }
 
 fn response_from_helper(result: GarminHelperResult) -> GarminStatusResponse {
-    if let Some(error_code) = result.error_code.as_deref() {
+    if !is_known_helper_status(&result.status) {
+        return garmin_response(
+            "helper_protocol_error",
+            Some("Garmin 同步组件返回了未知状态。"),
+        );
+    }
+    let error_code = match result.error_code {
+        Some(code) if is_known_helper_error_code(&code) => Some(code),
+        Some(_) => {
+            return garmin_response(
+                "helper_protocol_error",
+                Some("Garmin 同步组件返回了未知错误代码。"),
+            );
+        }
+        None if is_helper_error_status(&result.status) => Some(result.status.clone()),
+        None => None,
+    };
+    let phase = result.phase.filter(|value| is_safe_helper_phase(value));
+    let exception_class = result
+        .exception_class
+        .filter(|value| is_safe_helper_identifier(value));
+    let http_status = result
+        .http_status
+        .filter(|value| (100..=599).contains(value));
+    if let Some(error_code) = error_code.as_deref() {
         tracing::warn!(
             error_code,
-            diagnostic = ?result.diagnostic,
-            http_status = ?result.http_status,
+            phase = ?phase,
+            exception_class = ?exception_class,
+            http_status = ?http_status,
             "Garmin helper reported a classified authentication failure"
         );
     }
-    let retryable = matches!(result.status.as_str(), "network_error" | "stale_token");
+    let retryable = matches!(result.status.as_str(), "network_error");
     GarminStatusResponse {
         configured: result.status != "not_configured",
-        authenticated: matches!(result.status.as_str(), "authenticated" | "ready" | "completed"),
+        authenticated: matches!(
+            result.status.as_str(),
+            "authenticated" | "ready" | "completed"
+        ),
         status: result.status,
-        error_code: result.error_code,
+        message: error_code.as_deref().map(helper_message).map(str::to_owned),
+        error_code,
         retryable,
-        message: result.message,
+        phase,
+        exception_class,
+        http_status,
         downloaded: result.downloaded,
         imported: 0,
         skipped: 0,
         failed: 0,
+    }
+}
+
+fn is_known_helper_status(status: &str) -> bool {
+    matches!(
+        status,
+        "acknowledged"
+            | "authenticated"
+            | "dependency_error"
+            | "download_failed"
+            | "invalid_credentials"
+            | "invalid_mfa"
+            | "mfa_required"
+            | "network_error"
+            | "not_configured"
+            | "rate_limited"
+            | "ready"
+            | "sso_contract_error"
+            | "token_store_error"
+    )
+}
+
+fn is_known_helper_error_code(code: &str) -> bool {
+    matches!(
+        code,
+        "dependency_error"
+            | "download_failed"
+            | "invalid_credentials"
+            | "invalid_mfa"
+            | "mfa_required"
+            | "network_error"
+            | "rate_limited"
+            | "sso_contract_error"
+            | "token_store_error"
+    )
+}
+
+fn is_helper_error_status(status: &str) -> bool {
+    is_known_helper_error_code(status)
+}
+
+fn is_safe_helper_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 80
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+}
+
+fn is_safe_helper_phase(value: &str) -> bool {
+    matches!(
+        value,
+        "activity_list"
+            | "credential_login"
+            | "dependency_import"
+            | "download"
+            | "mfa_login"
+            | "token_persist"
+            | "token_restore"
+    )
+}
+
+fn helper_message(code: &str) -> &'static str {
+    match code {
+        "dependency_error" => "本地 Garmin 同步组件不可用；请重新安装 PicManager。",
+        "download_failed" => "Garmin 返回的活动文件无效，未推进同步检查点。",
+        "invalid_credentials" => "Garmin 未接受保存的账号或密码；请重新配置凭据。",
+        "invalid_mfa" => "Garmin 未接受一次性 MFA 验证码；请重新输入最新验证码。",
+        "mfa_required" => "Garmin 需要一次性 MFA 验证码。",
+        "network_error" => "无法连接 Garmin Connect；请检查网络或系统代理后重试。",
+        "rate_limited" => "Garmin 当前限制登录尝试；请等待后重试。",
+        "sso_contract_error" => "Garmin 登录协议或客户端兼容性发生变化；请导出诊断信息。",
+        "token_store_error" => "本地 Garmin 登录令牌无法安全保存。",
+        _ => "Garmin 同步组件返回了未分类错误。",
     }
 }
 
@@ -338,40 +460,103 @@ async fn run_garmin_helper_raw(
     ids: &[String],
 ) -> Result<GarminHelperResult, GarminStatusResponse> {
     std::fs::create_dir_all(runtime.downloads()).map_err(|_| {
-        garmin_response("staging_unavailable", Some("无法创建 Garmin 同步暂存目录。"))
+        garmin_response(
+            "staging_unavailable",
+            Some("无法创建 Garmin 同步暂存目录。"),
+        )
     })?;
     std::fs::create_dir_all(runtime.tokens()).map_err(|_| {
-        garmin_response("token_store_unavailable", Some("无法创建 Garmin 认证令牌目录。"))
+        garmin_response(
+            "token_store_unavailable",
+            Some("无法创建 Garmin 认证令牌目录。"),
+        )
     })?;
     let mut process = Command::new(&runtime.python);
     process
         .arg("-B")
         .arg(&runtime.helper)
         .arg(command)
-        .arg("--output").arg(runtime.downloads())
-        .arg("--state").arg(runtime.journal())
-        .arg("--tokens").arg(runtime.tokens())
-        .arg("--email").arg(&runtime.email)
+        .arg("--output")
+        .arg(runtime.downloads())
+        .arg("--state")
+        .arg(runtime.journal())
+        .arg("--tokens")
+        .arg(runtime.tokens())
+        .arg("--email")
+        .arg(&runtime.email)
         .env("PICMANAGER_GARMIN_PASSWORD", &runtime.password)
         .env("PYTHONDONTWRITEBYTECODE", "1")
-        .env("PYTHONPYCACHEPREFIX", runtime.root.join("python-bytecode-cache"))
+        .env(
+            "PYTHONPYCACHEPREFIX",
+            runtime.root.join("python-bytecode-cache"),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(code) = mfa_code { process.arg("--mfa").arg(code); }
-    if let Some(value) = after { process.arg("--after").arg(value); }
-    if !ids.is_empty() { process.arg("--ids").args(ids); }
-    let output = tokio::time::timeout(Duration::from_secs(120), process.output())
+    if mfa_code.is_some() {
+        process.arg("--mfa-stdin").stdin(Stdio::piped());
+    }
+    if let Some(value) = after {
+        process.arg("--after").arg(value);
+    }
+    if !ids.is_empty() {
+        process.arg("--ids").args(ids);
+    }
+    let mut child = process
+        .spawn()
+        .map_err(|_| garmin_response("helper_unavailable", Some("无法启动 Garmin 同步组件。")))?;
+    if let Some(code) = mfa_code {
+        let mut input = child.stdin.take().ok_or_else(|| {
+            garmin_response(
+                "helper_unavailable",
+                Some("Garmin 同步组件无法接收 MFA 验证码。"),
+            )
+        })?;
+        input.write_all(code.as_bytes()).await.map_err(|_| {
+            garmin_response(
+                "helper_unavailable",
+                Some("无法向 Garmin 同步组件提交 MFA 验证码。"),
+            )
+        })?;
+        input.write_all(b"\n").await.map_err(|_| {
+            garmin_response(
+                "helper_unavailable",
+                Some("无法向 Garmin 同步组件提交 MFA 验证码。"),
+            )
+        })?;
+        input.shutdown().await.map_err(|_| {
+            garmin_response(
+                "helper_unavailable",
+                Some("无法完成 Garmin MFA 验证码提交。"),
+            )
+        })?;
+    }
+    let output = tokio::time::timeout(Duration::from_secs(120), child.wait_with_output())
         .await
-        .map_err(|_| garmin_response("timed_out", Some("Garmin 同步超过两分钟未响应，未推进检查点。")))?
+        .map_err(|_| {
+            garmin_response(
+                "timed_out",
+                Some("Garmin 同步超过两分钟未响应，未推进检查点。"),
+            )
+        })?
         .map_err(|_| garmin_response("helper_unavailable", Some("无法启动 Garmin 同步组件。")))?;
     if !output.status.success() {
         tracing::warn!(exit_code = ?output.status.code(), stderr_bytes = output.stderr.len(), "Garmin helper exited unsuccessfully");
-        return Err(garmin_response("helper_failed", Some("Garmin 同步组件失败；请查看诊断日志。")));
+        return Err(garmin_response(
+            "helper_failed",
+            Some("Garmin 同步组件失败；请查看诊断日志。"),
+        ));
     }
     serde_json::from_slice::<GarminHelperResult>(&output.stdout).map_err(|_| {
-        tracing::warn!(stdout_bytes = output.stdout.len(), stderr_bytes = output.stderr.len(), "Garmin helper emitted invalid JSON");
-        garmin_response("helper_protocol_error", Some("Garmin 同步组件返回了无效结果。"))
+        tracing::warn!(
+            stdout_bytes = output.stdout.len(),
+            stderr_bytes = output.stderr.len(),
+            "Garmin helper emitted invalid JSON"
+        );
+        garmin_response(
+            "helper_protocol_error",
+            Some("Garmin 同步组件返回了无效结果。"),
+        )
     })
 }
 
@@ -385,7 +570,7 @@ mod garmin_helper_tests {
         let helper = temp.path().join("fake-garmin-helper.sh");
         std::fs::write(&helper, r#"#!/bin/sh
 case "$1" in
-  auth) case " $* " in *" --mfa "*) printf '%s\n' '{"status":"authenticated"}' ;; *) printf '%s\n' '{"status":"mfa_required","message":"code needed"}' ;; esac ;;
+  auth) case " $* " in *" --mfa-stdin "*) printf '%s\n' '{"status":"authenticated"}' ;; *) printf '%s\n' '{"status":"mfa_required","error_code":"mfa_required","phase":"credential_login"}' ;; esac ;;
   sync) printf '%s\n' '{"status":"ready","downloaded":1,"items":[]}' ;;
   ack) printf '%s\n' '{"status":"acknowledged"}' ;;
 esac
@@ -402,11 +587,17 @@ esac
             helper: helper.to_string_lossy().into_owned(),
             root: temp.path().join("state"),
         };
-        let mfa = run_garmin_helper_raw(&runtime, "auth", None, None, &[]).await.unwrap();
+        let mfa = run_garmin_helper_raw(&runtime, "auth", None, None, &[])
+            .await
+            .unwrap();
         assert_eq!(mfa.status, "mfa_required");
-        let authenticated = run_garmin_helper_raw(&runtime, "auth", Some("123456"), None, &[]).await.unwrap();
+        let authenticated = run_garmin_helper_raw(&runtime, "auth", Some("123456"), None, &[])
+            .await
+            .unwrap();
         assert_eq!(authenticated.status, "authenticated");
-        let sync = run_garmin_helper_raw(&runtime, "sync", None, None, &[]).await.unwrap();
+        let sync = run_garmin_helper_raw(&runtime, "sync", None, None, &[])
+            .await
+            .unwrap();
         assert_eq!(sync.status, "ready");
         assert_eq!(sync.downloaded, 1);
     }
@@ -414,13 +605,35 @@ esac
     #[test]
     fn helper_error_contract_preserves_literal_safe_fields() {
         let helper: GarminHelperResult = serde_json::from_str(
-            r#"{"status":"network_error","error_code":"network_error","message":"Garmin Connect could not be reached","diagnostic":"ProxyError","http_status":502}"#,
+            r#"{"status":"network_error","error_code":"network_error","message":"provider body token=do-not-expose","phase":"token_restore","exception_class":"ProxyError","http_status":502,"future_field":"ignored"}"#,
         ).unwrap();
         let response = response_from_helper(helper);
         assert_eq!(response.status, "network_error");
         assert_eq!(response.error_code.as_deref(), Some("network_error"));
         assert!(response.retryable);
         assert!(!response.authenticated);
+        assert_eq!(response.phase.as_deref(), Some("token_restore"));
+        assert_eq!(response.exception_class.as_deref(), Some("ProxyError"));
+        assert_eq!(response.http_status, Some(502));
+        assert!(
+            !response
+                .message
+                .as_deref()
+                .unwrap()
+                .contains("do-not-expose")
+        );
+    }
+
+    #[test]
+    fn unsafe_helper_diagnostics_are_not_retained_or_exposed() {
+        let helper: GarminHelperResult = serde_json::from_str(
+            r#"{"status":"invalid_mfa","error_code":"invalid_mfa","phase":"mfa login https://private.invalid","exception_class":"Bad\\nClass","http_status":999}"#,
+        ).unwrap();
+        let response = response_from_helper(helper);
+        assert_eq!(response.error_code.as_deref(), Some("invalid_mfa"));
+        assert_eq!(response.phase, None);
+        assert_eq!(response.exception_class, None);
+        assert_eq!(response.http_status, None);
     }
 }
 

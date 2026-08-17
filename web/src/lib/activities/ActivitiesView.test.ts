@@ -37,6 +37,26 @@ describe('ActivitiesView', () => {
     expect(await screen.findByText('无法连接 Garmin Connect；请检查网络或系统代理后重试。')).toBeVisible();
   });
 
+  it('distinguishes a literal MFA challenge from a rejected MFA code', async () => {
+    const api = {
+      activities: {
+        list: vi.fn(async () => ({ activities: [], total: 0, page: 1, per_page: 100 })),
+        garminStatus: vi.fn(async () => ({ configured: true, authenticated: false, status: 'ready_to_authenticate', error_code: null, retryable: false, downloaded: 0, imported: 0, skipped: 0, failed: 0 })),
+        authenticateGarmin: vi.fn()
+          .mockResolvedValueOnce({ configured: true, authenticated: false, status: 'mfa_required', error_code: 'mfa_required', retryable: false, phase: 'credential_login', downloaded: 0, imported: 0, skipped: 0, failed: 0 })
+          .mockResolvedValueOnce({ configured: true, authenticated: false, status: 'invalid_mfa', error_code: 'invalid_mfa', retryable: false, phase: 'mfa_login', exception_class: 'GarminConnectAuthenticationError', http_status: 401, downloaded: 0, imported: 0, skipped: 0, failed: 0 }),
+        syncGarmin: vi.fn(),
+      },
+    } as unknown as ApiClient;
+    render(ActivitiesView, { api });
+
+    await fireEvent.click(await screen.findByRole('button', { name: '验证登录' }));
+    expect(await screen.findByLabelText('Garmin MFA 验证码')).toBeVisible();
+    await fireEvent.input(screen.getByLabelText('Garmin MFA 验证码'), { target: { value: '123456' } });
+    await fireEvent.click(screen.getByRole('button', { name: '验证登录' }));
+    expect(await screen.findByText('Garmin 未接受一次性 MFA 验证码；请重新输入最新验证码。')).toBeVisible();
+  });
+
   it('opens an activity route, metrics, and matched photos', async () => {
     const api = {
       activities: {

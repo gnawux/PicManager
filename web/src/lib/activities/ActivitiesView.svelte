@@ -102,11 +102,13 @@
     if (result.status === 'partial_failed') return `Garmin 同步部分完成：导入 ${result.imported} 条，失败 ${result.failed} 条；失败项会保留以便重试。`;
     switch (result.error_code ?? result.status) {
       case 'mfa_required': return 'Garmin 需要一次性 MFA 验证码；输入验证码后再次验证登录。';
+      case 'invalid_mfa': return 'Garmin 未接受一次性 MFA 验证码；请重新输入最新验证码。';
       case 'invalid_credentials': return 'Garmin 未接受保存的账号或密码；请重新配置凭据。';
       case 'network_error': return '无法连接 Garmin Connect；请检查网络或系统代理后重试。';
-      case 'stale_token': return 'Garmin 登录令牌已过期；请重新验证登录。';
+      case 'rate_limited': return 'Garmin 当前限制登录尝试；请等待后重试。';
       case 'sso_contract_error': return 'Garmin 登录协议或客户端兼容性发生变化；请导出诊断信息。';
       case 'dependency_error': return '本地 Garmin 同步组件不可用；请重新安装 PicManager。';
+      case 'token_store_error': return '本地 Garmin 登录令牌无法安全保存。';
     }
     return `Garmin 状态：${result.status}`;
   }
