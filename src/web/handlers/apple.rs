@@ -21,6 +21,12 @@ pub(crate) struct AppleSourceQuery {
     limit: Option<u32>,
 }
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct RecentSyncQuery {
+    hours: Option<u32>,
+    limit: Option<u32>,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct RetryResponse {
     job_id: i64,
@@ -99,6 +105,15 @@ pub(crate) async fn list_apple_sources(
         )
         .await?,
     ))
+}
+
+pub(crate) async fn list_recent_apple_photos(
+    State(state): State<AppState>,
+    Query(query): Query<RecentSyncQuery>,
+) -> Result<Json<Vec<apple::AppleRecentPhoto>>, AppleApiError> {
+    Ok(Json(apple::list_recently_synchronized(
+        &state.pool, query.hours.unwrap_or(24), query.limit.unwrap_or(100),
+    ).await?))
 }
 
 pub(crate) async fn retry_apple_source(

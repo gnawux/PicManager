@@ -28,6 +28,15 @@ pub struct AppleSourcePage {
     pub status_counts: BTreeMap<String, i64>,
     pub next_before_id: Option<i64>,
 }
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+pub struct AppleRecentPhoto {
+    pub id: i64,
+    pub original_filename: Option<String>,
+    pub taken_at: Option<String>,
+    pub synchronized_at: String,
+    pub has_current: bool,
+}
 #[derive(Debug, Clone, Serialize)]
 pub struct AppleExportClaim { pub item_id: i64, pub source: AppleSourceView }
 
@@ -114,6 +123,21 @@ pub async fn get_source(pool: &SqlitePool, source_id: i64) -> Result<AppleSource
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::NotFound(format!("Apple Photos source {source_id}")))
+}
+
+pub async fn list_recently_synchronized(pool: &SqlitePool, hours: u32, limit: u32) -> Result<Vec<AppleRecentPhoto>> {
+    let since = format!("-{} hours", hours.clamp(1, 24 * 30));
+    Ok(sqlx::query_as(
+        "SELECT p.id, s.original_filename, p.taken_at, MAX(i.finished_at) AS synchronized_at, \
+                EXISTS(SELECT 1 FROM asset_variants current WHERE current.asset_id = a.id AND current.role = 'current') AS has_current \
+         FROM sync_items i JOIN asset_sources s ON s.id = i.source_id \
+         JOIN assets a ON a.id = s.asset_id JOIN photos p ON p.id = a.photo_id \
+         WHERE s.provider = 'apple_photos' AND i.operation = 'export_original' \
+           AND i.status = 'succeeded' AND i.finished_at IS NOT NULL \
+           AND i.finished_at >= datetime('now', ?) AND p.import_status = 'imported' \
+         GROUP BY p.id, s.original_filename, p.taken_at, a.id \
+         ORDER BY synchronized_at DESC, p.id DESC LIMIT ?",
+    ).bind(since).bind(i64::from(limit.clamp(1, 200))).fetch_all(pool).await?)
 }
 pub async fn claim_next_export(pool: &SqlitePool, worker: &str, lease_seconds: u32) -> Result<Option<AppleExportClaim>> {
     let mut tx = pool.begin().await?;
@@ -377,6 +401,40 @@ mod tests {
         assert_eq!(page.sources[0].sync_status, "ready");
         assert_eq!(page.status_counts.get("synced"), Some(&1));
         assert_eq!(page.status_counts.get("failed"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn recent_sync_uses_success_completion_instead_of_source_update_time() {
+        let pool = test_pool().await;
+        sqlx::query(
+            "INSERT INTO photos (id, path, sha256, taken_at, format, import_status) VALUES \
+             (1, '/recent.jpg', 'recent', '2024-01-01', 'jpeg', 'imported'), \
+             (2, '/old.jpg', 'old', '2023-01-01', 'jpeg', 'imported'), \
+             (3, '/failed.jpg', 'failed', '2022-01-01', 'jpeg', 'imported')",
+        ).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO assets (id, photo_id) VALUES (1, 1), (2, 2), (3, 3)").execute(&pool).await.unwrap();
+        let recent = source(&pool, "recent", "IMG_RECENT.HEIC", "ready").await;
+        let old = source(&pool, "old", "IMG_OLD.JPG", "ready").await;
+        let failed = source(&pool, "failed", "IMG_FAILED.JPG", "failed").await;
+        for (source_id, asset_id) in [(recent, 1_i64), (old, 2), (failed, 3)] {
+            sqlx::query("UPDATE asset_sources SET asset_id = ?, updated_at = datetime('now') WHERE id = ?")
+                .bind(asset_id).bind(source_id).execute(&pool).await.unwrap();
+        }
+        let job_id: i64 = sqlx::query_scalar(
+            "INSERT INTO sync_jobs (kind, provider, total_items) VALUES ('apple_full_inventory', 'apple_photos', 3) RETURNING id",
+        ).fetch_one(&pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO sync_items (job_id, source_id, external_id, operation, status, finished_at) VALUES \
+             (?, ?, 'recent', 'export_original', 'succeeded', datetime('now', '-1 hour')), \
+             (?, ?, 'old', 'export_original', 'succeeded', datetime('now', '-25 hours')), \
+             (?, ?, 'failed', 'export_original', 'failed', datetime('now', '-30 minutes'))",
+        ).bind(job_id).bind(recent).bind(job_id).bind(old).bind(job_id).bind(failed)
+        .execute(&pool).await.unwrap();
+
+        let photos = list_recently_synchronized(&pool, 24, 100).await.unwrap();
+        assert_eq!(photos.len(), 1);
+        assert_eq!(photos[0].id, 1);
+        assert_eq!(photos[0].original_filename.as_deref(), Some("IMG_RECENT.HEIC"));
     }
 
     #[tokio::test]

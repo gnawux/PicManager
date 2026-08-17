@@ -597,6 +597,9 @@ Status: in progress.
   and supervise the packaged exporter, and document the boundary-first incident workflow.
 - M29.5: complete — reconcile stale Apple source states and let explicit user synchronization drain
   the durable queue while retaining bounded automatic foreground batches.
+- M29.6: complete — expose photos whose durable Apple export completed during the previous 24 hours,
+  ordered by synchronization completion rather than mutable inventory timestamps, with direct access
+  to the shared photo viewer.
 
 ### M30 - Garmin activity synchronization and map detail
 

@@ -148,6 +148,14 @@ export interface AppleSourcePage {
   next_before_id: number | null;
 }
 
+export interface AppleRecentPhoto {
+  id: number;
+  original_filename: string | null;
+  taken_at: string | null;
+  synchronized_at: string;
+  has_current: boolean;
+}
+
 export interface AppleLinkCandidate {
   id: number;
   source_id: number;

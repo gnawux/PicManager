@@ -13,7 +13,7 @@ use crate::application::{Application, CallerKind};
 use embed::static_handler;
 use handlers::{
     activities::{list_activities, get_activity, get_activity_track, get_activity_photos, sync_garmin_activities, trim_activity, merge_activities},
-    apple::{claim_apple_export, commit_apple_export, fail_apple_export, list_apple_candidates, list_apple_sources, renew_apple_export, retry_apple_source, review_apple_candidate},
+    apple::{claim_apple_export, commit_apple_export, fail_apple_export, list_apple_candidates, list_apple_sources, list_recent_apple_photos, renew_apple_export, retry_apple_source, review_apple_candidate},
     albums::{list_albums, list_album_photos, merge_albums},
     collections::{list_collections, create_collection, rename_collection, delete_collection, add_photos, remove_photos, list_collection_photos},
     animals::{list_species, list_species_photos, list_photo_animals},
@@ -87,6 +87,7 @@ fn router_with_application(
         .route("/api/tasks/{id}/retry", post(retry_task))
         .route("/api/tasks/{id}/cancel", post(cancel_task))
         .route("/api/apple/sources", get(list_apple_sources))
+        .route("/api/apple/recently-synchronized", get(list_recent_apple_photos))
         .route("/api/apple/exports/claim", post(claim_apple_export))
         .route("/api/apple/exports/{item_id}/renew", post(renew_apple_export))
         .route("/api/apple/exports/{item_id}/fail", post(fail_apple_export))

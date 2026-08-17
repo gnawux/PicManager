@@ -22,7 +22,7 @@ describe('AppleSyncView', () => {
       value: { messageHandlers: { picmanager: { postMessage } } },
     });
     const api = {
-      apple: { sources, retry: vi.fn(), candidates: vi.fn(async () => []), reviewCandidate: vi.fn() },
+      apple: { sources, retry: vi.fn(), candidates: vi.fn(async () => []), recentlySynchronized: vi.fn(async () => []), reviewCandidate: vi.fn() },
     } as unknown as ApiClient;
     render(AppleSyncView, { api });
 
@@ -45,6 +45,7 @@ describe('AppleSyncView', () => {
       apple: {
         sources,
         retry,
+        recentlySynchronized: vi.fn(async () => []),
         candidates: vi.fn(async () => [{
           id: 7, source_id: 3, photo_id: 22, method: 'structured_metadata', confidence: .92,
           status: 'candidate', evidence_json: null, original_filename: 'IMG_0042.HEIC', source_taken_at: null,
@@ -66,5 +67,31 @@ describe('AppleSyncView', () => {
     await fireEvent.click(screen.getByRole('button', { name: '确认匹配' }));
     await waitFor(() => expect(reviewCandidate).toHaveBeenCalledWith(7, true));
     expect(screen.queryByRole('button', { name: '确认匹配' })).not.toBeInTheDocument();
+  });
+
+  it('shows photos completed within the recent synchronization window and opens the viewer', async () => {
+    const api = {
+      apple: {
+        sources: vi.fn(async () => ({ sources: [], status_counts: { synced: 1 }, next_before_id: null })),
+        recentlySynchronized: vi.fn(async () => [{
+          id: 42, original_filename: 'IMG_0042.HEIC', taken_at: '2024-01-01 08:00:00',
+          synchronized_at: '2026-08-17 03:00:00', has_current: false,
+        }]),
+        retry: vi.fn(), candidates: vi.fn(async () => []), reviewCandidate: vi.fn(),
+      },
+      photos: {
+        get: vi.fn(async () => ({
+          id: 42, path: '/library/IMG_0042.HEIC', format: 'heic', taken_at: '2024-01-01 08:00:00',
+          timezone_offset: null, camera: 'iPhone', gps_lat: null, gps_lon: null, import_status: 'imported',
+          width: 4032, height: 3024, sources: [{ provider: 'apple_photos', original_filename: 'IMG_0042.HEIC', sync_status: 'ready' }],
+          renditions: { display: '/api/photos/42/file', original: '/api/photos/42/file', current: null },
+        })),
+      },
+    } as unknown as ApiClient;
+    render(AppleSyncView, { api });
+
+    expect(await screen.findByText('过去 24 小时 · 1 张')).toBeVisible();
+    await fireEvent.click(screen.getByRole('button', { name: '查看 IMG_0042.HEIC' }));
+    expect(await screen.findByRole('dialog', { name: '照片 42' })).toBeVisible();
   });
 });

@@ -279,6 +279,47 @@ async fn apple_source_api_filters_inventory_and_retries_failures() {
 }
 
 #[tokio::test]
+async fn apple_recent_sync_api_exposes_only_durable_recent_successes() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    sqlx::query(
+        "INSERT INTO photos (id, path, sha256, taken_at, format, import_status) VALUES \
+         (1, '/library/recent.heic', 'recent', '2024-01-01', 'heic', 'imported'), \
+         (2, '/library/old.jpg', 'old', '2023-01-01', 'jpeg', 'imported')",
+    ).execute(&pool).await.unwrap();
+    sqlx::query("INSERT INTO assets (id, photo_id) VALUES (1, 1), (2, 2)").execute(&pool).await.unwrap();
+    let recent_source: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_sources (asset_id, provider, external_id, original_filename, sync_status) \
+         VALUES (1, 'apple_photos', 'recent', 'IMG_RECENT.HEIC', 'ready') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    let old_source: i64 = sqlx::query_scalar(
+        "INSERT INTO asset_sources (asset_id, provider, external_id, original_filename, sync_status) \
+         VALUES (2, 'apple_photos', 'old', 'IMG_OLD.JPG', 'ready') RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    let job_id: i64 = sqlx::query_scalar(
+        "INSERT INTO sync_jobs (kind, provider, status, total_items, completed_items) \
+         VALUES ('apple_full_inventory', 'apple_photos', 'completed', 2, 2) RETURNING id",
+    ).fetch_one(&pool).await.unwrap();
+    sqlx::query(
+        "INSERT INTO sync_items (job_id, source_id, external_id, operation, status, finished_at) VALUES \
+         (?, ?, 'recent', 'export_original', 'succeeded', datetime('now', '-2 hours')), \
+         (?, ?, 'old', 'export_original', 'succeeded', datetime('now', '-2 days'))",
+    ).bind(job_id).bind(recent_source).bind(job_id).bind(old_source).execute(&pool).await.unwrap();
+
+    let response = app.oneshot(
+        Request::builder().uri("/api/apple/recently-synchronized?hours=24&limit=100")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 1);
+    assert_eq!(json[0]["id"], 1);
+    assert_eq!(json[0]["original_filename"], "IMG_RECENT.HEIC");
+    assert!(json[0]["synchronized_at"].as_str().is_some());
+    assert_eq!(json[0]["has_current"], false);
+}
+
+#[tokio::test]
 async fn apple_candidate_api_exposes_evidence_and_accepts_review() {
     let (app, pool, _tmp) = test_app_with_pool().await;
     sqlx::query(

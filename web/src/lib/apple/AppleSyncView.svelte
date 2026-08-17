@@ -1,15 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import type { ApiClient } from '../api/client';
-  import type { AppleLinkCandidate, AppleSourcePage, AppleSourceSummary } from '../api/types';
+  import type { AppleLinkCandidate, AppleRecentPhoto, AppleSourcePage, AppleSourceSummary } from '../api/types';
   import Button from '../components/Button.svelte';
   import PageState from '../components/PageState.svelte';
   import StatusBadge from '../components/StatusBadge.svelte';
+  import PhotoViewer from '../timeline/PhotoViewer.svelte';
 
   interface Props { api: ApiClient }
   let { api }: Props = $props();
   let page = $state<AppleSourcePage | null>(null);
   let candidates = $state<AppleLinkCandidate[]>([]);
+  let recentPhotos = $state<AppleRecentPhoto[]>([]);
   let status = $state<'loading' | 'ready' | 'error'>('loading');
   let filter = $state('all');
   let search = $state('');
@@ -19,6 +21,9 @@
   let nativeSyncRequested = $state(false);
   let nativeSyncRefreshes = $state(0);
   let nativeSyncTimer: number | null = null;
+  let viewerId = $state<number | null>(null);
+  let viewerIndex = $derived(viewerId === null ? -1 : recentPhotos.findIndex((photo) => photo.id === viewerId));
+  let viewerPhoto = $derived(viewerIndex >= 0 ? recentPhotos[viewerIndex] : null);
 
   onMount(() => {
     void loadWorkspace();
@@ -36,8 +41,8 @@
     status = 'loading';
     error = null;
     try {
-      [page, candidates] = await Promise.all([
-        loadSources(), api.apple.candidates(),
+      [page, candidates, recentPhotos] = await Promise.all([
+        loadSources(), api.apple.candidates(), api.apple.recentlySynchronized(24, 100),
       ]);
       status = 'ready';
     } catch (reason) {
@@ -108,6 +113,23 @@
       : value === 'failed' || value === 'missing' ? 'danger'
       : ['queued', 'downloading', 'downloaded', 'importing', 'discovered'].includes(value) ? 'warning' : 'neutral';
   }
+  function recentViewerItem(photo: AppleRecentPhoto | undefined | null) {
+    return photo ? {
+      id: photo.id,
+      taken_at: photo.taken_at,
+      file_url: `/api/photos/${photo.id}/file`,
+      has_current: photo.has_current,
+    } : undefined;
+  }
+  function formatSyncTime(value: string) {
+    const normalized = value.includes('T') ? value : `${value.replace(' ', 'T')}Z`;
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) return value;
+    return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(date);
+  }
+  function navigateRecentViewer(direction: -1 | 1) {
+    viewerId = recentPhotos[viewerIndex + direction]?.id ?? viewerId;
+  }
   function syncApple() {
     const bridge = (window as unknown as { webkit?: { messageHandlers?: { picmanager?: { postMessage(value: unknown): void } } } }).webkit?.messageHandlers?.picmanager;
     if (!bridge) { error = 'iCloud 同步需要从 PicManager Mac 应用的嵌入式窗口运行。'; return; }
@@ -141,6 +163,26 @@
 
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if nativeSyncRequested}<p class="sync-note" role="status">PicManager 正在核对 Apple Photos；此页会自动刷新。当前有 {pendingCount()} 张等待同步，关闭应用会暂停，下一次同步可继续处理。</p>{/if}
+  <section class="recent-panel" aria-labelledby="recent-sync-title">
+    <div class="section-heading">
+      <div><p>Recently synchronized</p><h2 id="recent-sync-title">最近同步</h2></div>
+      <span>过去 24 小时 · {recentPhotos.length} 张</span>
+    </div>
+    {#if status === 'loading' && recentPhotos.length === 0}
+      <div class="recent-placeholder">正在读取最近同步记录…</div>
+    {:else if recentPhotos.length === 0}
+      <div class="recent-placeholder">过去 24 小时还没有同步成功的照片。</div>
+    {:else}
+      <div class="recent-grid">
+        {#each recentPhotos as photo (photo.id)}
+          <button type="button" aria-label={`查看 ${photo.original_filename ?? `照片 ${photo.id}`}`} onclick={() => { viewerId = photo.id; }}>
+            <img src={`/api/photos/${photo.id}/thumb?size=512`} alt="" loading="lazy" />
+            <span><strong>{photo.original_filename ?? `照片 ${photo.id}`}</strong><small>{formatSyncTime(photo.synchronized_at)} 同步</small></span>
+          </button>
+        {/each}
+      </div>
+    {/if}
+  </section>
   <div class="summary" aria-label="Apple 照片同步概览">
     <button type="button" class:active={filter === 'all'} onclick={() => applyFilter('all')}><small>全部</small><strong>{Object.values(page?.status_counts ?? {}).reduce((a, b) => a + b, 0)}</strong></button>
     <button type="button" class:active={filter === 'synced'} onclick={() => applyFilter('synced')}><small>已同步</small><strong>{count('synced')}</strong></button>
@@ -191,6 +233,17 @@
   </div>{/if}
 </section>
 
+{#if viewerPhoto}
+  <PhotoViewer
+    {api}
+    item={recentViewerItem(viewerPhoto)!}
+    previous={recentViewerItem(recentPhotos[viewerIndex - 1])}
+    next={recentViewerItem(recentPhotos[viewerIndex + 1])}
+    onclose={() => { viewerId = null; }}
+    onnavigate={navigateRecentViewer}
+  />
+{/if}
+
 <style>
   section { margin-top: 34px; }
   .view-heading, .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 20px; }
@@ -198,6 +251,18 @@
   h2 { margin: 0 0 5px; font-size: 28px; } .view-heading span, .section-heading > span { color: var(--muted); }
   form { display: flex; gap: 8px; } input { width: 260px; min-height: 38px; padding: 0 11px; border: 1px solid var(--line); border-radius: 10px; background: white; }
   .error,.sync-note { padding: 10px 14px; border-radius: 10px; color: var(--danger); background: #fff0ee; }.sync-note { color: var(--muted); background: var(--fill-subtle); }
+  .recent-panel { margin: 22px 0 18px; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: var(--fill-subtle); }
+  .recent-panel .section-heading { margin-bottom: 14px; }
+  .recent-panel h2 { font-size: 22px; }
+  .recent-placeholder { padding: 18px 4px; color: var(--muted); font-size: 13px; }
+  .recent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; max-height: 390px; overflow-y: auto; }
+  .recent-grid button { position: relative; min-width: 0; aspect-ratio: 1; overflow: hidden; padding: 0; border: 0; border-radius: 12px; text-align: left; background: #dde0e5; cursor: pointer; }
+  .recent-grid button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .recent-grid img { width: 100%; height: 100%; object-fit: cover; transition: transform .18s ease; }
+  .recent-grid button:hover img { transform: scale(1.025); }
+  .recent-grid button > span { position: absolute; inset: auto 0 0; display: grid; gap: 2px; padding: 22px 9px 8px; color: white; background: linear-gradient(transparent, rgba(0,0,0,.72)); }
+  .recent-grid strong, .recent-grid small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recent-grid strong { font-size: 11px; }.recent-grid small { color: rgba(255,255,255,.8); font-size: 10px; }
   .summary { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-bottom: 18px; }
   .summary button { display: grid; gap: 6px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; color: var(--text); text-align: left; background: white; cursor: pointer; }
   .summary button.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); } .summary small { color: var(--muted); } .summary strong { font-size: 24px; }

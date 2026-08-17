@@ -190,6 +190,18 @@ describe('API client', () => {
     expect(fetcher.mock.calls[0][0]).toBe('/api/apple/sources?limit=100&status=failed&search=IMG+42');
   });
 
+  it('queries recently synchronized Apple photos with an explicit time window', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    const client = createApiClient({ fetch: fetcher as typeof fetch });
+    await client.apple.recentlySynchronized(24, 80);
+    expect(fetcher.mock.calls[0][0]).toBe('/api/apple/recently-synchronized?hours=24&limit=80');
+  });
+
   it('posts explicit keep ids when resolving duplicate groups', async () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       new Response(null, { status: 200 }),

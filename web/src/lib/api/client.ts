@@ -2,6 +2,7 @@ import type {
   ApiErrorEnvelope,
   AppleSourcePage,
   AppleSourceSummary,
+  AppleRecentPhoto,
   AppleLinkCandidate,
   AlbumPhotoPage,
   AlbumSummary,
@@ -109,6 +110,8 @@ export function createApiClient(options: ApiClientOptions = {}) {
       }),
     },
     apple: {
+      recentlySynchronized: (hours = 24, limit = 100) =>
+        request<AppleRecentPhoto[]>(`/api/apple/recently-synchronized?hours=${hours}&limit=${limit}`),
       sources: (status?: string, search?: string, beforeId?: number) => {
         const query = new URLSearchParams({ limit: '100' });
         if (status && status !== 'all') query.set('status', status);
