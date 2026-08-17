@@ -697,7 +697,7 @@ rollback bundle is retained as `dist/PicManager-Python-Garmin.app` while this mi
 - M35.3: complete — port activity pagination and authenticated ORIGINAL download into Rust. Preserve exact
   ZIP/FIT validation, bounded paging, staging filenames derived only from provider activity IDs,
   durable journal writes and post-import acknowledgement/checkpoint semantics.
-- M35.4: replace the Python subprocess boundary in the activity handlers while retaining literal
+- M35.4: complete — replace the Python subprocess boundary in the activity handlers while retaining literal
   JSON responses consumed by Web and the on-demand macOS Keychain activation contract. Cover
   `authenticate -> MFA -> persisted token -> sync -> import -> acknowledge` end to end with a fake
   Garmin service and isolated catalog.

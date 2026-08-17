@@ -6,9 +6,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use crate::activities::{importer, rdp};
+use crate::garmin::client::{AuthenticationOutcome, GarminClient, GarminError};
+use crate::garmin::sync::{GarminSync, SyncError};
+use crate::garmin::token_store::{TokenStore, TokenStoreError};
 use crate::web::AppState;
-use std::{path::{PathBuf}, process::Stdio, time::Duration};
-use tokio::{io::AsyncWriteExt, process::Command};
+use std::path::PathBuf;
 
 const RDP_THRESHOLD: usize = 7200;
 const RDP_EPSILON: f64 = 1e-5; // ~1 m in degrees
@@ -121,6 +123,10 @@ pub struct GarminStatusResponse {
     pub skipped: usize,
     pub failed: usize,
 }
+
+#[cfg(any())]
+mod legacy_garmin_helper {
+use super::*;
 
 #[derive(Debug, Deserialize)]
 struct GarminHelperResult {
@@ -638,6 +644,570 @@ esac
         assert_eq!(response.phase, None);
         assert_eq!(response.exception_class, None);
         assert_eq!(response.http_status, None);
+    }
+}
+}
+
+struct NativeGarminRuntime {
+    email: String,
+    password: String,
+    root: PathBuf,
+}
+
+impl NativeGarminRuntime {
+    fn from_state(state: &AppState) -> Result<Self, GarminStatusResponse> {
+        let email = std::env::var("PICMANAGER_GARMIN_EMAIL")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let password = std::env::var("PICMANAGER_GARMIN_PASSWORD")
+            .ok()
+            .filter(|value| !value.is_empty());
+        let (Some(email), Some(password)) = (email, password) else {
+            return Err(native_garmin_response(
+                "not_configured",
+                Some("请先在 PicManager Mac 应用中保存 Garmin Connect 中国账号和密码。"),
+            ));
+        };
+        Ok(Self {
+            email,
+            password,
+            root: state.config.activities_dir().join(".garmin"),
+        })
+    }
+
+    fn token_store(&self) -> TokenStore {
+        TokenStore::in_directory(self.root.join("tokens"))
+    }
+
+    fn sync(&self) -> GarminSync {
+        GarminSync::new(&self.root)
+    }
+}
+
+fn native_garmin_response(status: &str, message: Option<&str>) -> GarminStatusResponse {
+    GarminStatusResponse {
+        configured: status != "not_configured" && status != "unavailable",
+        authenticated: matches!(status, "authenticated" | "ready" | "completed"),
+        status: status.to_owned(),
+        error_code: if matches!(
+            status,
+            "authenticated" | "ready" | "completed" | "ready_to_authenticate"
+        ) {
+            None
+        } else {
+            Some(status.to_owned())
+        },
+        retryable: matches!(status, "network_error" | "rate_limited"),
+        message: message.map(str::to_owned),
+        phase: None,
+        exception_class: None,
+        http_status: None,
+        downloaded: 0,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    }
+}
+
+fn garmin_error_response(error: GarminError) -> GarminStatusResponse {
+    let code = error.code.as_str();
+    tracing::warn!(
+        error_code = code,
+        phase = error.phase,
+        http_status = ?error.http_status,
+        "native Garmin request failed"
+    );
+    GarminStatusResponse {
+        configured: true,
+        authenticated: false,
+        status: code.to_owned(),
+        error_code: Some(code.to_owned()),
+        retryable: error.retryable,
+        message: Some(native_garmin_message(code).to_owned()),
+        phase: Some(error.phase.to_owned()),
+        exception_class: None,
+        http_status: error.http_status,
+        downloaded: 0,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    }
+}
+
+fn token_error_response(_error: TokenStoreError) -> GarminStatusResponse {
+    native_garmin_response(
+        "token_store_error",
+        Some(native_garmin_message("token_store_error")),
+    )
+}
+
+fn sync_error_response(error: SyncError) -> GarminStatusResponse {
+    match error {
+        SyncError::Client(error) => garmin_error_response(error),
+        SyncError::InvalidDownload | SyncError::InvalidActivityId => native_garmin_response(
+            "download_failed",
+            Some(native_garmin_message("download_failed")),
+        ),
+        SyncError::Journal => native_garmin_response(
+            "staging_unavailable",
+            Some("Garmin 同步暂存状态无法安全读写，未推进检查点。"),
+        ),
+    }
+}
+
+fn native_garmin_message(code: &str) -> &'static str {
+    match code {
+        "download_failed" => "Garmin 返回的活动文件无效，未推进同步检查点。",
+        "invalid_credentials" => "Garmin 未接受保存的账号或密码；请重新配置凭据。",
+        "invalid_mfa" => "Garmin 未接受一次性 MFA 验证码；请重新输入最新验证码。",
+        "mfa_required" => "Garmin 需要一次性 MFA 验证码。",
+        "network_error" => "无法连接 Garmin Connect；请检查网络或系统代理后重试。",
+        "rate_limited" => "Garmin 当前限制登录尝试；请等待后重试。",
+        "sso_contract_error" => "Garmin 登录协议或客户端兼容性发生变化；请导出诊断信息。",
+        "token_store_error" => "本地 Garmin 登录令牌无法安全保存。",
+        _ => "Garmin 同步发生未分类错误。",
+    }
+}
+
+async fn authenticate_native(
+    runtime: &NativeGarminRuntime,
+    mfa_code: Option<&str>,
+) -> Result<AuthenticationOutcome, GarminStatusResponse> {
+    let client = GarminClient::production().map_err(garmin_error_response)?;
+    authenticate_with_client(runtime, mfa_code, &client).await
+}
+
+async fn authenticate_with_client(
+    runtime: &NativeGarminRuntime,
+    mfa_code: Option<&str>,
+    client: &GarminClient,
+) -> Result<AuthenticationOutcome, GarminStatusResponse> {
+    let store = runtime.token_store();
+    if mfa_code.is_none() && store.exists().map_err(token_error_response)? {
+        let tokens = store.load().map_err(token_error_response)?;
+        match client.validate(&tokens).await {
+            Ok(validated) => {
+                store.save(&validated).map_err(token_error_response)?;
+                return Ok(AuthenticationOutcome::Authenticated(validated));
+            }
+            Err(error)
+                if !matches!(
+                    error.code,
+                    crate::garmin::client::GarminErrorCode::InvalidCredentials
+                ) =>
+            {
+                return Err(garmin_error_response(error));
+            }
+            Err(_) => {}
+        }
+    }
+    let outcome = client
+        .authenticate(&runtime.email, &runtime.password, mfa_code)
+        .await
+        .map_err(garmin_error_response)?;
+    if let AuthenticationOutcome::Authenticated(tokens) = &outcome {
+        store.save(tokens).map_err(token_error_response)?;
+    }
+    Ok(outcome)
+}
+
+pub async fn get_garmin_status(State(state): State<AppState>) -> Json<GarminStatusResponse> {
+    let runtime = match NativeGarminRuntime::from_state(&state) {
+        Ok(runtime) => runtime,
+        Err(response) => return Json(response),
+    };
+    let authenticated = runtime.token_store().exists().unwrap_or(false);
+    Json(GarminStatusResponse {
+        configured: true,
+        authenticated,
+        status: "ready_to_authenticate".to_owned(),
+        error_code: None,
+        retryable: false,
+        message: None,
+        phase: None,
+        exception_class: None,
+        http_status: None,
+        downloaded: 0,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    })
+}
+
+pub async fn authenticate_garmin(
+    State(state): State<AppState>,
+    Json(request): Json<GarminRequest>,
+) -> Json<GarminStatusResponse> {
+    let runtime = match NativeGarminRuntime::from_state(&state) {
+        Ok(runtime) => runtime,
+        Err(response) => return Json(response),
+    };
+    Json(match authenticate_native(&runtime, request.mfa_code.as_deref()).await {
+        Ok(AuthenticationOutcome::Authenticated(_)) => {
+            native_garmin_response("authenticated", None)
+        }
+        Ok(AuthenticationOutcome::MfaRequired) => native_garmin_response(
+            "mfa_required",
+            Some(native_garmin_message("mfa_required")),
+        ),
+        Err(response) => response,
+    })
+}
+
+pub async fn sync_garmin_activities(
+    State(state): State<AppState>,
+    Json(request): Json<GarminRequest>,
+) -> Json<GarminStatusResponse> {
+    let runtime = match NativeGarminRuntime::from_state(&state) {
+        Ok(runtime) => runtime,
+        Err(response) => return Json(response),
+    };
+    let client = match GarminClient::production() {
+        Ok(client) => client,
+        Err(error) => return Json(garmin_error_response(error)),
+    };
+    sync_garmin_with_client(state, request, runtime, client).await
+}
+
+async fn sync_garmin_with_client(
+    state: AppState,
+    request: GarminRequest,
+    runtime: NativeGarminRuntime,
+    client: GarminClient,
+) -> Json<GarminStatusResponse> {
+    let store = runtime.token_store();
+    let mut tokens = match store.load() {
+        Ok(tokens) => tokens,
+        Err(TokenStoreError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            match client
+                .authenticate(
+                    &runtime.email,
+                    &runtime.password,
+                    request.mfa_code.as_deref(),
+                )
+                .await
+            {
+                Ok(AuthenticationOutcome::Authenticated(tokens)) => tokens,
+                Ok(AuthenticationOutcome::MfaRequired) => {
+                    return Json(native_garmin_response(
+                        "mfa_required",
+                        Some(native_garmin_message("mfa_required")),
+                    ));
+                }
+                Err(error) => return Json(garmin_error_response(error)),
+            }
+        }
+        Err(error) => return Json(token_error_response(error)),
+    };
+    let after: Option<String> = sqlx::query_scalar(
+        "SELECT MAX(start_time) FROM activities WHERE import_status = 'imported'",
+    )
+    .fetch_one(&state.pool)
+    .await
+    .ok()
+    .flatten();
+    let sync = runtime.sync();
+    let batch = match sync
+        .synchronize(&client, &mut tokens, after.as_deref())
+        .await
+    {
+        Ok(batch) => batch,
+        Err(error) => return Json(sync_error_response(error)),
+    };
+    if let Err(error) = store.save(&tokens) {
+        return Json(token_error_response(error));
+    }
+
+    let mut response = GarminStatusResponse {
+        configured: true,
+        authenticated: true,
+        status: "completed".to_owned(),
+        error_code: None,
+        retryable: false,
+        message: None,
+        phase: None,
+        exception_class: None,
+        http_status: None,
+        downloaded: batch.downloaded,
+        imported: 0,
+        skipped: 0,
+        failed: 0,
+    };
+    let mut acknowledged = Vec::new();
+    for item in batch.items {
+        let staged = sync.downloads().join(&item.file);
+        if !staged.is_file() {
+            response.status = "partial_failed".to_owned();
+            response.message = Some("Garmin 暂存文件不存在，未推进同步检查点。".to_owned());
+            response.failed += 1;
+            break;
+        }
+        match importer::import_one(&state.pool, &staged, &state.config.activities_dir()).await {
+            Ok(importer::ImportOutcome::Imported(_)) => {
+                response.imported += 1;
+                acknowledged.push(item.id);
+            }
+            Ok(importer::ImportOutcome::Skipped) => {
+                response.skipped += 1;
+                acknowledged.push(item.id);
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Garmin staged FIT import failed");
+                response.status = "partial_failed".to_owned();
+                response.message = Some(
+                    "一条 Garmin FIT 文件无法导入；已保留暂存文件，修复后可安全重试。"
+                        .to_owned(),
+                );
+                response.failed += 1;
+                break;
+            }
+        }
+    }
+    if !acknowledged.is_empty() && sync.acknowledge(&acknowledged).is_err() {
+        tracing::error!("Garmin import acknowledgement failed");
+        response.status = "acknowledgement_failed".to_owned();
+        response.message =
+            Some("活动已导入，但同步检查点尚未确认；下次会安全重试。".to_owned());
+    }
+    Json(response)
+}
+
+#[cfg(test)]
+mod native_garmin_tests {
+    use std::collections::HashMap;
+    use std::io::{Cursor, Write};
+
+    use axum::body::Body;
+    use axum::extract::{Form, Json as AxumJson, Path as AxumPath, Query as AxumQuery};
+    use axum::http::{Response, StatusCode as HttpStatusCode};
+    use axum::routing::{get, post};
+    use axum::Router;
+    use reqwest::Url;
+    use serde_json::Value;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    async fn login(AxumJson(body): AxumJson<Value>) -> ([( &'static str, &'static str); 1], AxumJson<Value>) {
+        assert_eq!(body.get("username").and_then(Value::as_str), Some("fake-user"));
+        (
+            [("set-cookie", "GARMIN-SSO=test; Path=/")],
+            AxumJson(serde_json::json!({
+                "responseStatus": {"type": "MFA_REQUIRED"},
+                "customerMfaInfo": {"mfaLastMethodUsed": "email"}
+            })),
+        )
+    }
+
+    async fn mfa(AxumJson(body): AxumJson<Value>) -> AxumJson<Value> {
+        assert_eq!(
+            body.get("mfaVerificationCode").and_then(Value::as_str),
+            Some("123456")
+        );
+        AxumJson(serde_json::json!({
+            "responseStatus": {"type": "SUCCESSFUL"},
+            "serviceTicketId": "ticket"
+        }))
+    }
+
+    async fn token(Form(form): Form<HashMap<String, String>>) -> (HttpStatusCode, AxumJson<Value>) {
+        assert_eq!(form.get("service_ticket").map(String::as_str), Some("ticket"));
+        (
+            HttpStatusCode::OK,
+            AxumJson(serde_json::json!({
+                "access_token": "opaque-access-token",
+                "refresh_token": "refresh-token"
+            })),
+        )
+    }
+
+    async fn activities(
+        AxumQuery(query): AxumQuery<HashMap<String, String>>,
+    ) -> AxumJson<Value> {
+        if query.get("limit").map(String::as_str) == Some("1") {
+            AxumJson(serde_json::json!([]))
+        } else {
+            AxumJson(serde_json::json!([{
+                "activityId": 9001,
+                "startTimeGMT": "2026-08-17 12:00:00"
+            }]))
+        }
+    }
+
+    async fn download(AxumPath(id): AxumPath<String>) -> Response<Body> {
+        assert_eq!(id, "9001");
+        Response::builder()
+            .status(HttpStatusCode::OK)
+            .body(Body::from(valid_fit_zip()))
+            .unwrap()
+    }
+
+    fn fit_crc(payload: &[u8]) -> u16 {
+        const TABLE: [u16; 16] = [
+            0x0000, 0xcc01, 0xd801, 0x1400, 0xf001, 0x3c00, 0x2800, 0xe401,
+            0xa001, 0x6c00, 0x7800, 0xb401, 0x5000, 0x9c01, 0x8801, 0x4400,
+        ];
+        payload.iter().fold(0_u16, |crc, byte| {
+            let mut next = (crc >> 4) ^ TABLE[((crc ^ *byte as u16) & 0xf) as usize];
+            next = (next >> 4) ^ TABLE[((next ^ (*byte as u16 >> 4)) & 0xf) as usize];
+            next
+        })
+    }
+
+    fn valid_fit() -> Vec<u8> {
+        let mut data = vec![0x40, 0, 0, 18, 0, 1, 7, 4, 0x86, 0x00];
+        data.extend_from_slice(&60_000_u32.to_le_bytes());
+        let mut fit = vec![14, 0x10, 0, 0];
+        fit.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        fit.extend_from_slice(b".FIT");
+        fit.extend_from_slice(&fit_crc(&fit).to_le_bytes());
+        fit.extend_from_slice(&data);
+        fit.extend_from_slice(&fit_crc(&fit).to_le_bytes());
+        fit
+    }
+
+    fn valid_fit_zip() -> Vec<u8> {
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut output);
+            writer
+                .start_file("activity.fit", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(&valid_fit()).unwrap();
+            writer.finish().unwrap();
+        }
+        output.into_inner()
+    }
+
+    #[tokio::test]
+    async fn native_handler_contract_persists_mfa_session_and_restores_it() {
+        let app = Router::new()
+            .route("/mobile/api/login", post(login))
+            .route("/mobile/api/mfa/verifyCode", post(mfa))
+            .route("/di-oauth2-service/oauth/token", post(token))
+            .route(
+                "/activitylist-service/activities/search/activities",
+                get(activities),
+            )
+            .route("/download-service/files/activity/{id}", get(download));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = GarminClient::for_test(
+            Url::parse(&format!("http://{address}/")).unwrap(),
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let runtime = NativeGarminRuntime {
+            email: "fake-user".to_owned(),
+            password: "fake-password".to_owned(),
+            root: directory.path().to_owned(),
+        };
+
+        assert!(matches!(
+            authenticate_with_client(&runtime, None, &client)
+                .await
+                .unwrap(),
+            AuthenticationOutcome::MfaRequired
+        ));
+        assert!(matches!(
+            authenticate_with_client(&runtime, Some("123456"), &client)
+                .await
+                .unwrap(),
+            AuthenticationOutcome::Authenticated(_)
+        ));
+        assert!(runtime.token_store().exists().unwrap());
+        assert!(matches!(
+            authenticate_with_client(&runtime, None, &client)
+                .await
+                .unwrap(),
+            AuthenticationOutcome::Authenticated(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn fake_provider_authenticates_downloads_imports_and_acknowledges() {
+        let app = Router::new()
+            .route("/mobile/api/login", post(login))
+            .route("/mobile/api/mfa/verifyCode", post(mfa))
+            .route("/di-oauth2-service/oauth/token", post(token))
+            .route(
+                "/activitylist-service/activities/search/activities",
+                get(activities),
+            )
+            .route("/download-service/files/activity/{id}", get(download));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = GarminClient::for_test(
+            Url::parse(&format!("http://{address}/")).unwrap(),
+        )
+        .unwrap();
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.library_path = directory.path().join("library");
+        config.db_path = config.library_path.join("picmanager.db");
+        config.thumb_cache_dir = config.library_path.join(".thumbs");
+        let application = crate::application::Application::new(pool.clone(), config.clone());
+        let state = AppState {
+            application,
+            pool: pool.clone(),
+            config: config.clone(),
+            _worker: None,
+        };
+        let runtime = NativeGarminRuntime {
+            email: "fake-user".to_owned(),
+            password: "fake-password".to_owned(),
+            root: config.activities_dir().join(".garmin"),
+        };
+
+        let response = sync_garmin_with_client(
+            state,
+            GarminRequest {
+                mfa_code: Some("123456".to_owned()),
+            },
+            runtime,
+            client,
+        )
+        .await
+        .0;
+        assert_eq!(response.status, "completed");
+        assert_eq!(response.downloaded, 1);
+        assert_eq!(response.imported, 1);
+        assert_eq!(response.failed, 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM activities")
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            1
+        );
+        let journal: Value = serde_json::from_slice(
+            &std::fs::read(config.activities_dir().join(".garmin/journal.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(journal["items"]["9001"]["state"], "imported");
+        assert_eq!(journal["checkpoint"], "2026-08-17 12:00:00");
+    }
+
+    #[test]
+    fn native_error_contract_never_exposes_provider_content() {
+        let response = garmin_error_response(GarminError {
+            code: crate::garmin::client::GarminErrorCode::NetworkError,
+            phase: "token_restore",
+            http_status: Some(502),
+            retryable: true,
+        });
+        assert_eq!(response.error_code.as_deref(), Some("network_error"));
+        assert_eq!(response.phase.as_deref(), Some("token_restore"));
+        assert_eq!(response.http_status, Some(502));
+        assert!(response.retryable);
     }
 }
 
