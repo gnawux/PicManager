@@ -167,6 +167,14 @@ component tests while sending real date albums to the fallback section. Before c
 an enum-like field, inspect migrated data, SQL producers and API fixtures; accept legacy
 values at compatibility boundaries and make tests use at least one production value.
 
+### Timestamp offsets are metadata, not always conversion instructions
+
+Legacy photo imports store a naive local `taken_at` plus `timezone_offset`, but Apple inventory
+stores an explicit RFC3339 instant and metadata recovery can later add the original offset. Activity
+association must apply the offset only to naive timestamps. Applying it again to a `Z` or explicit
+`+HH:MM` value shifts the photo twice and excludes a genuinely concurrent, nearby photo. Contract
+tests must cover both storage forms with a non-zero offset.
+
 ### Display labels are not query identities
 
 Converting SQL `NULL` to the label `Unknown` destroyed the information needed to query

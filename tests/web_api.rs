@@ -3789,6 +3789,46 @@ async fn activity_photos_associates_with_local_time_photo() {
     );
 }
 
+/// Apple inventory stores an explicit UTC instant. Metadata recovery may later add
+/// the original timezone offset; that offset must not be applied to the instant again.
+#[tokio::test]
+async fn activity_photos_associates_with_rfc3339_utc_photo_that_has_offset_metadata() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let act_id = insert_activity_with_track(
+        &pool,
+        "2026-08-16T10:29:04+00:00",
+        "2026-08-16T10:59:44+00:00",
+        39.6804,
+        115.9497,
+    )
+    .await;
+
+    insert_photo_with_gps(
+        &pool,
+        "2026-08-16T10:35:12Z",
+        Some(480),
+        39.68034,
+        115.94969,
+    )
+    .await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/activities/{act_id}/photos"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(json["photos"].as_array().unwrap().len(), 1);
+}
+
 /// 照片在活动时间窗口之外（即使在同一天），不应关联
 #[tokio::test]
 async fn activity_photos_excludes_photo_outside_utc_window() {

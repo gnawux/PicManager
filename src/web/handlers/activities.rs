@@ -1427,19 +1427,26 @@ pub async fn get_activity_photos(
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    // Fetch photos in the time window with GPS.
-    // Convert photo local time to UTC using timezone_offset before comparing with
-    // activity start/end (stored as RFC3339 UTC). Raw string comparison fails because
-    // photos.taken_at uses space separator ("YYYY-MM-DD HH:MM:SS") while activities
-    // use T separator ("YYYY-MM-DDTHH:MM:SS+00:00"), and space (32) < T (84).
+    // Fetch photos in the time window with GPS. Legacy imports store a naive local
+    // timestamp plus timezone_offset, while Apple inventory stores an RFC3339 instant
+    // and later metadata recovery may also populate timezone_offset. Apply the offset
+    // only to naive values; applying it to an explicit Z/+HH:MM value shifts it twice.
     let candidate_photos: Vec<(i64, String, String, Option<String>, Option<f64>, Option<f64>)> =
         sqlx::query_as(
             "SELECT id, path, format, taken_at, gps_lat, gps_lon
              FROM photos
-             WHERE datetime(taken_at, CAST(-COALESCE(timezone_offset, 0) AS TEXT) || ' minutes')
-                     >= datetime(?)
-               AND datetime(taken_at, CAST(-COALESCE(timezone_offset, 0) AS TEXT) || ' minutes')
-                     <= datetime(?)
+             WHERE CASE
+                     WHEN substr(taken_at, -1) = 'Z'
+                       OR substr(taken_at, -6, 1) IN ('+', '-')
+                     THEN datetime(taken_at)
+                     ELSE datetime(taken_at, CAST(-COALESCE(timezone_offset, 0) AS TEXT) || ' minutes')
+                   END >= datetime(?)
+               AND CASE
+                     WHEN substr(taken_at, -1) = 'Z'
+                       OR substr(taken_at, -6, 1) IN ('+', '-')
+                     THEN datetime(taken_at)
+                     ELSE datetime(taken_at, CAST(-COALESCE(timezone_offset, 0) AS TEXT) || ' minutes')
+                   END <= datetime(?)
                AND gps_lat IS NOT NULL AND gps_lon IS NOT NULL
                AND import_status = 'imported'
              ORDER BY taken_at",
