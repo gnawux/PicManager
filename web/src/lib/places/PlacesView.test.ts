@@ -141,6 +141,36 @@ describe('PlacesView', () => {
     expect(photos).toHaveBeenLastCalledWith({ country: '中国' }, 2, 16);
   });
 
+  it('lets a large place result jump directly to any page', async () => {
+    const photos = vi.fn()
+      .mockResolvedValueOnce({
+        photos: [{ id: 1, path: '/1.jpg', taken_at: null, camera: null }],
+        total: 49, page: 1, per_page: 16,
+      })
+      .mockResolvedValueOnce({
+        photos: [{ id: 3, path: '/3.jpg', taken_at: null, camera: null }],
+        total: 49, page: 3, per_page: 16,
+      });
+    const api = {
+      geo: {
+        hierarchy: vi.fn(async () => ({ countries: [{ name: '中国', query_value: '中国', photo_count: 49, states: [] }] })),
+        clusters: vi.fn(async () => ({ clusters: [], total_photos: 0 })),
+        photos,
+        clusterPhotos: vi.fn(), regeocode: vi.fn(), normalizeNames: vi.fn(),
+        namePolicy: vi.fn(async () => ({ revision: 1, language_preference: 'zh-CN,zh,en', outdated_photos: 0 })),
+      },
+    } as unknown as ApiClient;
+    const { container } = render(PlacesView, { api });
+
+    await screen.findByRole('heading', { name: '按地点浏览' });
+    await fireEvent.click(container.querySelector('.country-group > summary') as HTMLElement);
+    await fireEvent.click(screen.getByRole('button', { name: '查看 中国 的全部照片' }));
+    const jump = await screen.findByLabelText('前往地点页');
+    await fireEvent.change(jump, { target: { value: '3' } });
+    expect(await screen.findByAltText('照片 3')).toBeVisible();
+    expect(photos).toHaveBeenLastCalledWith({ country: '中国' }, 3, 16);
+  });
+
   it('offers a safe background repair for legacy place names', async () => {
     const normalizeNames = vi.fn(async () => ({ status: 'started', count: 42 }));
     const api = {

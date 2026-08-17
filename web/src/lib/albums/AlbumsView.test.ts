@@ -99,8 +99,8 @@ describe('AlbumsView', () => {
         list: vi.fn(async () => [
           { id: 1, name: '西城区', parent_name: '北京市', kind: 'location', photo_count: 8, latest_photo_at: '2024-01-01' },
           { id: 2, name: '香港', parent_name: null, kind: 'location', photo_count: 9, latest_photo_at: '2024-02-01' },
-          { id: 3, name: 'Alpha', parent_name: null, kind: 'camera', photo_count: 2, latest_photo_at: '2024-01-01' },
-          { id: 4, name: 'Beta', parent_name: null, kind: 'camera', photo_count: 10, latest_photo_at: '2024-03-01' },
+          { id: 3, name: 'Alpha', parent_name: null, kind: 'camera', photo_count: 10, latest_photo_at: '2024-01-01' },
+          { id: 4, name: 'Beta', parent_name: null, kind: 'camera', photo_count: 2, latest_photo_at: '2024-03-01' },
         ]),
         photos: vi.fn(),
       },
@@ -119,5 +119,30 @@ describe('AlbumsView', () => {
     expect(names()).toEqual(['Alpha', 'Beta']);
     await fireEvent.change(screen.getByLabelText('排序'), { target: { value: 'recent' } });
     expect(names()).toEqual(['Beta', 'Alpha']);
+  });
+
+  it('lets a large album jump directly to any page', async () => {
+    const page = (id: number, current: number) => ({
+      photos: [{ id, path: `/${id}.jpg`, taken_at: null, camera: null }],
+      total: 49, page: current, per_page: 16,
+    });
+    const albumPhotos = vi.fn()
+      .mockResolvedValueOnce(page(1, 1))
+      .mockResolvedValueOnce(page(3, 3));
+    const api = {
+      albums: {
+        list: vi.fn(async () => [{ id: 2, name: '旅行', kind: 'location', photo_count: 49, latest_photo_at: null }]),
+        photos: albumPhotos,
+      },
+      collections: { list: vi.fn(async () => []), create: vi.fn(), photos: vi.fn() },
+    } as unknown as ApiClient;
+    render(AlbumsView, { api });
+
+    await fireEvent.click(await screen.findByRole('button', { name: /旅行/ }));
+    const jump = await screen.findByLabelText('前往相册页');
+    expect(jump).toHaveValue('1');
+    await fireEvent.change(jump, { target: { value: '3' } });
+    expect(await screen.findByAltText('照片 3')).toBeVisible();
+    expect(albumPhotos).toHaveBeenLastCalledWith(2, 3, 16);
   });
 });

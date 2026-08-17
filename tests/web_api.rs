@@ -2236,6 +2236,36 @@ async fn geo_photos_pagination() {
 }
 
 #[tokio::test]
+async fn geo_photos_are_newest_first_by_default() {
+    let (app, pool, _tmp) = test_app_with_pool().await;
+    let older = seed_geo_photo(&pool, "/older.jpg", "sha_geo_older", 37.0, -122.0).await;
+    let newer = seed_geo_photo(&pool, "/newer.jpg", "sha_geo_newer", 37.1, -122.0).await;
+    sqlx::query("UPDATE photos SET taken_at = ? WHERE id = ?")
+        .bind("2024-01-01 10:00:00")
+        .bind(older)
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE photos SET taken_at = ? WHERE id = ?")
+        .bind("2024-02-01 10:00:00")
+        .bind(newer)
+        .execute(&pool)
+        .await
+        .unwrap();
+    seed_geocache(&pool, 37.0, -122.0, Some("USA"), Some("California"), Some("TestCity")).await;
+    seed_geocache(&pool, 37.1, -122.0, Some("USA"), Some("California"), Some("TestCity")).await;
+
+    let resp = app
+        .oneshot(Request::builder().uri("/api/geo/photos?country=USA&state=California&city=TestCity").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["photos"][0]["id"], newer);
+    assert_eq!(json["photos"][1]["id"], older);
+}
+
+#[tokio::test]
 async fn patch_person_status_ignored_hides_from_list() {
     let (_app, pool, tmp) = test_app_with_pool().await;
     let pid: i64 = sqlx::query_scalar("INSERT INTO people (name) VALUES ('Alice') RETURNING id")

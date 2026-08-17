@@ -21,7 +21,7 @@
   let photos = $state<AlbumPhotoPage | null>(null);
   let photosLoading = $state(false);
   let photoRequest = 0;
-  let sortMode = $state<SortMode>('count');
+  let sortMode = $state<SortMode>('recent');
   let photoColumns = $state(4);
   let pageSize = $state(16);
   let resultsElement = $state<HTMLElement | null>(null);
@@ -136,6 +136,15 @@
     }
   }
 
+  function pageNumbers(total: number, perPage: number) {
+    return Array.from({ length: photoPageCount(total, perPage) }, (_, index) => index + 1);
+  }
+
+  function jumpToPage(event: Event) {
+    const page = Number((event.currentTarget as HTMLSelectElement).value);
+    if (Number.isInteger(page)) void loadPage(page);
+  }
+
   function viewerItem(index: number | null) {
     const photo = index === null ? undefined : photos?.photos[index];
     return photo ? { id: photo.id, taken_at: photo.taken_at, file_url: `/api/photos/${photo.id}/file` } : undefined;
@@ -238,6 +247,15 @@
             <nav class="pager" aria-label="照片分页">
               <Button variant="ghost" disabled={photosLoading || photos.page <= 1} onclick={previousPage}>上一页</Button>
               <span>第 {photos.page} / {photoPageCount(photos.total, photos.per_page)} 页</span>
+              {#if photoPageCount(photos.total, photos.per_page) > 2}
+                <label class="page-jump">前往
+                  <select aria-label="前往相册页" value={photos.page} disabled={photosLoading} onchange={jumpToPage}>
+                    {#each pageNumbers(photos.total, photos.per_page) as page}
+                      <option value={page}>第 {page} 页</option>
+                    {/each}
+                  </select>
+                </label>
+              {/if}
               <Button variant="ghost" disabled={photosLoading || photos.page >= photoPageCount(photos.total, photos.per_page)} onclick={nextPage}>下一页</Button>
             </nav>
           {/if}
@@ -302,5 +320,7 @@
   .photo-grid img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 4px; background: var(--fill-subtle); }
   .pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 18px 0 6px; }
   .pager span { color: var(--muted); font-size: 12px; }
+  .page-jump { display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+  .page-jump select { min-height: 30px; padding: 0 24px 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: var(--surface-solid); font: inherit; }
   @media (max-width: 760px) { .view-heading { align-items: stretch; flex-direction: column; } .sort-control { justify-content: flex-end; } .album-layout { grid-template-columns: 1fr; } .album-sidebar, .album-results { height: auto; max-height: 62vh; min-height: 300px; } }
 </style>

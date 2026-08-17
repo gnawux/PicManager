@@ -332,7 +332,7 @@ pub async fn get_geo_photos(
     // LIST
     let list_sql = format!(
         "SELECT ph.id, ph.path, ph.taken_at, ph.camera {join} WHERE {where_clause}
-         ORDER BY ph.taken_at NULLS LAST, ph.id
+         ORDER BY ph.taken_at DESC NULLS LAST, ph.id DESC
          LIMIT ? OFFSET ?"
     );
     let mut list_q = sqlx::query_as::<_, (i64, String, Option<String>, Option<String>)>(&list_sql);

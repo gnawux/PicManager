@@ -16,6 +16,9 @@ Current stabilization milestones:
   consistent so a cancelled export can be discovered and queued by the next sync.
 - M22 — Apple post-import parity: completed. Recover EXIF/GPS metadata and schedule
   revision-safe thumbnails through durable background work.
+- M23 — Album browsing defaults and navigation: completed. Default album navigation and
+  every album/location photo result to newest-first ordering; provide direct page
+  selection when a result spans more than two pages.
 
 ## 1. Product direction
 
